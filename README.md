@@ -8,6 +8,8 @@ The goal of this project was to implement the architecture of Embed to Control: 
 - E2C_Dataset_Generation.ipynb<br>
 Generate a simple particle in gravity image dataset with lagrangian dynamics.
 
+To run `embed_to_control_V6.ipynb`, make sure to first collect data using `rl_collect_data.ipynb`, saving things in accordance with the ImageDatasetV2 class in `models.py`.
+
 - Embed_to_Control.ipynb<br>
 Main E2C architecture.
 
