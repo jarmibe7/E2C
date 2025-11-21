@@ -1,0 +1,30 @@
+#
+# Config file for running on dingo
+#
+# Encoder/Decoder
+vae:
+  enc_latent_size: 256
+  enc_kernel_size: 3
+  dec_kernel_size: 4
+  stride: 2
+  pad: 1
+# Loss hyperparams
+loss:
+  recon_mult: !!float 1e4           # Reconstruction loss multiplier
+  beta: !!float 5e-3                # Standard Gaussian KL multiplier
+  lambda: !!float 5e-3              # Contraction KL multiplier
+  kld_anneal_mode: linear           # Beta annealing mode: const | linear
+# Transition model hyperparams
+trans:
+  latent_size: 4                    # Transition model latent dim
+  alpha: !!float 1e-4               # Learning rate
+  weight_decay: !!float 1e-4        # Adam optimizer weight decay
+# Training settings
+train:
+  dataset: dummy_dataset    # Which dataset to use for training (in data/)
+  batch_size: 32
+  num_epochs: 20
+  device: cpu               # cpu | cuda0 | cuda1 | cuda2
+  render: False              # Whether to render live interactive training plot, or simply save after training is finished
+  plot_freq: 10000           # Frequency to update the plot, in timesteps
+    
