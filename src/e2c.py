@@ -7,16 +7,14 @@ Authors: Jared Berry, Ayush Gaggar
 """
 import torch
 from torch import nn
-import os
+from pathlib import Path
 
 from encode import ConvEncoder, ConvDecoder
 
-SCRIPT_PATH = os.path.dirname(os.path.abspath(__file__))
-PARENT_PATH = os.path.dirname(SCRIPT_PATH)
-DATA_PATH = os.path.join(PARENT_PATH, "data")
-DATA_PATH = os.path.normpath(DATA_PATH)
-CONFIG_PATH = os.path.join(PARENT_PATH, "config")
-CONFIG_PATH = os.path.normpath(CONFIG_PATH)
+# Get paths relative to the project root
+PROJECT_ROOT = Path(__file__).parent.parent
+DATA_PATH = PROJECT_ROOT / "data"
+CONFIG_PATH = PROJECT_ROOT / "config"
 
 class E2CDataset(torch.utils.data.Dataset):
     """
@@ -24,9 +22,9 @@ class E2CDataset(torch.utils.data.Dataset):
     """
     def __init__(self, config):
         # Load raw dataset
-        dataset_dir = os.path.join(DATA_PATH, f'{config['train']['dataset']}')
-        img = torch.load(os.path.join(dataset_dir, 'img.pt'))
-        control = torch.load(os.path.join(dataset_dir, 'img.pt'))
+        dataset_dir = DATA_PATH / f'{config['train']['dataset']}'
+        img = torch.load(dataset_dir / 'img.pt')
+        control = torch.load(dataset_dir / 'img.pt')
 
         # Reshape for learning
         X = img[:, :-1]   # Shape: [batch, seq_len - 1, H, W, C]

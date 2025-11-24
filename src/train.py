@@ -9,9 +9,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import yaml
-import os
 import time
 from datetime import datetime
+from pathlib import Path
 
 from e2c import E2CDataset, E2CLoss, E2C
 from utils import set_seed, anim_frames
@@ -19,17 +19,12 @@ from utils import set_seed, anim_frames
 # Set random seed globally
 set_seed(42)
 
-# Paths
-SCRIPT_PATH = os.path.dirname(os.path.abspath(__file__))
-PARENT_PATH = os.path.dirname(SCRIPT_PATH)
-DATA_PATH = os.path.join(PARENT_PATH, "data")
-DATA_PATH = os.path.normpath(DATA_PATH)
-CONFIG_PATH = os.path.join(PARENT_PATH, "config")
-CONFIG_PATH = os.path.normpath(CONFIG_PATH)
-MODEL_PATH = os.path.join(PARENT_PATH, "models")
-MODEL_PATH = os.path.normpath(MODEL_PATH)
-FIG_PATH = os.path.join(PARENT_PATH, "figures")
-FIG_PATH = os.path.normpath(FIG_PATH)
+# Paths - relative to the project root
+PROJECT_ROOT = Path(__file__).parent.parent
+DATA_PATH = PROJECT_ROOT / "data"
+CONFIG_PATH = PROJECT_ROOT / "config"
+MODEL_PATH = PROJECT_ROOT / "models"
+FIG_PATH = PROJECT_ROOT / "figures"
 
 class Plotter():
     """
@@ -97,8 +92,8 @@ class Plotter():
         timestamp = datetime.fromtimestamp(time.time()).strftime("%Y-%m-%d_%H-%M-%S")
         fig_name = f'{config_name}_fig_{timestamp}.png'
         try:
-            os.makedirs(FIG_PATH, exist_ok=True)
-            filepath = os.path.join(FIG_PATH, fig_name)
+            FIG_PATH.mkdir(parents=True, exist_ok=True)
+            filepath = FIG_PATH / fig_name
             print(f'\nSaving figure to {filepath}')
             self.fig.savefig(filepath)
         except Exception as e:
@@ -176,7 +171,7 @@ def main():
     print('*** STARTING ***\n')
     # Load config and choose torch device
     config_name = 'e2c_config0'
-    with open(os.path.join(CONFIG_PATH, f'{config_name}.yaml'), "r") as f:
+    with open(CONFIG_PATH / f'{config_name}.yaml', "r") as f:
         config = yaml.safe_load(f)
     if 'cuda' in config['train']['device']: 
         assert torch.cuda.is_available(), f'{config['train']['device']} selected in {config_name}, but is unavailable!'
@@ -195,8 +190,8 @@ def main():
     timestamp = datetime.fromtimestamp(time.time()).strftime("%Y-%m-%d_%H-%M-%S")
     model_name = f'{config_name}_model_{timestamp}.pt'
     try:
-        os.makedirs(MODEL_PATH, exist_ok=True)
-        filepath = os.path.join(MODEL_PATH, model_name)
+        MODEL_PATH.mkdir(parents=True, exist_ok=True)
+        filepath = MODEL_PATH / model_name
         print(f'\nSaving model to {filepath}')
         torch.save(model.state_dict(), filepath)
     except Exception as e:

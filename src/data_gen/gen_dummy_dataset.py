@@ -7,15 +7,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torchvision
-import os
+from pathlib import Path
 
-from utils import anim_frames
+from src.utils import anim_frames
 
-# Get data directory
-SCRIPT_PATH = os.path.dirname(os.path.abspath(__file__))
-PARENT_PATH = os.path.dirname(SCRIPT_PATH)
-DATA_PATH = os.path.join(PARENT_PATH, "data")
-DATA_PATH = os.path.normpath(DATA_PATH)
+# Get data directory - use Path relative to the project root
+PROJECT_ROOT = Path(__file__).parent.parent.parent
+DATA_PATH = PROJECT_ROOT / "data"
 
 def gen_dummy_dataset(N=100, T=50, scale=(64,64)):
     """
@@ -90,10 +88,10 @@ def main():
     anim_frames(img[0])
 
     # Saving dataset
-    dataset_dir = os.path.join(DATA_PATH, 'dummy_dataset')
-    os.makedirs(dataset_dir, exist_ok=True)
-    img_filepath = os.path.join(dataset_dir, 'img.pt')
-    control_filepath = os.path.join(dataset_dir, 'control.pt')
+    dataset_dir = DATA_PATH / 'dummy_dataset'
+    dataset_dir.mkdir(parents=True, exist_ok=True)
+    img_filepath = dataset_dir / 'img.pt'
+    control_filepath = dataset_dir / 'control.pt'
     print(f'\nSaving dataset to {dataset_dir}')
     torch.save(img, img_filepath)
     torch.save(control, control_filepath)
