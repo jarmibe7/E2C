@@ -39,6 +39,8 @@ def train(dataset, config):
         enc_latent_size=config['vae']['enc_latent_size'],
         latent_size=config['trans']['latent_size'],
         control_size=config['trans']['control_size'],
+        past_length=config['trans']['past_length'],
+        pred_length=config['trans']['pred_length'],
         conv_params=config['vae'],
         device=device
     )
@@ -90,7 +92,8 @@ def train(dataset, config):
         print(f"Average Epoch Loss: {epoch_loss:.4f}")
         print(f'--------------------------------------------------\n')
 
-    plotter.save(config['config_name'])
+    if config['train']['save']: plotter.save(config['config_name'], config['timestamp'])
+    else: plotter.close()
     return model
 
 def main():
@@ -104,27 +107,45 @@ def main():
     device = torch.device(config['train']['device'])
     config['train']['device'] = device   # Replace device string with device object in config
     config['config_name'] = config_name
+    timestamp = datetime.fromtimestamp(time.time()).strftime("%Y-%m-%d_%H-%M-%S")
+    config['timestamp'] = timestamp
 
     # Make E2CDataset object
     print(f"Loading dataset: {config['train']['dataset']}")
     dataset = E2CDataset(config)
     config['vae']['in_image_shape'] = dataset.X.shape[1:]   # Shape is [num_traj*(seq_len - 1), C, H, H]
     config['trans']['control_size'] = dataset.U.shape[-1]
-    model = train(dataset, config)
+
+    # Split into training and test sets
+    train_size = int(len(dataset) * config['train']['train_ratio'])
+    test_size = len(dataset) - train_size
+    train_dataset, test_dataset = torch.utils.data.random_split(dataset, [train_size, test_size])
+
+    # Train on training dataet
+    model = train(train_dataset, config)
 
     # Save model
-    timestamp = datetime.fromtimestamp(time.time()).strftime("%Y-%m-%d_%H-%M-%S")
-    model_name = f'{config_name}_model_{timestamp}.pt'
-    try:
-        MODEL_PATH.mkdir(parents=True, exist_ok=True)
-        filepath = MODEL_PATH / model_name
-        print(f'\nSaving model to {filepath}')
-        torch.save(model.state_dict(), filepath)
-    except Exception as e:
-        print(e)
-        print('\nException occured, saving to current directory')
-        torch.save(model.state_dict(), model_name)
+    if config['train']['save']:
+        model_name = f'{config_name}_model_{timestamp}.pt'
+        try:
+            MODEL_PATH.mkdir(parents=True, exist_ok=True)
+            filepath = MODEL_PATH / model_name
+            print(f'\nSaving model to {filepath}')
+            torch.save(model.state_dict(), filepath)
+        except Exception as e:
+            print(e)
+            print('\nException occured, saving to current directory')
+            torch.save(model.state_dict(), model_name)
 
+    # Evaluate model performance
+    if config['train']['eval']:
+        evaluator = Evaluator(
+            model, 
+            test_dataset,
+            batch_size=config['train']['batch_size'], 
+            device=config['train']['device'],
+        )
+        evaluator.eval_traj(config['config_name'], config['timestamp'])
     
 
     print('\n*** DONE ***')

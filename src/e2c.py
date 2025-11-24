@@ -25,6 +25,7 @@ class E2CDataset(torch.utils.data.Dataset):
         dataset_dir = DATA_PATH / f"{config['train']['dataset']}"
         img = torch.load(dataset_dir / 'img.pt')
         control = torch.load(dataset_dir / 'control.pt')
+        self.img_shape = img[0, 0].shape
 
         # Reshape for learning
         flat = img.reshape(-1, img.shape[2], img.shape[3], img.shape[4]).permute(0, 3, 1, 2)   # Shape: [batch*seq_len, C, H, W]
@@ -103,7 +104,7 @@ class E2C(nn.Module):
     """
     An E2C model with convolutional encoder-decoder.
     """
-    def __init__(self, enc_latent_size, latent_size, control_size, conv_params, device):
+    def __init__(self, enc_latent_size, latent_size, control_size, past_length, pred_length, conv_params, device):
         super().__init__()
         self.device = device
 
@@ -111,6 +112,8 @@ class E2C(nn.Module):
         self.enc_latent_size = enc_latent_size
         self.latent_size = latent_size
         self.control_size = control_size
+        self.past_length = past_length
+        self.pred_length = pred_length
 
         # Dummy zero control vector
         self.dummy_u = torch.zeros((1, self.control_size)).to(self.device)
@@ -265,7 +268,7 @@ class E2C(nn.Module):
         """
         with torch.no_grad():
             # Encode current state
-            encoded = self.encoder(x.unsqueeze(0).to(self.device))
+            encoded = self.encoder(x.to(self.device))
             flattened = encoded.view(encoded.size(0), -1)
 
             # Get latent variable
@@ -273,6 +276,8 @@ class E2C(nn.Module):
             log_var = self.log_var(flattened)
             z = self.reparameterize(mu, log_var)
 
-            # Predict transition and decode
-            mu, log_var, z, _, _ = self.transition(z, mu, log_var, self.dummy_u)
-            return self.decoder(z).squeeze(0).to('cpu').permute(0, 2, 3, 1)
+            # Predict transition and decode current pred and next pred
+            mu_pred, log_var_pred, z_pred, _, _ = self.transition(z, mu, log_var, u)
+            x_recon = self.decoder(z).squeeze(0)
+            x_pred = self.decoder(z_pred).squeeze(0)
+            return x_recon, x_pred
