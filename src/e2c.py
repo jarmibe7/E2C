@@ -218,6 +218,9 @@ class E2C(nn.Module):
         return train_return
 
     def reconstruct(self, x_traj):
+        """
+        Reconstruct an entire trajectory to test encoder/decoder
+        """
         with torch.no_grad():
             frames = []
             for x in x_traj:
@@ -233,7 +236,10 @@ class E2C(nn.Module):
 
             return torch.concat(frames, dim=0).squeeze(0).to('cpu').permute(0, 2, 3, 1)
 
-    def sample(self, x0, seq_len):
+    def sample_traj(self, x0, seq_len):
+        """
+        Sample an entire trajectory, starting from an initial condition
+        """
         with torch.no_grad():
             # Encode current state
             encoded = self.encoder(x0.unsqueeze(0).to(self.device))
@@ -252,3 +258,21 @@ class E2C(nn.Module):
                 frames.append(self.decoder(z))
 
             return torch.concat(frames, dim=0).squeeze(0).to('cpu').permute(0, 2, 3, 1)
+        
+    def sample(self, x, u):
+        """
+        Predict the next image in a sequence
+        """
+        with torch.no_grad():
+            # Encode current state
+            encoded = self.encoder(x.unsqueeze(0).to(self.device))
+            flattened = encoded.view(encoded.size(0), -1)
+
+            # Get latent variable
+            mu = self.mu(flattened)
+            log_var = self.log_var(flattened)
+            z = self.reparameterize(mu, log_var)
+
+            # Predict transition and decode
+            mu, log_var, z, _, _ = self.transition(z, mu, log_var, self.dummy_u)
+            return self.decoder(z).squeeze(0).to('cpu').permute(0, 2, 3, 1)

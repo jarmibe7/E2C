@@ -9,6 +9,7 @@ import random
 import numpy as np
 import torch
 
+
 def anim_frames(frames):
     """
     Animation function to play an animation from an image tensor of shape

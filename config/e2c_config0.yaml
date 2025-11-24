@@ -27,4 +27,5 @@ train:
   device: cuda:2             # cpu | cuda:0 | cuda:1 | cuda:2
   render: False              # Whether to render live interactive training plot, or simply save after training is finished
   plot_freq: 10000           # Frequency to update the plot, in timesteps
+  eval: True                 # Whether to eval model performance immediately after training
     
