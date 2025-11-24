@@ -24,14 +24,13 @@ class E2CDataset(torch.utils.data.Dataset):
         # Load raw dataset
         dataset_dir = DATA_PATH / f"{config['train']['dataset']}"
         img = torch.load(dataset_dir / 'img.pt')
-        control = torch.load(dataset_dir / 'img.pt')
+        control = torch.load(dataset_dir / 'control.pt')
 
         # Reshape for learning
-        X = img[:, :-1]   # Shape: [batch, seq_len - 1, H, W, C]
-        X_next = img[:, 1:]
-        X = X.reshape(-1, X.shape[2], X.shape[3], X.shape[4]).permute(0, 3, 1, 2)   # Shape: [batch, C, H, W]
-        X_next = X_next.reshape(-1, X_next.shape[2], X_next.shape[3], X_next.shape[4]).permute(0, 3, 1, 2)
-        U = control.reshape(-1, control.shape[-1])
+        flat = img.reshape(-1, img.shape[2], img.shape[3], img.shape[4]).permute(0, 3, 1, 2)   # Shape: [batch*seq_len, C, H, W]
+        X = flat[:-1]   # Shape: [(batch*seq_len) - 1, C, H, W]
+        X_next = flat[1:]
+        U = control.reshape(-1, control.shape[-1])[:-1]
         self.X = X
         self.X_next = X_next
         self.U = U

@@ -21,10 +21,10 @@ trans:
   weight_decay: !!float 1e-4        # Adam optimizer weight decay
 # Training settings
 train:
-  dataset: dummy_dataset    # Which dataset to use for training (in data/)
+  dataset: dummy    # Which dataset to use for training (in data/)
   batch_size: 32
   num_epochs: 20
-  device: cpu               # cpu | cuda0 | cuda1 | cuda2
+  device: cuda:2             # cpu | cuda:0 | cuda:1 | cuda:2
   render: False              # Whether to render live interactive training plot, or simply save after training is finished
   plot_freq: 10000           # Frequency to update the plot, in timesteps
     

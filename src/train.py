@@ -172,7 +172,6 @@ def main():
     print('*** STARTING ***\n')
     # Load config and choose torch device
     config_name = 'e2c_config0'
-    breakpoint()
     with open(CONFIG_PATH / f'{config_name}.yaml', "r") as f:
         config = yaml.safe_load(f)
     if 'cuda' in config['train']['device']: 
@@ -186,6 +185,7 @@ def main():
     dataset = E2CDataset(config)
     config['vae']['in_image_shape'] = dataset.X.shape[1:]   # Shape is [num_traj*(seq_len - 1), C, H, H]
     config['trans']['control_size'] = dataset.U.shape[-1]
+    breakpoint()
     model = train(dataset, config)
 
     # Save model
