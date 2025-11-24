@@ -172,16 +172,17 @@ def main():
     print('*** STARTING ***\n')
     # Load config and choose torch device
     config_name = 'e2c_config0'
+    breakpoint()
     with open(CONFIG_PATH / f'{config_name}.yaml', "r") as f:
         config = yaml.safe_load(f)
     if 'cuda' in config['train']['device']: 
-        assert torch.cuda.is_available(), f'{config['train']['device']} selected in {config_name}, but is unavailable!'
+        assert torch.cuda.is_available(), f"{config['train']['device']} selected in {config_name}, but is unavailable!"
     device = torch.device(config['train']['device'])
     config['device'] = device   # Replace device string with device object in config
     config['config_name'] = config_name
 
     # Make E2CDataset object
-    print(f'Loading dataset: {config['train']['dataset']}')
+    print(f"Loading dataset: {config['train']['dataset']}")
     dataset = E2CDataset(config)
     config['vae']['in_image_shape'] = dataset.X.shape[1:]   # Shape is [num_traj*(seq_len - 1), C, H, H]
     config['trans']['control_size'] = dataset.U.shape[-1]

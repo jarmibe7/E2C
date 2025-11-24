@@ -6,7 +6,6 @@ import numpy as np
 import torch
 import torchvision
 import matplotlib.pyplot as plt
-import os
 from pathlib import Path
 
 from src.utils import set_seed, rk4_sim

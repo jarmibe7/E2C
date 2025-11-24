@@ -22,7 +22,7 @@ class E2CDataset(torch.utils.data.Dataset):
     """
     def __init__(self, config):
         # Load raw dataset
-        dataset_dir = DATA_PATH / f'{config['train']['dataset']}'
+        dataset_dir = DATA_PATH / f"{config['train']['dataset']}"
         img = torch.load(dataset_dir / 'img.pt')
         control = torch.load(dataset_dir / 'img.pt')
 
@@ -55,11 +55,12 @@ class E2CLoss(nn.Module):
         self.anneal_mode = loss_params['kld_anneal_mode']
 
     def kld_anneal(self, epoch):
-        match self.anneal_mode:
-            case 'const':
-                mult = self.beta
-            case 'linear':
-                mult = self.beta*((epoch + 1)/self.num_epochs)
+        if self.anneal_mode == 'const':
+            mult = self.beta
+        elif self.anneal_mode == 'linear':
+            mult = self.beta*((epoch + 1)/self.num_epochs)
+        else:
+            raise NotImplementedError(f"Annealing mode {self.anneal_mode} not supported!")
 
         return mult
 

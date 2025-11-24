@@ -88,7 +88,7 @@ def main():
     anim_frames(img[0])
 
     # Saving dataset
-    dataset_dir = DATA_PATH / 'dummy_dataset'
+    dataset_dir = DATA_PATH / 'dummy'
     dataset_dir.mkdir(parents=True, exist_ok=True)
     img_filepath = dataset_dir / 'img.pt'
     control_filepath = dataset_dir / 'control.pt'
