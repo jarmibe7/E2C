@@ -13,8 +13,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from e2c import E2CDataset, E2CLoss, E2C
-from utils import set_seed, anim_frames
+from src.e2c import E2CDataset, E2CLoss, E2C
+from src.utils import set_seed, anim_frames
 
 # Set random seed globally
 set_seed(42)
@@ -132,6 +132,7 @@ def train(dataset, config):
     plotter = Plotter(config['train']['render'], config['train']['plot_freq'])
 
     # Training loop
+    print('\nBeginning Training:')
     for epoch in range(num_epochs):
         total_loss = 0.0
 

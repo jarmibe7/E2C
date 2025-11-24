@@ -9,7 +9,7 @@ import torch
 from torch import nn
 from pathlib import Path
 
-from encode import ConvEncoder, ConvDecoder
+from src.encode import ConvEncoder, ConvDecoder
 
 # Get paths relative to the project root
 PROJECT_ROOT = Path(__file__).parent.parent
