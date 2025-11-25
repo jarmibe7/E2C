@@ -23,11 +23,14 @@ class E2CDataset(torch.utils.data.Dataset):
     def __init__(self, config):
         # Load raw dataset
         dataset_dir = DATA_PATH / f"{config['train']['dataset']}"
-        img = torch.load(dataset_dir / 'img.pt')
+        img = torch.load(dataset_dir / 'img.pt').permute(0, 1, 4, 2, 3)    # [batch, seq, C, H, W]
         control = torch.load(dataset_dir / 'control.pt')
         self.img_shape = img[0, 0].shape
         self.past_length = config['trans']['past_length']
         self.pred_length = config['trans']['pred_length']
+
+        # Normalize actions
+        control = (control - control.min()) / (control.max() - control.min())
 
         # Reshape for learning
         # flat = img.reshape(-1, img.shape[2], img.shape[3], img.shape[4]).permute(0, 3, 1, 2)   # Shape: [batch*seq_len, C, H, W]
@@ -35,20 +38,20 @@ class E2CDataset(torch.utils.data.Dataset):
         # X_next = flat[1:]
         # U = control.reshape(-1, control.shape[-1])[:-1]
         # Create windowed samples for past_length and pred_length
-        num_batches = self.img_shape[0]
-        seq_len = self.img_shape[1]
+        H, W = self.img_shape[0:2]
+        num_batches = img.shape[0]
+        seq_len = img.shape[1]
         x_windows = []
         x_next_windows = []
         u_list = []
+        window_size = self.past_length + self.pred_length
         for b in range(num_batches):
-            for t in range(seq_len - max(self.past_length, self.pred_length)):
+            for t in range(seq_len - window_size + 1):
                 # Get windows
-                x_windows.append(img[b, t:t+self.past_length])
-                x_next_windows.append(img[b, t+self.past_length:t+self.past_length+self.pred_length])
-                u_list.append(control[b, t+self.past_length])
-                
+                x_windows.append(img[b, t:t+self.past_length].reshape(-1, H, W))
+                x_next_windows.append(img[b, t+self.past_length:t+self.past_length+self.pred_length].reshape(-1, H, W))
+                u_list.append(control[b, t+self.past_length])          
 
-        breakpoint()
         self.X = torch.stack(x_windows)
         self.X_next = torch.stack(x_next_windows)
         self.U = torch.stack(u_list)

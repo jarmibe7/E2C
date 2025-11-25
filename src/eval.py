@@ -109,7 +109,6 @@ class Evaluator():
         self.model = model
         self.model.eval()
         self.test_dataset = test_dataset
-        # self.img_shape = test_dataset.img_shape.permute(1, 2, 0)
 
         # Params
         self.batch_size = batch_size
