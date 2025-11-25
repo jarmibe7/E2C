@@ -9,10 +9,12 @@ from torch import nn
 class ConvEncoder(nn.Module):
     def __init__(self, 
                  latent_size,
+                 in_channels,
                  conv_params):
         super().__init__()
 
         self.latent_size = latent_size
+        self.in_channels = in_channels
 
         # CNN parameters
         k = conv_params['enc_kernel_size']
@@ -22,7 +24,7 @@ class ConvEncoder(nn.Module):
 
         # Define encoder part of autoencoder
         self.encoder_cnn = nn.Sequential(
-            nn.Conv2d(self.in_image_shape[0], 32, kernel_size=k+2, stride=s-1, padding=p+1),
+            nn.Conv2d(self.in_channels, 32, kernel_size=k+2, stride=s-1, padding=p+1),
             nn.ReLU(),
             nn.Conv2d(32, 32, kernel_size=k, stride=s, padding=p),
             nn.ReLU(),

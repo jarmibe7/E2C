@@ -17,7 +17,7 @@ loss:
 # Transition model hyperparams
 trans:
   latent_size: 4                    # Transition model latent dim
-  past_length: 1                    # Length of image history passed into encoder
+  past_length: 2                    # Length of image history passed into encoder
   pred_length: 1                    # Length of image prediction horizon
   alpha: !!float 1e-4               # Learning rate
   weight_decay: !!float 1e-4        # Adam optimizer weight decay

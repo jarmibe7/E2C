@@ -26,15 +26,32 @@ class E2CDataset(torch.utils.data.Dataset):
         img = torch.load(dataset_dir / 'img.pt')
         control = torch.load(dataset_dir / 'control.pt')
         self.img_shape = img[0, 0].shape
+        self.past_length = config['trans']['past_length']
+        self.pred_length = config['trans']['pred_length']
 
         # Reshape for learning
-        flat = img.reshape(-1, img.shape[2], img.shape[3], img.shape[4]).permute(0, 3, 1, 2)   # Shape: [batch*seq_len, C, H, W]
-        X = flat[:-1]   # Shape: [(batch*seq_len) - 1, C, H, W]
-        X_next = flat[1:]
-        U = control.reshape(-1, control.shape[-1])[:-1]
-        self.X = X
-        self.X_next = X_next
-        self.U = U
+        # flat = img.reshape(-1, img.shape[2], img.shape[3], img.shape[4]).permute(0, 3, 1, 2)   # Shape: [batch*seq_len, C, H, W]
+        # X = flat[:-1]   # Shape: [(batch*seq_len) - 1, C, H, W]
+        # X_next = flat[1:]
+        # U = control.reshape(-1, control.shape[-1])[:-1]
+        # Create windowed samples for past_length and pred_length
+        num_batches = self.img_shape[0]
+        seq_len = self.img_shape[1]
+        x_windows = []
+        x_next_windows = []
+        u_list = []
+        for b in range(num_batches):
+            for t in range(seq_len - max(self.past_length, self.pred_length)):
+                # Get windows
+                x_windows.append(img[b, t:t+self.past_length])
+                x_next_windows.append(img[b, t+self.past_length:t+self.past_length+self.pred_length])
+                u_list.append(control[b, t+self.past_length])
+                
+
+        breakpoint()
+        self.X = torch.stack(x_windows)
+        self.X_next = torch.stack(x_next_windows)
+        self.U = torch.stack(u_list)
 
     def __len__(self):
         return len(self.X)
@@ -119,7 +136,8 @@ class E2C(nn.Module):
         self.dummy_u = torch.zeros((1, self.control_size)).to(self.device)
 
         # Encoder and decoder
-        self.encoder = ConvEncoder(enc_latent_size, conv_params)
+        in_channels = conv_params['in_image_shape'][0]*self.past_length
+        self.encoder = ConvEncoder(enc_latent_size, in_channels, conv_params)
         self.decoder = ConvDecoder(latent_size, conv_params, self.encoder.out_dim_flat, self.encoder.out_shape)
 
         # VAE
