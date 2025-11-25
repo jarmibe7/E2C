@@ -38,7 +38,7 @@ class E2CDataset(torch.utils.data.Dataset):
         # X_next = flat[1:]
         # U = control.reshape(-1, control.shape[-1])[:-1]
         # Create windowed samples for past_length and pred_length
-        H, W = self.img_shape[0:2]
+        H, W = self.img_shape[1:]
         num_batches = img.shape[0]
         seq_len = img.shape[1]
         x_windows = []
