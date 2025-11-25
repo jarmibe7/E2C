@@ -139,7 +139,7 @@ class E2C(nn.Module):
         self.dummy_u = torch.zeros((1, self.control_size)).to(self.device)
 
         # Encoder and decoder
-        in_channels = conv_params['in_image_shape'][0]*self.past_length
+        in_channels = conv_params['out_image_shape'][0]*self.past_length
         self.encoder = ConvEncoder(enc_latent_size, in_channels, conv_params)
         self.decoder = ConvDecoder(latent_size, conv_params, self.encoder.out_dim_flat, self.encoder.out_shape)
 

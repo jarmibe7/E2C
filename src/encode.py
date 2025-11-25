@@ -20,7 +20,6 @@ class ConvEncoder(nn.Module):
         k = conv_params['enc_kernel_size']
         s = conv_params['stride']
         p = conv_params['pad']
-        self.in_image_shape = conv_params['in_image_shape']
 
         # Define encoder part of autoencoder
         self.encoder_cnn = nn.Sequential(
@@ -35,7 +34,7 @@ class ConvEncoder(nn.Module):
         )
 
         with torch.no_grad():
-            x = torch.zeros(1, self.in_image_shape[0], self.in_image_shape[1], self.in_image_shape[2])
+            x = torch.zeros(1, in_channels, conv_params['out_image_shape'][1], conv_params['out_image_shape'][2])
             enc_out = self.encoder_cnn(x)
             self.out_dim_flat = enc_out.view(enc_out.size(0), -1).shape[1] # Keep batch dim, determine number of elements
             self.out_shape = enc_out.shape
@@ -62,7 +61,7 @@ class ConvDecoder(nn.Module):
         k = conv_params['dec_kernel_size']
         s = conv_params['stride']
         p = conv_params['pad']
-        self.out_image_shape = conv_params['in_image_shape']
+        self.out_image_shape = conv_params['out_image_shape']
         self.enc_out_shape = enc_out_shape
 
         self.fc_decode = nn.Linear(self.latent_size, enc_out_dim)

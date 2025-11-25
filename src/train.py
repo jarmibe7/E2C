@@ -113,7 +113,7 @@ def main():
     # Make E2CDataset object
     print(f"Loading dataset: {config['train']['dataset']}")
     dataset = E2CDataset(config)
-    config['vae']['in_image_shape'] = dataset.img_shape
+    config['vae']['out_image_shape'] = dataset.img_shape
     config['trans']['control_size'] = dataset.U.shape[-1]
 
     # Split into training and test sets
