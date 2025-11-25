@@ -134,7 +134,7 @@ def main():
             torch.save(model.state_dict(), filepath)
         except Exception as e:
             print(e)
-            print('\nException occured, saving to current directory')
+            print('\nException occured, saving model to current directory')
             torch.save(model.state_dict(), model_name)
 
     # Evaluate model performance

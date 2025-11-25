@@ -87,11 +87,11 @@ class Plotter():
         try:
             FIG_PATH.mkdir(parents=True, exist_ok=True)
             filepath = FIG_PATH / fig_name
-            print(f'\nSaving figure to {filepath}')
+            print(f'\nSaving loss figure to {filepath}')
             self.fig.savefig(filepath)
         except Exception as e:
             print(e)
-            print('\nException occured, saving to current directory')
+            print('\nException occured, saving loss figure to current directory')
             self.fig.savefig(fig_name)
         self.close()
         return
@@ -117,7 +117,7 @@ class Evaluator():
     def eval_all(self):
         self.eval_traj()
         
-    def eval_traj(self, name_stem, timestamp=None):
+    def eval_traj(self, name_stem, timestamp=None, max_frames=50):
         # Create figure
         fig, ax = plt.subplots(2, 2, figsize=(8, 10))
         ax[0, 0].set_title("Predicted Current Image")
@@ -126,24 +126,36 @@ class Evaluator():
         ax[1, 1].set_title("True Future Image")
 
         test_loader = torch.utils.data.DataLoader(
-            self.test_dataset, batch_size=self.batch_size, shuffle=True
+            self.test_dataset, batch_size=1, shuffle=True
         )
 
-        def update_plot(frame):
-            add_some = 15
-            for i, (x, x_next, u) in enumerate(test_loader):
-                if i == add_some + frame:
-                    break
-                x, x_next, u = x.to(self.device), x_next.to(self.device), u.to(self.device)
-                x_recon, x_pred = self.model.sample(x, u)
-            
-                for i in range(self.model.pred_length):
-                    ax[0, 0].imshow(x_recon[i].permute(1, 2, 0).detach().cpu().numpy())
-                    ax[1, 0].imshow(x[i].permute(1, 2, 0).detach().cpu().numpy())
-                    ax[0, 1].imshow(x_pred[i].permute(1, 2, 0).detach().cpu().numpy())
-                    ax[1, 1].imshow(x_next[i].permute(1, 2, 0).detach().cpu().numpy())
+        # Precompute frames
+        assert self.model.pred_length == 1, 'Pred length >1 not supported for eval video'
+        x_list, x_next_list, x_recon_list, x_pred_list = [], [], [], []
+        for i, (x, x_next, u) in enumerate(test_loader):
+            if i >= max_frames:
+                break
+            x, x_next, u = x.to(self.device), x_next.to(self.device), u.to(self.device)
+            x_recon, x_pred = self.model.sample(x, u)
+            x_list.append(x[0]); x_next_list.append(x_next[0])
+            x_recon_list.append(x_recon); x_pred_list.append(x_pred)
 
-            plt.show()
+        # Initialize axes
+        ims = []
+        ims.append(ax[0, 0].imshow(x_recon_list[0].permute(1, 2, 0).detach().cpu().numpy()))
+        ims.append(ax[1, 0].imshow(x_list[0].permute(1, 2, 0).detach().cpu().numpy()))
+        ims.append(ax[0, 1].imshow(x_pred_list[0].permute(1, 2, 0).detach().cpu().numpy()))
+        ims.append(ax[1, 1].imshow(x_next_list[0].permute(1, 2, 0).detach().cpu().numpy()))
+
+        def update_plot(frame):
+            x, x_next = x_list[frame], x_next_list[frame]
+            x_recon, x_pred = x_recon_list[frame], x_pred_list[frame]
+            ims[0].set_data(x_recon.permute(1, 2, 0).detach().cpu().numpy())
+            ims[1].set_data(x.permute(1, 2, 0).detach().cpu().numpy())
+            ims[2].set_data(x_pred.permute(1, 2, 0).detach().cpu().numpy())
+            ims[3].set_data(x_next.permute(1, 2, 0).detach().cpu().numpy())
+
+            # plt.show()
 
         # Create and save animation
         ani = FuncAnimation(fig, update_plot, frames=50, interval=5.)
@@ -153,11 +165,11 @@ class Evaluator():
         try:
             VID_PATH.mkdir(parents=True, exist_ok=True)
             filepath = VID_PATH / vid_name
-            print(f'\nSaving figure to {filepath}')
+            print(f'\nSaving eval video to {filepath}')
             ani.save(filepath, writer=writer)
         except Exception as e:
             print(e)
-            print('\nException occured, saving to current directory')
+            print('\nException occured, saving eval video to current directory')
             ani.save(vid_name, writer=writer)
         plt.close(fig)
         return

@@ -1,5 +1,7 @@
 """
 Generate a dataset for a particle falling in gravity.
+
+Author: Jared Berry, Ayush Gaggar
 """
 
 import numpy as np

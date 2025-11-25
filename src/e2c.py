@@ -30,7 +30,8 @@ class E2CDataset(torch.utils.data.Dataset):
         self.pred_length = config['trans']['pred_length']
 
         # Normalize actions
-        control = (control - control.min()) / (control.max() - control.min())
+        if control.max() - control.min() > 0:
+            control = (control - control.min()) / (control.max() - control.min())
 
         # Reshape for learning
         # flat = img.reshape(-1, img.shape[2], img.shape[3], img.shape[4]).permute(0, 3, 1, 2)   # Shape: [batch*seq_len, C, H, W]
