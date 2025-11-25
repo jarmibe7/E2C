@@ -11,7 +11,7 @@ from pathlib import Path
 
 from src.utils import anim_frames
 
-# Get data directory - use Path relative to the project root
+# Get data directory
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 DATA_PATH = PROJECT_ROOT / "data"
 

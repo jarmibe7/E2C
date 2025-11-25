@@ -23,14 +23,24 @@ n_samples = 100 # Number of total trajectories (number of episodes)
 image_shape = (64, 64, 3)
 # ---------------------------------
 
+# Get data directory
+PROJECT_ROOT = Path(__file__).parent.parent.parent
+DATA_PATH = PROJECT_ROOT / "data"
+
 set_seed(42)
 name_to_gym = {'reacher': 'Reacher-v5'}
 
-def process_image(img):
+def process_image(image):
     """
-    Do image processing on a given image
+    Image processing
     """
-    return
+    image = torch.from_numpy(image.copy()).permute(2, 0, 1)  # Get image tensor into (C, H, W)
+
+    # Image processing
+    normalized = image.unsqueeze(0).float() / 255.0 # Normalize to [0,1]
+    image_resized = torchvision.transforms.functional.resize(normalized, image_shape[0:2], interpolation=torchvision.transforms.functional.InterpolationMode.NEAREST)   # Downscaling
+      
+    return image_resized.permute(0, 2, 3, 1) # Permute back to raw shape
 
 
 def main():
@@ -42,6 +52,7 @@ def main():
     
     # Collect n_samples trajectories
     for episode in range(n_samples):
+        if episode % 100 == 0: print(f'On sample {episode} out of {n_samples}')
         obs, _ = env.reset()
         done = False
 
@@ -57,23 +68,21 @@ def main():
             rend = env.render()
             img[episode, t] = process_image(rend)
             action = env.action_space.sample()
-            control[episode, t] = action
+            control[episode, t] = torch.from_numpy(action)
 
             # Take action
             obs, rew, done, _, _ = env.step(action)
 
-    # img = torch.concat(samples, axis=0)  # Dataset shape is [num_samples, frames_per_sample, H, W, C]
-    # control = torch.zeros((n_samples, img.shape[1], 2))
-    # print(f'\nDataset shape: {img.shape}')
+    print(f'\nDataset shape: {img.shape}')
 
-    # # Saving dataset
-    # dataset_dir = DATA_PATH / 'particle_grav'
-    # dataset_dir.mkdir(parents=True, exist_ok=True)
-    # img_filepath = dataset_dir / 'img.pt'
-    # control_filepath = dataset_dir / 'control.pt'
-    # print(f'\nSaving dataset to {dataset_dir}')
-    # torch.save(img, img_filepath)
-    # torch.save(control, control_filepath)
+    # Saving dataset
+    dataset_dir = DATA_PATH / env_name
+    dataset_dir.mkdir(parents=True, exist_ok=True)
+    img_filepath = dataset_dir / 'img.pt'
+    control_filepath = dataset_dir / 'control.pt'
+    print(f'\nSaving dataset to {dataset_dir}')
+    torch.save(img, img_filepath)
+    torch.save(control, control_filepath)
 
     print('\n*** DONE ***')
     return
