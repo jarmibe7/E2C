@@ -1,5 +1,5 @@
 #
-# Config file for particle_grav
+# Config file cartpole
 #
 # Encoder/Decoder
 vae:
@@ -12,18 +12,18 @@ vae:
 loss:
   recon_mult: !!float 1e4           # Reconstruction loss multiplier
   beta: !!float 5e-3                # Standard Gaussian KL multiplier
-  lambda: !!float 0.25              # Contraction KL multiplier
+  lambda: !!float 5e-3              # Contraction KL multiplier
   kld_anneal_mode: linear           # Beta annealing mode: const | linear
 # Transition model hyperparams
 trans:
-  latent_size: 4                    # Transition model latent dim
+  latent_size: 32                    # Transition model latent dim
   past_length: 1                    # Length of image history passed into encoder
   pred_length: 1                    # Length of image prediction horizon
-  alpha: !!float 1e-4               # Learning rate
+  alpha: !!float 5e-5               # Learning rate
   weight_decay: !!float 1e-4        # Adam optimizer weight decay
 # Training settings
 train:
-  dataset: reacher    # Which dataset to use for training (in data/)
+  dataset: cartpole    # Which dataset to use for training (in data/)
   batch_size: 32
   num_epochs: 20
   device: cuda:2             # cpu | cuda:0 | cuda:1 | cuda:2

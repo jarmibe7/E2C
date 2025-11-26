@@ -99,7 +99,7 @@ def train(dataset, config):
 def main():
     print('*** STARTING ***\n')
     # Load config and choose torch device
-    config_name = 'e2c_config0'
+    config_name = 'e2c_config2'
     with open(CONFIG_PATH / f'{config_name}.yaml', "r") as f:
         config = yaml.safe_load(f)
     if 'cuda' in config['train']['device']: 
