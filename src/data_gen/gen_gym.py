@@ -1,7 +1,8 @@
 """
 Generate dataset from Gymnasium environment
 
-scp -r data/reacher jarmibe7@dingo.mech.northwestern.edu:~/E2C/data
+scp -r data/reacher jarmibe7@dingo.mech.northwestern.edu:~/E2C/
+scp jarmibe7@dingo.mech.northwestern.edu:~/E2C/videos/e2c_cartpole.mp4 C:\Users\jarmi\MS_Thesis\Media\Videos
 
 Author: Jared Berry, Ayush Gaggar
 """
@@ -20,8 +21,8 @@ dt = 0.01               # Timestep
 seq_len = 50            # Number of timesteps per episode (traj sequence length)
 
 # Parameters for dataset
-env_name = 'cartpole'
-n_samples = 200 # Number of total trajectories (number of episodes)
+env_name = 'reacher'
+n_samples = 300 # Number of total trajectories (number of episodes)
 image_shape = (64, 64, 3)
 # ---------------------------------
 
