@@ -1,6 +1,8 @@
 """
 Generate dataset from Gymnasium environment
 
+scp -r data/reacher jarmibe7@dingo.mech.northwestern.edu:~/E2C/data
+
 Author: Jared Berry, Ayush Gaggar
 """
 import numpy as np
@@ -18,8 +20,8 @@ dt = 0.01               # Timestep
 seq_len = 50            # Number of timesteps per episode (traj sequence length)
 
 # Parameters for dataset
-env_name = 'reacher'
-n_samples = 100 # Number of total trajectories (number of episodes)
+env_name = 'cartpole'
+n_samples = 200 # Number of total trajectories (number of episodes)
 image_shape = (64, 64, 3)
 # ---------------------------------
 
@@ -28,7 +30,8 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 DATA_PATH = PROJECT_ROOT / "data"
 
 set_seed(42)
-name_to_gym = {'reacher': 'Reacher-v5'}
+name_to_env = {'reacher': 'Reacher-v5', 'cartpole': 'CartPole-v1'}
+env_to_aspace = {'reacher': 'continuous', 'cartpole': 'discrete'}
 
 def process_image(image):
     """
@@ -46,9 +49,11 @@ def process_image(image):
 def main():
     print('*** STARTING ***\n')
     # Create env
-    env = gym.make(name_to_gym[env_name], render_mode="rgb_array")
+    env = gym.make(name_to_env[env_name], render_mode="rgb_array")
     img = torch.zeros((n_samples, seq_len, *image_shape))
-    control = torch.zeros((n_samples, seq_len, env.action_space.shape[0]))
+    continuous = (env_to_aspace[env_name] == 'continuous')
+    if continuous: control = torch.zeros((n_samples, seq_len, env.action_space.shape[0]))
+    else: control = torch.zeros((n_samples, seq_len, 1))     # Discrete action space
     
     # Collect n_samples trajectories
     for episode in range(n_samples):
@@ -61,14 +66,16 @@ def main():
             # If done, just fill with final frame
             if done:
                 img[episode, t] = process_image(rend)
-                control[episode, t] = torch.zeros(env.action_space.shape)
+                if continuous: control[episode, t] = control[episode, t] = torch.zeros(env.action_space.shape)
+                else: control[episode, t] = -1.0
                 continue
 
             # Save image and action pair
             rend = env.render()
             img[episode, t] = process_image(rend)
-            action = env.action_space.sample()
-            control[episode, t] = torch.from_numpy(action)
+            action = env.action_space.sample()  
+            if continuous: control[episode, t] = torch.from_numpy(action)
+            else: control[episode, t] = action
 
             # Take action
             obs, rew, done, _, _ = env.step(action)
