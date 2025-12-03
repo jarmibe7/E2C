@@ -23,7 +23,7 @@ trans:
   weight_decay: !!float 1e-4        # Adam optimizer weight decay
 # Training settings
 train:
-  dataset: reacher    # Which dataset to use for training (in data/)
+  dataset: particle_grav    # Which dataset to use for training (in data/)
   batch_size: 32
   num_epochs: 20
   device: cuda:2             # cpu | cuda:0 | cuda:1 | cuda:2

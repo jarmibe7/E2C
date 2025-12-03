@@ -24,8 +24,8 @@ set_seed(42)
 PROJECT_ROOT = Path(__file__).parent.parent
 DATA_PATH = PROJECT_ROOT / "data"
 CONFIG_PATH = PROJECT_ROOT / "config"
-MODEL_PATH = PROJECT_ROOT / "models"
-FIG_PATH = PROJECT_ROOT / "figures"
+RUNS_PATH = PROJECT_ROOT / "runs"
+
 
 def train(dataset, config):
     """
@@ -92,7 +92,7 @@ def train(dataset, config):
         print(f"Average Epoch Loss: {epoch_loss:.4f}")
         print(f'--------------------------------------------------\n')
 
-    if config['train']['save']: plotter.save(config['config_name'], config['timestamp'])
+    if config['train']['save']: plotter.save(config['run_path'])
     else: plotter.close()
     return model
 
@@ -108,7 +108,9 @@ def main():
     config['train']['device'] = device   # Replace device string with device object in config
     config['config_name'] = config_name
     timestamp = datetime.fromtimestamp(time.time()).strftime("%Y-%m-%d_%H-%M-%S")
-    config['timestamp'] = timestamp
+    run_path = RUNS_PATH / timestamp
+    run_path.mkdir(parents=True, exist_ok=True)
+    config['run_path'] = run_path
 
     # Make E2CDataset object
     print(f"Loading dataset: {config['train']['dataset']}")
@@ -126,16 +128,28 @@ def main():
 
     # Save model
     if config['train']['save']:
-        model_name = f'{config_name}_model_{timestamp}.pt'
+        model_name = 'model.pt'
         try:
-            MODEL_PATH.mkdir(parents=True, exist_ok=True)
-            filepath = MODEL_PATH / model_name
+            filepath = config['run_path'] / model_name
             print(f'\nSaving model to {filepath}')
             torch.save(model.state_dict(), filepath)
         except Exception as e:
             print(e)
             print('\nException occured, saving model to current directory')
             torch.save(model.state_dict(), model_name)
+
+        # Save final config dictionary
+        try:
+            yaml_name = 'config.yaml'
+            yaml_path = config['run_path'] / yaml_name
+            print(f'\nSaving config to {yaml_path}')
+            with open(yaml_path, 'w') as f:
+                yaml.dump(config, f, default_flow_style=False)
+        except Exception as e:
+            print(e)
+            print('\nException occurred, saving config to current directory')
+            with open(yaml_name, 'w') as f:
+                yaml.dump(config, f, default_flow_style=False)
 
     # Evaluate model performance
     if config['train']['eval']:
@@ -145,7 +159,7 @@ def main():
             batch_size=config['train']['batch_size'], 
             device=config['train']['device'],
         )
-        evaluator.eval_traj(config['config_name'], config['timestamp'])
+        evaluator.eval_traj(config['run_path'])
     
 
     print('\n*** DONE ***')
