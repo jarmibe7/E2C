@@ -15,10 +15,6 @@ from pathlib import Path
 from src.e2c import E2CDataset, E2CLoss, E2C
 from src.utils import set_seed, anim_frames
 
-PROJECT_ROOT = Path(__file__).parent.parent
-FIG_PATH = PROJECT_ROOT / "figures"
-VID_PATH = PROJECT_ROOT / "videos"
-
 class Plotter():
     """
     Simple class for visualizing training progress
@@ -77,16 +73,15 @@ class Plotter():
         plt.tight_layout()
         if self.render: plt.pause(0.001)
 
-    def save(self, name_stem, timestamp=None):
+    def save(self, run_path, timestamp=None):
         """
         Save live training plot
         """
         self.plot()
-        if timestamp is None: timestamp = datetime.fromtimestamp(time.time()).strftime("%Y-%m-%d_%H-%M-%S")
-        fig_name = f'{name_stem}_fig_{timestamp}.png'
+        # if timestamp is None: timestamp = datetime.fromtimestamp(time.time()).strftime("%Y-%m-%d_%H-%M-%S")
+        fig_name = f'loss_fig.png'
         try:
-            FIG_PATH.mkdir(parents=True, exist_ok=True)
-            filepath = FIG_PATH / fig_name
+            filepath = run_path / fig_name
             print(f'\nSaving loss figure to {filepath}')
             self.fig.savefig(filepath)
         except Exception as e:
@@ -117,7 +112,7 @@ class Evaluator():
     def eval_all(self):
         self.eval_traj()
         
-    def eval_traj(self, name_stem, timestamp=None, max_frames=50):
+    def eval_traj(self, run_path, timestamp=None, max_frames=50):
         # Create figure
         fig, ax = plt.subplots(2, 2, figsize=(8, 10))
         ax[0, 0].set_title("Predicted Current Image")
@@ -160,11 +155,10 @@ class Evaluator():
         # Create and save animation
         ani = FuncAnimation(fig, update_plot, frames=50, interval=5.)
         writer = FFMpegWriter(fps=2)
-        if timestamp is None: timestamp = datetime.fromtimestamp(time.time()).strftime("%Y-%m-%d_%H-%M-%S")
-        vid_name = f'{name_stem}_eval_vid_{timestamp}.mp4'
+        # if timestamp is None: timestamp = datetime.fromtimestamp(time.time()).strftime("%Y-%m-%d_%H-%M-%S")
+        vid_name = f'eval_vid.mp4'
         try:
-            VID_PATH.mkdir(parents=True, exist_ok=True)
-            filepath = VID_PATH / vid_name
+            filepath = run_path / vid_name
             print(f'\nSaving eval video to {filepath}')
             ani.save(filepath, writer=writer)
         except Exception as e:
