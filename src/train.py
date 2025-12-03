@@ -159,7 +159,7 @@ def main():
             batch_size=config['train']['batch_size'], 
             device=config['train']['device'],
         )
-        evaluator.eval_traj(config['run_path'])
+        evaluator.eval(config['run_path'])
     
 
     print('\n*** DONE ***')

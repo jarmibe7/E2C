@@ -109,10 +109,11 @@ class Evaluator():
         self.batch_size = batch_size
         self.device = device
 
-    def eval_all(self):
-        self.eval_traj()
+    def eval(self, run_path, vid_max_frames=50):
+        self.eval_traj(run_path, max_frames=vid_max_frames)
+        self.eval_latent(run_path)
         
-    def eval_traj(self, run_path, timestamp=None, max_frames=50):
+    def eval_traj(self, run_path, max_frames=50):
         # Create figure
         fig, ax = plt.subplots(2, 2, figsize=(8, 10))
         ax[0, 0].set_title("Predicted Current Image")
@@ -166,5 +167,66 @@ class Evaluator():
             print('\nException occured, saving eval video to current directory')
             ani.save(vid_name, writer=writer)
         plt.close(fig)
+        return
+    
+    def eval_latent(self, run_path):
+        """
+        Visalize the E2C latent space on the test dataset
+
+        Credit: Jueun Kwon, Northwestern University
+        """
+        # Visualize latent space considering mean and variance
+        fig, ax = plt.subplots(1, 1, figsize=(4, 4), dpi=150, tight_layout=True)
+        ax.set_aspect('equal')
+        ax.set_title('Latent Space from Test Dataset (Mean and Variance)')
+
+        latent_mean = []
+        latent_var = []
+
+        test_loader = torch.utils.data.DataLoader(
+            self.test_dataset, batch_size=1, shuffle=True
+        )
+
+        # Iterate over DataLoader
+        for x, x_next, u in test_loader:
+            x, x_next, u = x.to(self.device), x_next.to(self.device), u.to(self.device)
+            # Encode current and next state
+            enc_out = self.model.encoder(x)
+
+            # Get record latent space
+            mu = self.model.mu(enc_out)
+            log_var = self.model.log_var(enc_out)
+            latent_mean.append(mu)
+            latent_var.append(torch.exp(log_var))
+
+            # Convert to numpy for scatter plot
+            z_mean_np = mu.cpu().detach().numpy()
+            z_var_np = torch.exp(log_var).cpu().detach().numpy()
+
+            # Represent uncertainty by point size
+            point_sizes = np.mean(z_var_np, axis=1) * 100  # Adjust scaling as needed
+            sc = ax.scatter(z_mean_np[:, 0], z_mean_np[:, 1], s=point_sizes, alpha=0.1, label=None)
+
+        # Combine all latent means and variances
+        latent_mean = torch.cat(latent_mean).cpu().detach().numpy()
+        latent_var = torch.cat(latent_var).cpu().detach().numpy()
+
+        # Adjust plot limits
+        # x_min, x_max = ax.get_xlim()
+        # y_min, y_max = ax.get_ylim()
+        # a_min = np.minimum(x_min, y_min)
+        # a_max = np.maximum(x_max, y_max)
+        # ax.set_xlim(a_min, a_max)
+        # ax.set_ylim(a_min, a_max)
+
+        fig_name = f'latent_fig.png'
+        try:
+            filepath = run_path / fig_name
+            print(f'\nSaving latent space figure to {filepath}')
+            fig.savefig(filepath)
+        except Exception as e:
+            print(e)
+            print('\nException occured, saving loss figure to current directory')
+            fig.savefig(fig_name)
         return
         
