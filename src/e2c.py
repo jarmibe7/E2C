@@ -88,7 +88,7 @@ class E2CLoss(nn.Module):
     def forward(self, tr, epoch):
         # Reconstruction loss
         recon = self.recon_mult*nn.functional.mse_loss(tr['x'], tr['x_recon'], reduction='mean')
-        recon_next = self.recon_mult*nn.functional.mse_loss(tr['x_next'], tr['x_next_recon'], reduction='mean')
+        recon_next = self.recon_mult*nn.functional.mse_loss(tr['x_next'], tr['x_pred'], reduction='mean')
 
         # Encoding KL Divergence
         log_var, mu = tr['log_var'], tr['mu']
