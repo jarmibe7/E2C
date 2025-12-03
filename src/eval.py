@@ -178,7 +178,7 @@ class Evaluator():
         # Visualize latent space considering mean and variance
         fig, ax = plt.subplots(1, 1, figsize=(4, 4), dpi=150, tight_layout=True)
         ax.set_aspect('equal')
-        ax.set_title('Latent Space from Test Dataset (Mean and Variance)')
+        ax.set_title('Latent Space from Test Dataset (Mean and Var)')
 
         latent_mean = []
         latent_var = []
