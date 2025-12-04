@@ -188,6 +188,9 @@ class Evaluator():
         )
 
         # Iterate over DataLoader
+        # TODO: Visualize based on configuration in latent space
+        # Cartpole Example: Left control left move is blue
+        #                   Right control left move is red ...
         for x, x_next, u in test_loader:
             x, x_next, u = x.to(self.device), x_next.to(self.device), u.to(self.device)
             # Encode current and next state
