@@ -30,6 +30,7 @@ image_shape = (64, 64, 3)
 # Get data directory
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 DATA_PATH = PROJECT_ROOT / "data"
+OUTPUT_NAME = env_name
 
 set_seed(42)
 name_to_env = {'reacher': 'Reacher-v5', 'cartpole': 'CartPole-v1'}
@@ -90,7 +91,7 @@ def main():
     print(f'\nDataset shape: {img.shape}')
 
     # Saving dataset
-    dataset_dir = DATA_PATH / env_name
+    dataset_dir = DATA_PATH / OUTPUT_NAME
     dataset_dir.mkdir(parents=True, exist_ok=True)
     img_filepath = dataset_dir / 'img.pt'
     control_filepath = dataset_dir / 'control.pt'

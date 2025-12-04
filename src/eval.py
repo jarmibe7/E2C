@@ -109,6 +109,7 @@ class Evaluator():
         if dataset_name == 'particle_grav': self.dataset_latent_func = self.eval_four_var_latent
         elif dataset_name == 'cartpole': self.dataset_latent_func = self.eval_four_var_latent
         elif dataset_name == 'reacher': self.dataset_latent_func = self.eval_four_var_latent
+        self.dataset_name = dataset_name
 
     def eval(self, run_path, vid_max_frames=50):
         self.dataset_latent_func(run_path)
@@ -214,7 +215,18 @@ class Evaluator():
 
             # Represent uncertainty by point size
             point_sizes = np.mean(z_var_np, axis=1) * 100  # Adjust scaling as needed
-            color = colors[round(u.cpu().detach().numpy().flatten()[0])]
+
+            # Choose colors based on configuration
+            if self.dataset_name in ['particle_grav', 'cartpole']: 
+                color = colors[round(u.cpu().detach().numpy().flatten()[0])]
+            elif self.dataset_name == 'reacher':
+                u = u.cpu().detach().numpy().flatten()
+                if u[0] > 0.0 and u[1] > 0.0: color = 'blue'
+                elif u[0] > 0.0 and u[1] < 0.0: color = 'green'
+                elif u[0] < 0.0 and u[1] > 0.0: color = 'yellow'
+                else: color = 'red'
+
+            # Plotting all variable combos
             for ax, combo in zip(axes.flatten(), combo_array):
                 sc = ax.scatter(z_mean_np[:, combo[0]], z_mean_np[:, combo[1]], s=point_sizes, alpha=0.1, label=None, color=color)
 

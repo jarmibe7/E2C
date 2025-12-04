@@ -1,0 +1,43 @@
+config_name: e2c_config2
+loss:
+  beta: 0.01
+  kld_anneal_mode: linear
+  lambda: 0.01
+  recon_mult: 10000.0
+run_path: !!python/object/apply:pathlib.PosixPath
+- /
+- home
+- jarmibe7
+- E2C
+- runs
+- 2025-12-04_00-44-38
+train:
+  batch_size: 128
+  dataset: reacher
+  device: !!python/object/apply:torch.device
+  - cuda
+  - 2
+  eval: true
+  num_epochs: 10
+  plot_freq: 10000
+  render: false
+  save: true
+  train_ratio: 0.95
+trans:
+  alpha: 0.0001
+  control_size: 2
+  latent_size: 4
+  past_length: 1
+  pred_length: 1
+  weight_decay: 0.0001
+vae:
+  dec_kernel_size: 4
+  enc_kernel_size: 3
+  enc_latent_size: 256
+  out_image_shape: !!python/object/apply:torch.Size
+  - !!python/tuple
+    - 3
+    - 128
+    - 128
+  pad: 1
+  stride: 2
