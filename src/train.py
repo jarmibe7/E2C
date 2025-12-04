@@ -73,8 +73,8 @@ def train(dataset, config):
             train_return['x_next'] = x_next
 
             # Compute loss and backprop
-            loss, recon, recon_next, kld, kld_contract = criterion(train_return, epoch)
-            plotter.log(recon, recon_next, kld, kld_contract)
+            loss, recon, recon_next, kld, kld_trans = criterion(train_return, epoch)
+            plotter.log(recon, recon_next, kld, kld_trans)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -131,23 +131,23 @@ def main():
         model_name = 'model.pt'
         try:
             filepath = config['run_path'] / model_name
-            print(f'\nSaving model to {filepath}')
+            print(f'\nSaved model to {filepath}')
             torch.save(model.state_dict(), filepath)
         except Exception as e:
             print(e)
-            print('\nException occured, saving model to current directory')
+            print('\nException occured, saved model to current directory')
             torch.save(model.state_dict(), model_name)
 
         # Save final config dictionary
         try:
             yaml_name = 'config.yaml'
             yaml_path = config['run_path'] / yaml_name
-            print(f'\nSaving config to {yaml_path}')
+            print(f'\nSaved config to {yaml_path}')
             with open(yaml_path, 'w') as f:
                 yaml.dump(config, f, default_flow_style=False)
         except Exception as e:
             print(e)
-            print('\nException occurred, saving config to current directory')
+            print('\nException occurred, saved config to current directory')
             with open(yaml_name, 'w') as f:
                 yaml.dump(config, f, default_flow_style=False)
 
@@ -158,6 +158,7 @@ def main():
             test_dataset,
             batch_size=config['train']['batch_size'], 
             device=config['train']['device'],
+            dataset_name=config['train']['dataset']
         )
         evaluator.eval(config['run_path'])
     

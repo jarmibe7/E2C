@@ -2,7 +2,7 @@
 Generate dataset from Gymnasium environment
 
 scp -r data/reacher jarmibe7@dingo.mech.northwestern.edu:~/E2C/
-scp jarmibe7@dingo.mech.northwestern.edu:~/E2C/videos/e2c_cartpole.mp4 C:\Users\jarmi\MS_Thesis\Media\Videos
+scp jarmibe7@dingo.mech.northwestern.edu:~/E2C/videos/e2c_cartpole.mp4 C:\\Users\\jarmi\\MS_Thesis\\Media\\Videos
 
 Author: Jared Berry, Ayush Gaggar
 """
@@ -12,6 +12,7 @@ import gymnasium as gym
 import torchvision
 import matplotlib.pyplot as plt
 from pathlib import Path
+from pyvirtualdisplay import Display
 
 from src.utils import set_seed
 
@@ -21,8 +22,8 @@ dt = 0.01               # Timestep
 seq_len = 50            # Number of timesteps per episode (traj sequence length)
 
 # Parameters for dataset
-env_name = 'reacher'
-n_samples = 300 # Number of total trajectories (number of episodes)
+env_name = 'cartpole'
+n_samples = 100 # Number of total trajectories (number of episodes)
 image_shape = (64, 64, 3)
 # ---------------------------------
 
@@ -38,6 +39,7 @@ def process_image(image):
     """
     Image processing
     """
+    if env_name == 'cartpole': image = image[50:350, 100:400]  # Zoom on cartpole
     image = torch.from_numpy(image.copy()).permute(2, 0, 1)  # Get image tensor into (C, H, W)
 
     # Image processing
@@ -49,6 +51,10 @@ def process_image(image):
 
 def main():
     print('*** STARTING ***\n')
+    # Create virtual display for running on server
+    disp = Display(visible=0, size=(480, 480))
+    disp.start()
+
     # Create env
     env = gym.make(name_to_env[env_name], render_mode="rgb_array")
     img = torch.zeros((n_samples, seq_len, *image_shape))
@@ -88,7 +94,7 @@ def main():
     dataset_dir.mkdir(parents=True, exist_ok=True)
     img_filepath = dataset_dir / 'img.pt'
     control_filepath = dataset_dir / 'control.pt'
-    print(f'\nSaving dataset to {dataset_dir}')
+    print(f'\nSaved dataset to {dataset_dir}')
     torch.save(img, img_filepath)
     torch.save(control, control_filepath)
 

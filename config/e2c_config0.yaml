@@ -12,7 +12,7 @@ vae:
 loss:
   recon_mult: !!float 1e4           # Reconstruction loss multiplier
   beta: !!float 5e-3                # Standard Gaussian KL multiplier
-  lambda: !!float 0.25              # Contraction KL multiplier
+  lambda: !!float 0.25              # Transition KL multiplier
   kld_anneal_mode: linear           # Beta annealing mode: const | linear
 # Transition model hyperparams
 trans:

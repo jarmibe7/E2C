@@ -1,5 +1,5 @@
 #
-# Config file cartpole
+# Config file reacher
 #
 # Encoder/Decoder
 vae:
@@ -11,8 +11,8 @@ vae:
 # Loss hyperparams
 loss:
   recon_mult: !!float 1e4           # Reconstruction loss multiplier
-  beta: !!float 5e-3                # Standard Gaussian KL multiplier
-  lambda: !!float 5e-3              # Contraction KL multiplier
+  beta: !!float 1e-2                # Standard Gaussian KL multiplier
+  lambda: !!float 1e-2              # Transition KL multiplier
   kld_anneal_mode: linear           # Beta annealing mode: const | linear
 # Transition model hyperparams
 trans:
@@ -23,7 +23,7 @@ trans:
   weight_decay: !!float 1e-4        # Adam optimizer weight decay
 # Training settings
 train:
-  dataset: cartpole    # Which dataset to use for training (in data/)
+  dataset: reacher    # Which dataset to use for training (in data/)
   batch_size: 32
   num_epochs: 10
   device: cuda:2             # cpu | cuda:0 | cuda:1 | cuda:2

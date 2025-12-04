@@ -94,32 +94,32 @@ class E2CLoss(nn.Module):
         log_var, mu = tr['log_var'], tr['mu']
         kld = self.kld_anneal(epoch)*(-0.5 * torch.sum(1 + log_var - mu.pow(2) - log_var.exp(), dim=-1).mean())
 
-        # Contraction term on transition posterior
+        # Transition model KLD
         # https://stats.stackexchange.com/questions/7440/kl-divergence-between-two-univariate-gaussians
         log_var_pred, mu_pred = tr['log_var_pred'], tr['mu_pred']
         log_var_next, mu_next = tr['log_var_next'], tr['mu_next']
         var_next, var_pred = torch.exp(log_var_next), torch.exp(log_var_pred)
 
         # Times 0.5 because formula uses standard dev
-        # kld_contract_vec = 0.5*(log_var_pred - log_var_next) \
+        # kld_trans_vec = 0.5*(log_var_pred - log_var_next) \
         #                    + ((var_next + (mu_next - mu_pred)**2) / (var_pred + 1e-8)) \
         #                    - 1.0
-        # kld_contract = 0.5 * torch.sum(kld_contract_vec)
+        # kld_trans = 0.5 * torch.sum(kld_trans_vec)
 
         # v, r = tr['v'], tr['r']
         # dot = torch.sum(v * r, dim=1)
         # dot = torch.clamp(dot, min=-0.99)  # Ensure log(1 + dot) > 0
         # sum_term = torch.sum(log_var_pred - log_var_next, axis=1)
         # log_term = torch.log(1 + dot)
-        # kld_contract_vec = 2*(sum_term - log_term)
-        # kld_contract = self.lam*torch.sum(kld_contract_vec)
+        # kld_trans_vec = 2*(sum_term - log_term)
+        # kld_trans = self.lam*torch.sum(kld_trans_vec)
         z_pred = tr['z_pred']
-        kld_contract = self.lam*(-0.5 * torch.sum(1 + log_var_next - (z_pred - mu_next).pow(2) - log_var_next.exp(), dim=-1).mean())
+        kld_trans = self.lam*(-0.5 * torch.sum(1 + log_var_next - (z_pred - mu_next).pow(2) - log_var_next.exp(), dim=-1).mean())
 
-        loss = recon + recon_next + kld + kld_contract
+        loss = recon + recon_next + kld + kld_trans
         if torch.isnan(loss):
             breakpoint()
-        return loss, recon, recon_next, kld, kld_contract
+        return loss, recon, recon_next, kld, kld_trans
 
 class E2C(nn.Module):
     """

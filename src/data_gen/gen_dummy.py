@@ -92,7 +92,7 @@ def main():
     dataset_dir.mkdir(parents=True, exist_ok=True)
     img_filepath = dataset_dir / 'img.pt'
     control_filepath = dataset_dir / 'control.pt'
-    print(f'\nSaving dataset to {dataset_dir}')
+    print(f'\nSaved dataset to {dataset_dir}')
     torch.save(img, img_filepath)
     torch.save(control, control_filepath)
 
