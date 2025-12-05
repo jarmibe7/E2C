@@ -1,0 +1,35 @@
+#
+# Config file reacher
+#
+# Encoder/Decoder
+vae:
+  enc_latent_size: 256
+  enc_kernel_size: 3
+  dec_kernel_size: 4
+  stride: 2
+  pad: 1
+# Loss hyperparams
+loss:
+  recon_mult: !!float 1e4           # Reconstruction loss multiplier
+  beta: !!float 1e-2                # Standard Gaussian KL multiplier
+  lambda: !!float 1e-2              # Transition KL multiplier
+  kld_anneal_mode: linear           # Beta annealing mode: const | linear
+# Transition model hyperparams
+trans:
+  latent_size: 4                    # Transition model latent dim
+  past_length: 3                    # Length of image history passed into encoder
+  pred_length: 1                    # Length of image prediction horizon
+  alpha: !!float 1e-4               # Learning rate
+  weight_decay: !!float 1e-4        # Adam optimizer weight decay
+# Training settings
+train:
+  dataset: reacher    # Which dataset to use for training (in data/)
+  batch_size: 128
+  num_epochs: 10
+  device: cuda:2             # cpu | cuda:0 | cuda:1 | cuda:2
+  render: False              # Whether to render live interactive training plot, or simply save after training is finished
+  save: False                 # Whether to save final trained model and training plot
+  plot_freq: 10000           # Frequency to update the plot, in timesteps
+  eval: True                 # Whether to eval model performance immediately after training
+  train_ratio: 0.9           # Ratio of dataset to use for training
+  load_path: runs/reacher/2025-12-05_13-38-30 # Path to load model from (for resuming training or eval only)    
