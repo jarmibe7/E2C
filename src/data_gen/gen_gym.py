@@ -36,11 +36,11 @@ set_seed(42)
 name_to_env = {'reacher': 'Reacher-v5', 'cartpole': 'CartPole-v1'}
 env_to_aspace = {'reacher': 'continuous', 'cartpole': 'discrete'}
 
-def process_image(image):
+def process_image(image, dataset_name=env_name):
     """
     Image processing
     """
-    if env_name == 'cartpole': image = image[50:350, 100:400]  # Zoom on cartpole
+    if dataset_name == 'cartpole': image = image[50:350, 100:400]  # Zoom on cartpole
     image = torch.from_numpy(image.copy()).permute(2, 0, 1)  # Get image tensor into (C, H, W)
 
     # Image processing

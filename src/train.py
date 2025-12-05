@@ -12,6 +12,7 @@ import yaml
 import time
 from datetime import datetime
 from pathlib import Path
+import copy
 
 from src.e2c import E2CDataset, E2CLoss, E2C
 from src.utils import set_seed, anim_frames
@@ -20,7 +21,7 @@ from src.eval import Plotter, Evaluator
 # Set random seed globally
 set_seed(42)
 
-# Paths - relative to the project root
+# Paths
 PROJECT_ROOT = Path(__file__).parent.parent
 DATA_PATH = PROJECT_ROOT / "data"
 CONFIG_PATH = PROJECT_ROOT / "config"
@@ -98,19 +99,20 @@ def train(dataset, config):
 
 def main():
     print('*** STARTING ***\n')
-    # Load config and choose torch device
-    config_name = 'e2c_config2'
+    # Load config, make run path, and choose torch device
+    config_name = 'e2c_config1'
     with open(CONFIG_PATH / f'{config_name}.yaml', "r") as f:
         config = yaml.safe_load(f)
-    if 'cuda' in config['train']['device']: 
-        assert torch.cuda.is_available(), f"{config['train']['device']} selected in {config_name}, but is unavailable!"
-    device = torch.device(config['train']['device'])
-    config['train']['device'] = device   # Replace device string with device object in config
     config['config_name'] = config_name
+    config_save = copy.deepcopy(config)
     timestamp = datetime.fromtimestamp(time.time()).strftime("%Y-%m-%d_%H-%M-%S")
     run_path = RUNS_PATH / timestamp
     run_path.mkdir(parents=True, exist_ok=True)
     config['run_path'] = run_path
+    device = torch.device(config['train']['device'])
+    if 'cuda' in config['train']['device']: 
+        assert torch.cuda.is_available(), f"{config['train']['device']} selected in {config_name}, but is unavailable!"
+    config['train']['device'] = device   # Replace device string with device object in config
 
     # Make E2CDataset object
     print(f"Loading dataset: {config['train']['dataset']}")
@@ -138,18 +140,18 @@ def main():
             print('\nException occured, saved model to current directory')
             torch.save(model.state_dict(), model_name)
 
-        # Save final config dictionary
+        # Save config dictionary
         try:
             yaml_name = 'config.yaml'
             yaml_path = config['run_path'] / yaml_name
             print(f'\nSaved config to {yaml_path}')
             with open(yaml_path, 'w') as f:
-                yaml.dump(config, f, default_flow_style=False)
+                yaml.dump(config_save, f, default_flow_style=False) # Save original config so model can be loaded later
         except Exception as e:
             print(e)
             print('\nException occurred, saved config to current directory')
             with open(yaml_name, 'w') as f:
-                yaml.dump(config, f, default_flow_style=False)
+                yaml.dump(config_save, f, default_flow_style=False)
 
     # Evaluate model performance
     if config['train']['eval']:

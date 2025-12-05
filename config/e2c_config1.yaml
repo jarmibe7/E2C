@@ -25,7 +25,7 @@ trans:
 train:
   dataset: cartpole    # Which dataset to use for training (in data/)
   batch_size: 32
-  num_epochs: 10
+  num_epochs: 20
   device: cuda:2             # cpu | cuda:0 | cuda:1 | cuda:2
   render: False              # Whether to render live interactive training plot, or simply save after training is finished
   save: True                 # Whether to save final trained model and training plot

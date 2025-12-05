@@ -320,5 +320,4 @@ class Evaluator():
             print('\nException occured, saved latent space figure to current directory')
             fig.savefig(fig_name)
         plt.close(fig)
-        return
-        
+        return  
