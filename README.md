@@ -42,7 +42,11 @@ To run overnight and prevent from closing:
 
 ```screen -S my_session_name```
 
-Or to resume:
+And run the training script. Then to detach:
+
+```Ctrl + A```   then   ```D```
+
+To resume:
 
 ```screen -r my_session_name```
 
