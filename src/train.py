@@ -13,6 +13,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 import copy
+from tqdm import tqdm
 
 from src.e2c import E2CDataset, E2CLoss, E2C
 from src.utils import set_seed, anim_frames
@@ -61,17 +62,25 @@ def train(dataset, config):
 
     # Training loop
     print('\nBeginning Training:')
-    for epoch in range(num_epochs):
+    epoch_loss = 0.0
+    pbar = tqdm(range(num_epochs), desc="Training")
+    for epoch in pbar:
         total_loss = 0.0
 
         for x, x_next, u in train_loader:
             # Send training data to GPU
             x, x_next, u = x.to(device), x_next.to(device), u.to(device)
+            x = x.reshape(x.shape[0], -1, *config['vae']['out_image_shape'][1:])
+            x_next = torch.hstack([x_next for i in range(model.past_length)]).to(device)
 
             # Forward pass
             train_return = model(x, x_next, u)
             train_return['x'] = x
             train_return['x_next'] = x_next
+            # plt.imshow(train_return['x_next_recon'][0][:3].permute(1,2,0).detach().cpu().numpy())
+            # plt.savefig("debug_true.png")
+            # plt.imshow(train_return['x_pred'][0][:3].permute(1,2,0).detach().cpu().numpy())
+            # plt.savefig("debug_decoded.png")
 
             # Compute loss and backprop
             loss, recon, recon_next, kld, kld_trans = criterion(train_return, epoch)
@@ -88,26 +97,26 @@ def train(dataset, config):
 
         # Display average loss for the epoch
         epoch_loss = total_loss / len(train_loader.dataset)
-        print(f'\n--------------------------------------------------')
-        print(f'EPOCH {epoch+1}/{num_epochs}')
-        print(f"Average Epoch Loss: {epoch_loss:.4f}")
-        print(f'--------------------------------------------------\n')
+        pbar.set_postfix({
+            'Epoch': epoch+1,
+            'Epoch Loss': f"{epoch_loss:.4f}"})
 
     if config['train']['save']: plotter.save(config['run_path'])
     else: plotter.close()
+    pbar.close()
+
     return model
 
 def main():
     print('*** STARTING ***\n')
     # Load config, make run path, and choose torch device
-    config_name = 'e2c_config3'
+    config_name = 'e2c_reacher_v2'
     with open(CONFIG_PATH / f'{config_name}.yaml', "r") as f:
         config = yaml.safe_load(f)
     config['config_name'] = config_name
     config_save = copy.deepcopy(config)
     timestamp = datetime.fromtimestamp(time.time()).strftime("%Y-%m-%d_%H-%M-%S")
-    run_path = RUNS_PATH / timestamp
-    run_path.mkdir(parents=True, exist_ok=True)
+    run_path = RUNS_PATH / Path("reacher") / timestamp
     config['run_path'] = run_path
     device = torch.device(config['train']['device'])
     if 'cuda' in config['train']['device']: 
@@ -126,7 +135,27 @@ def main():
     train_dataset, test_dataset = torch.utils.data.random_split(dataset, [train_size, test_size])
 
     # Train on training dataet
-    model = train(train_dataset, config)
+    try:
+        if config['train']['load_path'] is None:
+            run_path.mkdir(parents=True, exist_ok=True)
+        else:
+            model = E2C(
+                enc_latent_size=config['vae']['enc_latent_size'],
+                latent_size=config['trans']['latent_size'],
+                control_size=config['trans']['control_size'],
+                past_length=config['trans']['past_length'],
+                pred_length=config['trans']['pred_length'],
+                conv_params=config['vae'],
+                device=device
+            )
+            model.to(device)
+            model_path = config['train']['load_path'] + '/model.pt'
+            model.load_state_dict(torch.load(model_path))
+            config['run_path'] = PROJECT_ROOT / Path(config['train']['load_path'])
+    except Exception as e:
+        run_path.mkdir(parents=True, exist_ok=True)
+        model = train(train_dataset, config)
+    model.eval()
 
     # Save model
     if config['train']['save']:
@@ -154,6 +183,7 @@ def main():
                 yaml.dump(config_save, f, default_flow_style=False)
 
     # Evaluate model performance
+    print('*** EVAL ***\n')
     if config['train']['eval']:
         evaluator = Evaluator(
             model, 

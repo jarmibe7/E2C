@@ -8,6 +8,7 @@ from matplotlib.animation import FuncAnimation, FFMpegWriter
 import torch
 import numpy as np
 import itertools
+from tqdm import tqdm
 
 from src.e2c import E2CDataset, E2CLoss, E2C
 from src.utils import set_seed, anim_frames
@@ -112,7 +113,9 @@ class Evaluator():
         self.dataset_name = dataset_name
 
     def eval(self, run_path, vid_max_frames=50):
+        print("generating latent space figure...")
         self.dataset_latent_func(run_path)
+        print("generating trajectory video...")
         self.eval_traj(run_path, max_frames=vid_max_frames)
         # self.eval_latent(run_path)
         
@@ -135,24 +138,30 @@ class Evaluator():
             if i >= max_frames:
                 break
             x, x_next, u = x.to(self.device), x_next.to(self.device), u.to(self.device)
+            x = x.reshape(x.shape[0], -1, x.shape[-2], x.shape[-1])
+            x_next = torch.hstack([x_next for i in range(self.model.past_length)]).to(self.device)
             x_recon, x_pred = self.model.sample(x, u)
             x_list.append(x[0]); x_next_list.append(x_next[0])
             x_recon_list.append(x_recon); x_pred_list.append(x_pred)
 
         # Initialize axes
         ims = []
-        ims.append(ax[0, 0].imshow(x_recon_list[0].permute(1, 2, 0).detach().cpu().numpy()))
-        ims.append(ax[1, 0].imshow(x_list[0].permute(1, 2, 0).detach().cpu().numpy()))
-        ims.append(ax[0, 1].imshow(x_pred_list[0].permute(1, 2, 0).detach().cpu().numpy()))
-        ims.append(ax[1, 1].imshow(x_next_list[0].permute(1, 2, 0).detach().cpu().numpy()))
+        img_pred = x_recon_list[0][:3]
+        img_pred_next = x_pred_list[0][:3]
+        img = x_list[0][:3]
+        img_next = x_next_list[0][:3]
+        ims.append(ax[0, 0].imshow(img_pred.permute(1, 2, 0).detach().cpu().numpy()))
+        ims.append(ax[1, 0].imshow(img.permute(1, 2, 0).detach().cpu().numpy()))
+        ims.append(ax[0, 1].imshow(img_pred_next.permute(1, 2, 0).detach().cpu().numpy()))
+        ims.append(ax[1, 1].imshow(img_next.permute(1, 2, 0).detach().cpu().numpy()))
 
         def update_plot(frame):
             x, x_next = x_list[frame], x_next_list[frame]
             x_recon, x_pred = x_recon_list[frame], x_pred_list[frame]
-            ims[0].set_data(x_recon.permute(1, 2, 0).detach().cpu().numpy())
-            ims[1].set_data(x.permute(1, 2, 0).detach().cpu().numpy())
-            ims[2].set_data(x_pred.permute(1, 2, 0).detach().cpu().numpy())
-            ims[3].set_data(x_next.permute(1, 2, 0).detach().cpu().numpy())
+            ims[0].set_data(x_recon[:3].permute(1, 2, 0).detach().cpu().numpy())
+            ims[1].set_data(x[:3].permute(1, 2, 0).detach().cpu().numpy())
+            ims[2].set_data(x_pred[:3].permute(2, 1, 0).detach().cpu().numpy()) # for some reason, need to transpose these differently?
+            ims[3].set_data(x_next[:3].permute(2, 1, 0).detach().cpu().numpy()) # for some reason, need to transpose these differently?
 
             # plt.show()
 
@@ -191,14 +200,16 @@ class Evaluator():
         latent_var = []
 
         test_loader = torch.utils.data.DataLoader(
-            self.test_dataset, batch_size=1, shuffle=True
+            self.test_dataset, batch_size=128, shuffle=True
         )
 
         # Iterate over DataLoader
         colors = ['blue', 'red']
         max_val = 0.0
-        for x, x_next, u in test_loader:
+        for x, x_next, u in tqdm(test_loader):
             x, x_next, u = x.to(self.device), x_next.to(self.device), u.to(self.device)
+            x = x.reshape(x.shape[0], -1, x.shape[-2], x.shape[-1])
+            x_next = torch.hstack([x_next for i in range(self.model.past_length)]).to(self.device)
             # Encode current and next state
             enc_out = self.model.encoder(x)
 
@@ -214,7 +225,7 @@ class Evaluator():
             max_val = max(max_val, z_mean_np.max())
 
             # Represent uncertainty by point size
-            point_sizes = np.mean(z_var_np, axis=1) * 100  # Adjust scaling as needed
+            point_sizes = np.mean(z_var_np, axis=1) * 1000  # Adjust scaling as needed
 
             # Choose colors based on configuration
             if self.dataset_name in ['particle_grav', 'cartpole']: 
@@ -236,14 +247,14 @@ class Evaluator():
 
         # Adjust plot limits
         for ax, combo in zip(axes.flatten(), combo_array):
-            # x_min, x_max = ax.get_xlim()
-            # y_min, y_max = ax.get_ylim()
-            # a_min = np.minimum(x_min, y_min)
-            # a_max = np.maximum(x_max, y_max)
-            # ax.set_xlim(a_min, a_max)
-            # ax.set_ylim(a_min, a_max)
-            ax.set_xlim(-max_val, max_val)
-            ax.set_ylim(-max_val, max_val)
+            x_min, x_max = ax.get_xlim()
+            y_min, y_max = ax.get_ylim()
+            a_min = np.minimum(x_min, y_min)
+            a_max = np.maximum(x_max, y_max)
+            ax.set_xlim(a_min, a_max)
+            ax.set_ylim(a_min, a_max)
+            # ax.set_xlim(-max_val, max_val)
+            # ax.set_ylim(-max_val, max_val)
 
         fig_name = f'latent_fig.png'
         try:
@@ -281,6 +292,8 @@ class Evaluator():
         #                   Right control left move is red ...
         for x, x_next, u in test_loader:
             x, x_next, u = x.to(self.device), x_next.to(self.device), u.to(self.device)
+            x = x.reshape(x.shape[0], -1, x.shape[-2], x.shape[-1])
+            x_next = torch.hstack([x_next for i in range(self.model.past_length)]).to(self.device)
             # Encode current and next state
             enc_out = self.model.encoder(x)
 

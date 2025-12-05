@@ -23,15 +23,18 @@ class E2CDataset(torch.utils.data.Dataset):
     def __init__(self, config):
         # Load raw dataset
         dataset_dir = DATA_PATH / f"{config['train']['dataset']}"
-        img = torch.load(dataset_dir / 'img.pt').permute(0, 1, 4, 2, 3)    # [batch, seq, C, H, W]
-        control = torch.load(dataset_dir / 'control.pt')
-        self.img_shape = img[0, 0].shape
+        data = torch.load(dataset_dir / 'reacher_large.pt')
+        self.X = data["prev_images"].permute(0, 1, 4, 2, 3)  # Shape: [num_samples, past_length, C, H, W]
+        self.X_next = data["next_images"].permute(0, 3, 2, 1)  # Shape: [num_samples, C, H, W], since pred_length=1
+        self.img_shape = [self.X[0, 0].shape[0] * config['trans']['past_length'], *self.X[0, 0].shape[1:]]
         self.past_length = config['trans']['past_length']
         self.pred_length = config['trans']['pred_length']
+        control = data["actions"]
 
         # Normalize actions
-        if control.max() - control.min() > 0:
-            control = (control - control.min()) / (control.max() - control.min())
+        # if control.max() - control.min() > 0:
+        #     control = (control - control.min()) / (control.max() - control.min())
+        self.U = control
 
         # Reshape for learning
         # flat = img.reshape(-1, img.shape[2], img.shape[3], img.shape[4]).permute(0, 3, 1, 2)   # Shape: [batch*seq_len, C, H, W]
@@ -39,7 +42,7 @@ class E2CDataset(torch.utils.data.Dataset):
         # X_next = flat[1:]
         # U = control.reshape(-1, control.shape[-1])[:-1]
         # Create windowed samples for past_length and pred_length
-        H, W = self.img_shape[1:]
+        """H, W = self.img_shape[1:]
         num_batches = img.shape[0]
         seq_len = img.shape[1]
         x_windows = []
@@ -55,7 +58,7 @@ class E2CDataset(torch.utils.data.Dataset):
 
         self.X = torch.stack(x_windows)
         self.X_next = torch.stack(x_next_windows)
-        self.U = torch.stack(u_list)
+        self.U = torch.stack(u_list)"""
 
     def __len__(self):
         return len(self.X)
@@ -140,7 +143,7 @@ class E2C(nn.Module):
         self.dummy_u = torch.zeros((1, self.control_size)).to(self.device)
 
         # Encoder and decoder
-        in_channels = conv_params['out_image_shape'][0]*self.past_length
+        in_channels = conv_params['out_image_shape'][0]
         self.encoder = ConvEncoder(enc_latent_size, in_channels, conv_params)
         self.decoder = ConvDecoder(latent_size, conv_params, self.encoder.out_dim_flat, self.encoder.out_shape)
 
