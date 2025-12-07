@@ -22,25 +22,25 @@ dt = 0.01               # Timestep
 seq_len = 50            # Number of timesteps per episode (traj sequence length)
 
 # Parameters for dataset
-env_name = 'cartpole'
-n_samples = 100 # Number of total trajectories (number of episodes)
-image_shape = (64, 64, 3)
+env_name = 'reacher'
+OUTPUT_NAME = env_name + '_large'
+n_samples = 2000 # Number of total trajectories (number of episodes)
+image_shape = (128, 128, 3)
 # ---------------------------------
 
 # Get data directory
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 DATA_PATH = PROJECT_ROOT / "data"
-OUTPUT_NAME = env_name
 
 set_seed(42)
 name_to_env = {'reacher': 'Reacher-v5', 'cartpole': 'CartPole-v1'}
 env_to_aspace = {'reacher': 'continuous', 'cartpole': 'discrete'}
 
-def process_image(image):
+def process_image(image, dataset_name=env_name):
     """
     Image processing
     """
-    if env_name == 'cartpole': image = image[50:350, 100:400]  # Zoom on cartpole
+    if dataset_name == 'cartpole': image = image[50:350, 100:400]  # Zoom on cartpole
     image = torch.from_numpy(image.copy()).permute(2, 0, 1)  # Get image tensor into (C, H, W)
 
     # Image processing
