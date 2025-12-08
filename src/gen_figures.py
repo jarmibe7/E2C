@@ -21,12 +21,12 @@ set_seed(42)
 # Paths
 PROJECT_ROOT = Path(__file__).parent.parent
 DATA_PATH = PROJECT_ROOT / "data"
-RUN_PATH = PROJECT_ROOT / "runs" / "2025-12-04_18-40-16"
+RUN_PATH = PROJECT_ROOT / "runs" / "reacher_large"
 
 # Parameters
 TIME_HORIZON = 8    # How many timesteps to predict into future
 
-name_to_shape = {'cartpole': (64, 64, 3)}
+name_to_shape = {'cartpole': (64, 64, 3), 'reacher': (128, 128, 3)}
 
 def get_action(state, env_name):
     """
@@ -40,6 +40,8 @@ def get_action(state, env_name):
         Kd = 2.0
         action_val = (Kp * pole_angle + Kd * pole_vel)
         action = 1 if action_val > 0 else 0
+    if 'reacher' in env_name:
+        action = np.array([0.2, 0.2])
     return action
 
 def main():
