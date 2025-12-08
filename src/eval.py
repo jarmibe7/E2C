@@ -128,7 +128,7 @@ class Evaluator():
         ax[1, 1].set_title("True Future Image")
 
         test_loader = torch.utils.data.DataLoader(
-            self.test_dataset, batch_size=1, shuffle=True
+            self.test_dataset, batch_size=1, shuffle=False
         )
 
         # Precompute frames
@@ -148,8 +148,8 @@ class Evaluator():
         ims = []
         img_pred = x_recon_list[0][:3]
         img_pred_next = x_pred_list[0][:3]
-        img = x_list[0][:3]
-        img_next = x_next_list[0][:3]
+        img = x_list[-1][:3]
+        img_next = x_next_list[-1][:3]
         ims.append(ax[0, 0].imshow(img_pred.permute(1, 2, 0).detach().cpu().numpy()))
         ims.append(ax[1, 0].imshow(img.permute(1, 2, 0).detach().cpu().numpy()))
         ims.append(ax[0, 1].imshow(img_pred_next.permute(1, 2, 0).detach().cpu().numpy()))
@@ -181,20 +181,22 @@ class Evaluator():
         plt.close(fig)
         return
     
-    def eval_four_var_latent(self, run_path):
+    def eval_four_var_latent(self, run_path, lv=4):
         """
         Visalize all variable combos of a four variable E2C latent space on the test dataset
 
         Credit: Jueun Kwon, Northwestern University
         """
         # Visualize latent space considering mean and variance
-        fig, axes = plt.subplots(3, 2, figsize=(16, 16), dpi=200, tight_layout=True)
+        fig, axes = plt.subplots(lv-1, lv-1, figsize=(16, 16), dpi=200, tight_layout=True)
 
         # Initialize axes
-        combo_array = list(itertools.combinations([0, 1, 2, 3], r=2))
-        for ax, combo in zip(axes.flatten(), combo_array):
+        combo_array = pairs = [(i, j) for i in range(lv-1) for j in range(i + 1)]
+        lv_array = list(itertools.combinations([0, 1, 2, 3], r=2))
+        for combo, lv in zip(combo_array, lv_array):
+            ax = axes[combo]
             ax.set_aspect('equal')
-            ax.set_title(f'Latent Space from Test Dataset (Vars {combo[0]+1} and {combo[1]+1})')
+            ax.set_title(f'Latent Space from Test Dataset (Vars {lv[0]+1} and {lv[1]+1})')
 
         latent_mean = []
         latent_var = []
@@ -225,7 +227,7 @@ class Evaluator():
             max_val = max(max_val, z_mean_np.max())
 
             # Represent uncertainty by point size
-            point_sizes = np.mean(z_var_np, axis=1) * 1000  # Adjust scaling as needed
+            point_sizes = np.mean(z_var_np, axis=1) * 5000  # Adjust scaling as needed
 
             # Choose colors based on configuration
             if self.dataset_name in ['particle_grav', 'cartpole']: 
@@ -238,15 +240,17 @@ class Evaluator():
                 else: color = 'red'
 
             # Plotting all variable combos
-            for ax, combo in zip(axes.flatten(), combo_array):
-                sc = ax.scatter(z_mean_np[:, combo[0]], z_mean_np[:, combo[1]], s=point_sizes, alpha=0.1, label=None, color=color)
+
+            for combo, lv in zip(combo_array, lv_array):
+                sc = axes[combo].scatter(z_mean_np[:, lv[0]], z_mean_np[:, lv[1]], s=point_sizes, alpha=0.1, label=None, color=color)
 
         # Combine all latent means and variances
         latent_mean = torch.cat(latent_mean).cpu().detach().numpy()
         latent_var = torch.cat(latent_var).cpu().detach().numpy()
 
         # Adjust plot limits
-        for ax, combo in zip(axes.flatten(), combo_array):
+        for combo in combo_array:
+            ax = axes[combo]
             x_min, x_max = ax.get_xlim()
             y_min, y_max = ax.get_ylim()
             a_min = np.minimum(x_min, y_min)
@@ -255,6 +259,11 @@ class Evaluator():
             ax.set_ylim(a_min, a_max)
             # ax.set_xlim(-max_val, max_val)
             # ax.set_ylim(-max_val, max_val)
+        
+        for row in range(3):
+            for col in range(3):
+                if row < col:
+                    axes[row, col].set_visible(False)
 
         fig_name = f'latent_fig.png'
         try:
