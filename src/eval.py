@@ -108,7 +108,7 @@ class Evaluator():
 
         if dataset_name == 'particle_grav': self.dataset_latent_func = self.eval_four_var_latent
         elif dataset_name == 'cartpole': self.dataset_latent_func = self.eval_four_var_latent
-        elif dataset_name == 'reacher': self.dataset_latent_func = self.eval_four_var_latent
+        elif 'reacher' in dataset_name: self.dataset_latent_func = self.eval_four_var_latent
         self.dataset_name = dataset_name
 
     def eval(self, run_path, vid_max_frames=50):
@@ -214,12 +214,12 @@ class Evaluator():
             max_val = max(max_val, z_mean_np.max())
 
             # Represent uncertainty by point size
-            point_sizes = np.mean(z_var_np, axis=1) * 100  # Adjust scaling as needed
+            point_sizes = np.mean(z_var_np, axis=1) * 1000  # Adjust scaling as needed
 
             # Choose colors based on configuration
             if self.dataset_name in ['particle_grav', 'cartpole']: 
                 color = colors[round(u.cpu().detach().numpy().flatten()[0])]
-            elif self.dataset_name == 'reacher':
+            elif 'reacher' in self.dataset_name:
                 u = u.cpu().detach().numpy().flatten()
                 if u[0] > 0.0 and u[1] > 0.0: color = 'blue'
                 elif u[0] > 0.0 and u[1] < 0.0: color = 'green'

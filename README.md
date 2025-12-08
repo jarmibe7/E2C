@@ -40,7 +40,7 @@ Check ```nvtop``` to see GPU resources
 
 To run overnight and prevent from closing:
 
-```screen -S my_session_name```
+```screen -S e2c```
 
 And run the training script. Then to detach:
 
@@ -48,7 +48,7 @@ And run the training script. Then to detach:
 
 To resume:
 
-```screen -r my_session_name```
+```screen -r e2c```
 
 #### Citations
 > M. Watter, J. T. Springenberg, J. Boedecker, and M. Riedmiller, “Embed to Control: A Locally Linear Latent Dynamics Model for Control from Raw Images,” in *Advances in Neural Information Processing Systems 28 (NIPS 2015)*, Montréal, Canada, Dec. 2015, pp. 2746–2754. [Online]. Available: [https://arxiv.org/abs/1506.07365](https://arxiv.org/abs/1506.07365)

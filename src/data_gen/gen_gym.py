@@ -36,7 +36,7 @@ set_seed(42)
 name_to_env = {'reacher': 'Reacher-v5', 'cartpole': 'CartPole-v1'}
 env_to_aspace = {'reacher': 'continuous', 'cartpole': 'discrete'}
 
-def process_image(image, dataset_name=env_name):
+def process_image(image, dataset_name=env_name, image_shape=image_shape):
     """
     Image processing
     """
