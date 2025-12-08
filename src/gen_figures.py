@@ -56,27 +56,28 @@ def main():
     disp.start()
 
     # Create env and figure
+    img_shape = name_to_shape[config['train']['dataset']]
     env = gym.make(name_to_env[config['train']['dataset']], render_mode="rgb_array")
     fig, axes = plt.subplots(TIME_HORIZON + 1, 3, figsize=(18, TIME_HORIZON*7), dpi=200, tight_layout=True)
     for ax in axes.flatten():
         # ax.axis('off')
         ax.set_aspect('equal')
-    fontsize = 16
+    fontsize = 25
     axes[0, 0].set_title('Real\nt=0', fontsize=fontsize)
     axes[0, 1].set_title('Imagined\nt=0', fontsize=fontsize)
-    axes[0, 1].imshow(np.ones(name_to_shape[config['train']['dataset']])) # No predictions at t=0
+    axes[0, 1].imshow(np.ones(img_shape)) # No predictions at t=0
     axes[0, 2].set_title('One Step\nt=0', fontsize=fontsize)
-    axes[0, 2].imshow(np.ones(name_to_shape[config['train']['dataset']]))
+    axes[0, 2].imshow(np.ones(img_shape))
 
     # Create mini-dataset containers
-    img = torch.zeros((TIME_HORIZON + 1, *name_to_shape[config['train']['dataset']]))
+    img = torch.zeros((TIME_HORIZON + 1, *img_shape))
     continuous = (env_to_aspace[config['train']['dataset']] == 'continuous')
     if continuous: control_size = env.action_space.shape[0]
     else: control_size = 1     # Discrete action space
     control = torch.zeros((TIME_HORIZON + 1, control_size))
 
     # Load model
-    config['vae']['out_image_shape'] = torch.tensor(name_to_shape[config['train']['dataset']])[torch.tensor([2, 0, 1])]
+    config['vae']['out_image_shape'] = torch.tensor(img_shape)[torch.tensor([2, 0, 1])]
     model = E2C(
         enc_latent_size=config['vae']['enc_latent_size'],
         latent_size=config['trans']['latent_size'],
@@ -104,7 +105,7 @@ def main():
         for t in range(TIME_HORIZON + 1):
             # Save image and action pair
             rend = env.render()
-            img[t] = process_image(rend, dataset_name=config['train']['dataset'])
+            img[t] = process_image(rend, dataset_name=config['train']['dataset'], image_shape=img_shape)
             action = env.action_space.sample()
 
             action = get_action(raw_env.state, config['train']['dataset'])
@@ -114,17 +115,24 @@ def main():
             obs, rew, done, _, _ = env.step(action)
             collected += 1
 
-    # Create figure
-    imagined = img[0].permute(2, 0, 1)
+    # Initialize latent state
+    x_imagined = img[0].permute(2, 0, 1).unsqueeze(0)
+    enc_out_imagined = model.encoder(x_imagined.to(device))
+    mu_imagined = model.mu(enc_out_imagined)
+    log_var_imagined = model.log_var(enc_out_imagined)
+    z_imagined = model.reparameterize(mu_imagined, log_var_imagined)
+    z_imagined = mu_imagined
     for t, (x, u) in enumerate(zip(img, control)):
         # Plot true image
         axes[t, 0].imshow(x)
 
         if t > 0: 
-            # Plot imagined prediction
+            # # Plot imagined prediction
             x, u = x.to(device), u.to(device)
-            _, imagined = model.sample(imagined.unsqueeze(0), u.unsqueeze(0))
-            axes[t, 1].imshow(imagined.permute(1, 2, 0).detach().cpu().numpy())
+            mu_imagined, log_var_imagined, z_imagined, _, _ = model.transition(z_imagined, mu_imagined, log_var_imagined, u.unsqueeze(0))
+            x_imagined = model.decoder(z_imagined).squeeze(0)
+            # _, x_imagined = model.sample(x_imagined.unsqueeze(0), u.unsqueeze(0))
+            axes[t, 1].imshow(x_imagined.permute(1, 2, 0).detach().cpu().numpy())
 
             # Plot one step prediction
             _, one_step = model.sample(x.permute(2, 0, 1).unsqueeze(0), u.unsqueeze(0))
