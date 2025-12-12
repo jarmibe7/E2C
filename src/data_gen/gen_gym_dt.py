@@ -83,7 +83,7 @@ def main():
     next_img = torch.zeros((dataset_size, *image_shape))
     if continuous: control = torch.zeros((dataset_size, env.action_space.shape[0]))
     else: control = torch.zeros((dataset_size, 1))     # Discrete action space
-    done = False
+    done, reset_env = False, False
     
     # Collect n_samples trajectories
     idx = 0
@@ -96,9 +96,10 @@ def main():
         act_buffer.append(act)
         next_obs, rew, done, _, _ = env.step(act)
 
-        if done or idx % 10000 == 0 and idx > 0:
+        if done or (idx % 10000 == 0 and idx > 0 and not reset_env):
             obs, _ = env.reset()
             done = False
+            reset_env = True
             frame_buffer = []
             act_buffer = []
             continue
