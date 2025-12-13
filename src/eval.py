@@ -3,6 +3,7 @@ Classes for evaluating E2C model performance during and after training.
 
 Authors: Jared Berry, Ayush Gaggar
 """
+import json
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation, FFMpegWriter
 import torch
@@ -12,6 +13,9 @@ from tqdm import tqdm
 
 from src.e2c import E2CDataset, E2CLoss, E2C
 from src.utils import set_seed, anim_frames
+from torchmetrics import PeakSignalNoiseRatio as psnr
+from torchmetrics import StructuralSimilarityIndexMeasure as ssim
+import lpips
 
 class Plotter():
     """
@@ -114,6 +118,8 @@ class Evaluator():
         self.dataset_name = dataset_name
 
     def eval(self, run_path, vid_max_frames=50):
+        print("\Calculating eval metrics...")
+        self.eval_metrics(run_path=run_path)
         print("Generating latent space figure...")
         self.dataset_latent_func(run_path)
         print("\nGenerating trajectory video...")
@@ -180,6 +186,73 @@ class Evaluator():
             ani.save(vid_name, writer=writer)
         plt.close(fig)
         return
+    
+    def eval_metrics(self, max_samples=None, run_path=None):
+        """
+        Calculate image metrics for test set
+        """
+        
+        psnr_fn = psnr(data_range=1.0).to(self.device)
+        ssim_fn = ssim(data_range=1.0).to(self.device)
+        # have to double check this is correct for lpips - check nerfstudio code
+        lpips_fn = lpips.LPIPS(net='alex').to(self.device)
+
+        recon_psnr, recon_ssim, recon_lpips, recon_mse = [], [], [], []
+        pred_psnr, pred_ssim, pred_lpips, pred_mse = [], [], [], []
+
+        test_loader = torch.utils.data.DataLoader(self.test_dataset, batch_size=128, shuffle=False)
+
+        for i, (x, x_next, u) in tqdm(enumerate(test_loader)):
+            if max_samples:
+                if i >= max_samples:
+                    break
+            x, x_next, u = x.to(self.device), x_next.to(self.device), u.to(self.device)
+            x = x.reshape(x.shape[0], -1, x.shape[-2], x.shape[-1])
+            x_next = torch.hstack([x_next for _ in range(self.model.past_length)]).to(self.device)
+
+            x_recon, x_pred = self.model.sample(x, u)
+
+            img_true = x[0][:3].unsqueeze(0)
+            img_true_next = x_next[0][:3].unsqueeze(0)
+            img_recon = x_recon[0][:3].unsqueeze(0)
+            img_pred = x_pred[0][:3].unsqueeze(0)
+
+            # PSNR / SSIM
+            # recon_psnr.append(psnr_fn(img_recon, img_true).item())
+            # recon_ssim.append(ssim_fn(img_recon, img_true).item())
+            pred_psnr.append(psnr_fn(img_pred, img_true_next).item())
+            pred_ssim.append(ssim_fn(img_pred, img_true_next).item())
+
+            # MSE
+            # recon_mse.append(F.mse_loss(img_recon, img_true).item())
+            # pred_mse.append(F.mse_loss(img_pred, img_true_next).item())
+
+            # LPIPS (scale to [-1,1])
+            # recon_lpips.append(lpips_fn(img_recon*2-1, img_true*2-1).item())
+            pred_lpips.append(lpips_fn(img_pred*2-1, img_true_next*2-1).item())
+
+        results = {
+            # "recon_psnr": np.mean(recon_psnr),
+            # "recon_ssim": np.mean(recon_ssim),
+            # "recon_lpips": np.mean(recon_lpips),
+            # "recon_mse": np.mean(recon_mse),
+            "pred_psnr": np.mean(pred_psnr),
+            "pred_ssim": np.mean(pred_ssim),
+            "pred_lpips": np.mean(pred_lpips),
+            # "pred_mse": np.mean(pred_mse),
+        }
+
+        # Save metrics as JSON
+        if run_path is not None:
+            metrics_path = run_path / "metrics.json"
+            try:
+                with open(metrics_path, "w") as f:
+                    json.dump(results, f, indent=4)
+                print(f"Saved evaluation metrics to {metrics_path}")
+            except Exception as e:
+                print(f"Failed to save metrics.json: {e}")
+
+        return results
     
     def eval_four_var_latent(self, run_path, lv=4):
         """
@@ -342,3 +415,59 @@ class Evaluator():
             fig.savefig(fig_name)
         plt.close(fig)
         return  
+    
+
+if __name__ == "__main__":
+    from pathlib import Path
+    import yaml, json
+    
+    # Paths
+    PROJECT_ROOT = Path(__file__).parent.parent
+    DATA_PATH = PROJECT_ROOT / "data"
+    CONFIG_PATH = PROJECT_ROOT / "config"
+    RUNS_PATH = PROJECT_ROOT / "runs"
+
+    config_name = 'e2c_reacher_500k'
+    with open(CONFIG_PATH / f'{config_name}.yaml', "r") as f:
+        config = yaml.safe_load(f)
+    device = torch.device(config['train']['device'])
+    if 'cuda' in config['train']['device']: 
+        assert torch.cuda.is_available(), f"{config['train']['device']} selected in {config_name}, but is unavailable!"
+        
+    dataset = E2CDataset(config)
+    train_size = int(len(dataset) * config['train']['train_ratio'])
+    test_size = len(dataset) - train_size
+    train_dataset, test_dataset = torch.utils.data.random_split(dataset, [train_size, test_size])
+    config['vae']['out_image_shape'] = dataset.img_shape
+    config['trans']['control_size'] = dataset.U.shape[-1]
+    model = E2C(
+        enc_latent_size=config['vae']['enc_latent_size'],
+        latent_size=config['trans']['latent_size'],
+        control_size=config['trans']['control_size'],
+        past_length=config['trans']['past_length'],
+        pred_length=config['trans']['pred_length'],
+        conv_params=config['vae'],
+        device=device
+    )
+    model.to(device)
+    model_path = config['train']['load_path'] + '/model.pt'
+    model.load_state_dict(torch.load(model_path))
+    config['run_path'] = PROJECT_ROOT / Path(config['train']['load_path'])
+
+    # Evaluate model performance
+    print('*** EVAL ***\n')
+    if config['train']['eval']:
+        evaluator = Evaluator(
+            model, 
+            test_dataset,
+            batch_size=config['train']['batch_size'], 
+            device=config['train']['device'],
+            dataset_name=config['train']['dataset']
+        )
+        results = evaluator.eval_metrics()
+        save_results = config['run_path'] / 'eval_metrics.json'
+        with open(save_results, 'w') as f:
+            json.dump(results, f, indent=4)
+        print(f'\nSaved eval metrics to {save_results}')
+
+    print('\n*** DONE ***')

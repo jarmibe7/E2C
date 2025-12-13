@@ -106,7 +106,7 @@ def train(dataset, config):
 def main():
     print('*** STARTING ***\n')
     # Load config, make run path, and choose torch device
-    config_name = 'e2c_reacher_v0'
+    config_name = 'e2c_cartpole_v0'
     with open(CONFIG_PATH / f'{config_name}.yaml', "r") as f:
         config = yaml.safe_load(f)
     config['config_name'] = config_name

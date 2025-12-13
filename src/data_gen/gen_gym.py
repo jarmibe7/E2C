@@ -6,6 +6,8 @@ scp jarmibe7@dingo.mech.northwestern.edu:~/E2C/videos/e2c_cartpole.mp4 C:\\Users
 
 Author: Jared Berry, Ayush Gaggar
 """
+import os
+import re
 import numpy as np
 import torch
 import gymnasium as gym
@@ -25,7 +27,21 @@ dataset_size = int(5e4)                                     # Number of samples:
 OUTPUT_NAME = env_name + f'_{dataset_size // 1000}k'        # Output name of dataset
 image_shape = (128, 128, 3)                                   # Downsampled image shape
 past_length = 1                                             # Number of previous observations to use for training
+new_dt = None                                                # Desired new timestep in seconds
 # ---------------------------------
+# Only modify XML if new_dt is set
+if new_dt is not None:
+    mj_path = Path(os.path.dirname(gym.__file__)) / "envs" / "mujoco" / "assets"
+    xml_file = mj_path / f"{env_name}.xml"
+    xml_text = xml_file.read_text()
+    xml_text = re.sub(r'timestep="[^"]+"', f'timestep="{new_dt:.4f}"', xml_text)
+
+    # Save new XML
+    new_xml_filename = f"{env_name}_timestep_{int(new_dt*1000)}_ms.xml"
+    new_xml_path = mj_path / new_xml_filename
+    new_xml_path.write_text(xml_text)
+else:
+    new_xml_filename = None
 
 # Get data directory
 PROJECT_ROOT = Path(__file__).parent.parent.parent
@@ -79,7 +95,6 @@ def process_image(image, dataset_name=env_name, image_shape=image_shape):
 
 
 def main():
-    print('*** STARTING ***\n')
     # Create virtual display for running on server
     disp = Display(visible=0, size=(480, 480))
     disp.start()
@@ -89,7 +104,11 @@ def main():
     act_buffer = []
 
     # Create env
-    env = gym.make(name_to_env[env_name], render_mode="rgb_array")
+    if not env_name == 'cartpole' and new_xml_filename is not None:
+        env = gym.make(name_to_env[env_name], render_mode="rgb_array",
+                    xml_file=new_xml_filename if new_xml_filename else None)
+    else:
+        env = gym.make(name_to_env[env_name], render_mode="rgb_array")
     obs, _ = env.reset()
     continuous = (env_to_aspace[env_name] == 'continuous')
     prev_img = torch.zeros((dataset_size, past_length, *image_shape))
@@ -157,7 +176,8 @@ def main():
             "dataset_size": dataset_size,
             "image_shape": list(image_shape),
             "past_length": past_length,
-            "seed": seed
+            "seed": seed,
+            "dt": None if env_name =='cartpole' else env.unwrapped.dt
         },
     )
     print('\n*** DONE ***')
