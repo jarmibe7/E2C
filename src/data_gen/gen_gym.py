@@ -13,40 +13,68 @@ import torchvision
 import matplotlib.pyplot as plt
 from pathlib import Path
 from pyvirtualdisplay import Display
+from tqdm import tqdm
+import yaml
+from datetime import datetime
 
 from src.utils import set_seed
 
-# ---------------------------------
-# Parameters for simulation
-dt = 0.01               # Timestep
-seq_len = 50            # Number of timesteps per episode (traj sequence length)
-
 # Parameters for dataset
-env_name = 'reacher'
-OUTPUT_NAME = env_name + '_large'
-n_samples = 2000 # Number of total trajectories (number of episodes)
-image_shape = (128, 128, 3)
+env_name = 'reacher'                                       # Gym environment name
+dataset_size = int(5e4)                                     # Number of samples: (img, next_img, control) tuple
+OUTPUT_NAME = env_name + f'_{dataset_size // 1000}k'        # Output name of dataset
+image_shape = (128, 128, 3)                                   # Downsampled image shape
+past_length = 1                                             # Number of previous observations to use for training
 # ---------------------------------
 
 # Get data directory
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 DATA_PATH = PROJECT_ROOT / "data"
 
-set_seed(42)
+seed = 42
+set_seed(seed)
 name_to_env = {'reacher': 'Reacher-v5', 'cartpole': 'CartPole-v1'}
 env_to_aspace = {'reacher': 'continuous', 'cartpole': 'discrete'}
+
+def update_dataset_metadata(dataset_dir, dataset_name, params):
+    """
+    Update or create metadata YAML in dataset_dir.
+    Overwrites fields for dataset_name, preserves others.
+    """
+    metadata_path = dataset_dir / "metadata.yaml"
+
+    # Load existing metadata if present
+    if metadata_path.exists():
+        with open(metadata_path, "r") as f:
+            metadata = yaml.safe_load(f) or {}
+    else:
+        metadata = {}
+
+    if dataset_name in metadata:
+        print(f"Overwriting metadata for dataset '{dataset_name}'")
+
+    # Update this dataset's entry
+    metadata[dataset_name] = {
+        **params,
+        "created_at": datetime.now().strftime("%Y-%m-%d_%H-%M-%S"),
+    }
+
+    # Write back to file
+    with open(metadata_path, "w") as f:
+        yaml.safe_dump(metadata, f, sort_keys=False)
 
 def process_image(image, dataset_name=env_name, image_shape=image_shape):
     """
     Image processing
     """
-    if dataset_name == 'cartpole': image = image[50:350, 100:400]  # Zoom on cartpole
+    if 'cartpole' in dataset_name: image = image[50:350, 100:400]  # Zoom on cartpole
+    if 'reacher' in dataset_name: image = image[100:-50, 100:-100]  # Zoom on reacher
     image = torch.from_numpy(image.copy()).permute(2, 0, 1)  # Get image tensor into (C, H, W)
 
     # Image processing
     normalized = image.unsqueeze(0).float() / 255.0 # Normalize to [0,1]
     image_resized = torchvision.transforms.functional.resize(normalized, image_shape[0:2], interpolation=torchvision.transforms.functional.InterpolationMode.NEAREST)   # Downscaling
-      
+    
     return image_resized.permute(0, 2, 3, 1) # Permute back to raw shape
 
 
@@ -55,50 +83,83 @@ def main():
     # Create virtual display for running on server
     disp = Display(visible=0, size=(480, 480))
     disp.start()
+    
+    # Buffers
+    frame_buffer = []
+    act_buffer = []
 
     # Create env
     env = gym.make(name_to_env[env_name], render_mode="rgb_array")
-    img = torch.zeros((n_samples, seq_len, *image_shape))
+    obs, _ = env.reset()
     continuous = (env_to_aspace[env_name] == 'continuous')
-    if continuous: control = torch.zeros((n_samples, seq_len, env.action_space.shape[0]))
-    else: control = torch.zeros((n_samples, seq_len, 1))     # Discrete action space
+    prev_img = torch.zeros((dataset_size, past_length, *image_shape))
+    next_img = torch.zeros((dataset_size, *image_shape))
+    if continuous: control = torch.zeros((dataset_size, env.action_space.shape[0]))
+    else: control = torch.zeros((dataset_size, 1))     # Discrete action space
+    done = False
     
     # Collect n_samples trajectories
-    for episode in range(n_samples):
-        if episode % 100 == 0: print(f'On sample {episode} out of {n_samples}')
-        obs, _ = env.reset()
-        done = False
+    idx = 0
+    pbar = tqdm(total=dataset_size)
+    while idx < dataset_size:
+        if len(frame_buffer) == 0:
+            frame_buffer.append(process_image(env.render()))
 
-        # Collect seq_len timesteps per traj
-        for t in range(seq_len):
-            # If done, just fill with final frame
-            if done:
-                img[episode, t] = process_image(rend)
-                if continuous: control[episode, t] = control[episode, t] = torch.zeros(env.action_space.shape)
-                else: control[episode, t] = -1.0
-                continue
+        # Sample and take action
+        act = env.action_space.sample()
+        act_buffer.append(act)
+        next_obs, rew, done, _, _ = env.step(act)
 
-            # Save image and action pair
-            rend = env.render()
-            img[episode, t] = process_image(rend)
-            action = env.action_space.sample()  
-            if continuous: control[episode, t] = torch.from_numpy(action)
-            else: control[episode, t] = action
+        # If done reset env, otherwise add sample to dataset
+        if done:
+            obs, _ = env.reset()
+            done = False
+            frame_buffer = []
+            act_buffer = []
+            continue
+        else:
+            # Slide frame obs history frame buffer to next image
+            if len(frame_buffer) == past_length + 1:
+                frame_buffer.pop(0)
+                act_buffer.pop(0)
+            next_image = process_image(env.render())
+            frame_buffer.append(next_image)
 
-            # Take action
-            obs, rew, done, _, _ = env.step(action)
+            # Add obs history buffer to dataset
+            if len(frame_buffer) == past_length + 1:
+                prev_img[idx] = torch.cat(frame_buffer[0:past_length], dim=0)
+                next_img[idx] = frame_buffer[past_length]
+                if continuous:
+                    control[idx] = torch.from_numpy(act_buffer[-1])
+                else:
+                    control[idx] = act_buffer[-1]
+                idx += 1
+                pbar.update(1)
 
-    print(f'\nDataset shape: {img.shape}')
+    pbar.close()
 
-    # Saving dataset
-    dataset_dir = DATA_PATH / OUTPUT_NAME
+    # Saving dataset as dictionary
+    dataset_dir = DATA_PATH / env_name
     dataset_dir.mkdir(parents=True, exist_ok=True)
-    img_filepath = dataset_dir / 'img.pt'
-    control_filepath = dataset_dir / 'control.pt'
-    print(f'\nSaved dataset to {dataset_dir}')
-    torch.save(img, img_filepath)
-    torch.save(control, control_filepath)
+    torch.save({
+        "prev_images": prev_img,
+        "actions": control,
+        "next_images": next_img,
+    }, f"{dataset_dir / OUTPUT_NAME}.pt")
+    print(f'\nSaved dataset to {dataset_dir / OUTPUT_NAME}.pt')
 
+    # Update metadata file
+    update_dataset_metadata(
+        dataset_dir=dataset_dir,
+        dataset_name=OUTPUT_NAME,
+        params={
+            "env_name": env_name,
+            "dataset_size": dataset_size,
+            "image_shape": list(image_shape),
+            "past_length": past_length,
+            "seed": seed
+        },
+    )
     print('\n*** DONE ***')
     return
 
