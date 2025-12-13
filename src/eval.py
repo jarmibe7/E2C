@@ -8,6 +8,7 @@ from matplotlib.animation import FuncAnimation, FFMpegWriter
 import torch
 import numpy as np
 import itertools
+from tqdm import tqdm
 
 from src.e2c import E2CDataset, E2CLoss, E2C
 from src.utils import set_seed, anim_frames
@@ -106,13 +107,16 @@ class Evaluator():
         self.batch_size = batch_size
         self.device = device
 
-        if dataset_name == 'particle_grav': self.dataset_latent_func = self.eval_four_var_latent
-        elif dataset_name == 'cartpole': self.dataset_latent_func = self.eval_four_var_latent
+        if 'particle_grav' in dataset_name: self.dataset_latent_func = self.eval_four_var_latent
+        elif 'cartpole' in dataset_name: self.dataset_latent_func = self.eval_four_var_latent
         elif 'reacher' in dataset_name: self.dataset_latent_func = self.eval_four_var_latent
+            
         self.dataset_name = dataset_name
 
     def eval(self, run_path, vid_max_frames=50):
+        print("Generating latent space figure...")
         self.dataset_latent_func(run_path)
+        print("\nGenerating trajectory video...")
         self.eval_traj(run_path, max_frames=vid_max_frames)
         # self.eval_latent(run_path)
         
@@ -125,7 +129,7 @@ class Evaluator():
         ax[1, 1].set_title("True Future Image")
 
         test_loader = torch.utils.data.DataLoader(
-            self.test_dataset, batch_size=1, shuffle=True
+            self.test_dataset, batch_size=1, shuffle=False
         )
 
         # Precompute frames
@@ -135,70 +139,79 @@ class Evaluator():
             if i >= max_frames:
                 break
             x, x_next, u = x.to(self.device), x_next.to(self.device), u.to(self.device)
+            x = x.reshape(x.shape[0], -1, x.shape[-2], x.shape[-1])
+            x_next = torch.hstack([x_next for i in range(self.model.past_length)]).to(self.device)
             x_recon, x_pred = self.model.sample(x, u)
             x_list.append(x[0]); x_next_list.append(x_next[0])
             x_recon_list.append(x_recon); x_pred_list.append(x_pred)
 
         # Initialize axes
         ims = []
-        ims.append(ax[0, 0].imshow(x_recon_list[0].permute(1, 2, 0).detach().cpu().numpy()))
-        ims.append(ax[1, 0].imshow(x_list[0].permute(1, 2, 0).detach().cpu().numpy()))
-        ims.append(ax[0, 1].imshow(x_pred_list[0].permute(1, 2, 0).detach().cpu().numpy()))
-        ims.append(ax[1, 1].imshow(x_next_list[0].permute(1, 2, 0).detach().cpu().numpy()))
+        img_pred = x_recon_list[0][:3]
+        img_pred_next = x_pred_list[0][:3]
+        img = x_list[-1][:3]
+        img_next = x_next_list[-1][:3]
+        ims.append(ax[0, 0].imshow(img_pred.permute(1, 2, 0).detach().cpu().numpy()))
+        ims.append(ax[1, 0].imshow(img.permute(1, 2, 0).detach().cpu().numpy()))
+        ims.append(ax[0, 1].imshow(img_pred_next.permute(1, 2, 0).detach().cpu().numpy()))
+        ims.append(ax[1, 1].imshow(img_next.permute(1, 2, 0).detach().cpu().numpy()))
 
         def update_plot(frame):
             x, x_next = x_list[frame], x_next_list[frame]
             x_recon, x_pred = x_recon_list[frame], x_pred_list[frame]
-            ims[0].set_data(x_recon.permute(1, 2, 0).detach().cpu().numpy())
-            ims[1].set_data(x.permute(1, 2, 0).detach().cpu().numpy())
-            ims[2].set_data(x_pred.permute(1, 2, 0).detach().cpu().numpy())
-            ims[3].set_data(x_next.permute(1, 2, 0).detach().cpu().numpy())
+            ims[0].set_data(x_recon[:3].permute(1, 2, 0).detach().cpu().numpy())
+            ims[1].set_data(x[:3].permute(1, 2, 0).detach().cpu().numpy())
+            ims[2].set_data(x_pred[:3].permute(2, 1, 0).detach().cpu().numpy()) # for some reason, need to transpose these differently?
+            ims[3].set_data(x_next[:3].permute(2, 1, 0).detach().cpu().numpy()) # for some reason, need to transpose these differently?
 
             # plt.show()
 
         # Create and save animation
         ani = FuncAnimation(fig, update_plot, frames=50, interval=5.)
         writer = FFMpegWriter(fps=2)
-        # if timestamp is None: timestamp = datetime.fromtimestamp(time.time()).strftime("%Y-%m-%d_%H-%M-%S")
         vid_name = f'eval_vid.mp4'
         try:
             filepath = run_path / vid_name
-            print(f'\nSaved eval video to {filepath}')
+            print(f'Saved eval video to {filepath}')
             ani.save(filepath, writer=writer)
         except Exception as e:
             print(e)
-            print('\nException occured, saved eval video to current directory')
+            print('Exception occured, saved eval video to current directory')
             ani.save(vid_name, writer=writer)
         plt.close(fig)
         return
     
-    def eval_four_var_latent(self, run_path):
+    def eval_four_var_latent(self, run_path, lv=4):
         """
         Visalize all variable combos of a four variable E2C latent space on the test dataset
 
         Credit: Jueun Kwon, Northwestern University
         """
         # Visualize latent space considering mean and variance
-        fig, axes = plt.subplots(3, 2, figsize=(16, 16), dpi=200, tight_layout=True)
+        fig, axes = plt.subplots(lv-1, lv-1, figsize=(16, 16), dpi=200, tight_layout=True)
 
         # Initialize axes
-        combo_array = list(itertools.combinations([0, 1, 2, 3], r=2))
-        for ax, combo in zip(axes.flatten(), combo_array):
+        combo_array = pairs = [(i, j) for i in range(lv-1) for j in range(i + 1)]
+        lv_array = list(itertools.combinations([0, 1, 2, 3], r=2))
+        for combo, lv in zip(combo_array, lv_array):
+            ax = axes[combo]
             ax.set_aspect('equal')
-            ax.set_title(f'Latent Space from Test Dataset (Vars {combo[0]+1} and {combo[1]+1})')
+            ax.set_title(f'Latent Space from Test Dataset (Vars {lv[0]+1} and {lv[1]+1})')
 
         latent_mean = []
         latent_var = []
 
         test_loader = torch.utils.data.DataLoader(
-            self.test_dataset, batch_size=1, shuffle=True
+            self.test_dataset, batch_size=128, shuffle=True
         )
 
         # Iterate over DataLoader
         colors = ['blue', 'red']
         max_val = 0.0
-        for x, x_next, u in test_loader:
+        for x, x_next, u in tqdm(test_loader):
             x, x_next, u = x.to(self.device), x_next.to(self.device), u.to(self.device)
+            x = x.reshape(x.shape[0], -1, x.shape[-2], x.shape[-1])
+            x_next = torch.hstack([x_next for i in range(self.model.past_length)]).to(self.device)
             # Encode current and next state
             enc_out = self.model.encoder(x)
 
@@ -214,10 +227,10 @@ class Evaluator():
             max_val = max(max_val, z_mean_np.max())
 
             # Represent uncertainty by point size
-            point_sizes = np.mean(z_var_np, axis=1) * 1000  # Adjust scaling as needed
+            point_sizes = np.mean(z_var_np, axis=1) * 10000  # Adjust scaling as needed
 
             # Choose colors based on configuration
-            if self.dataset_name in ['particle_grav', 'cartpole']: 
+            if 'cartpole' in self.dataset_name or 'particle_grav' in self.dataset_name: 
                 color = colors[round(u.cpu().detach().numpy().flatten()[0])]
             elif 'reacher' in self.dataset_name:
                 u = u.cpu().detach().numpy().flatten()
@@ -227,32 +240,38 @@ class Evaluator():
                 else: color = 'red'
 
             # Plotting all variable combos
-            for ax, combo in zip(axes.flatten(), combo_array):
-                sc = ax.scatter(z_mean_np[:, combo[0]], z_mean_np[:, combo[1]], s=point_sizes, alpha=0.1, label=None, color=color)
+            for combo, lv in zip(combo_array, lv_array):
+                sc = axes[combo].scatter(z_mean_np[:, lv[0]], z_mean_np[:, lv[1]], s=point_sizes, alpha=0.1, label=None, color=color)
 
         # Combine all latent means and variances
         latent_mean = torch.cat(latent_mean).cpu().detach().numpy()
         latent_var = torch.cat(latent_var).cpu().detach().numpy()
 
         # Adjust plot limits
-        for ax, combo in zip(axes.flatten(), combo_array):
-            # x_min, x_max = ax.get_xlim()
-            # y_min, y_max = ax.get_ylim()
-            # a_min = np.minimum(x_min, y_min)
-            # a_max = np.maximum(x_max, y_max)
-            # ax.set_xlim(a_min, a_max)
-            # ax.set_ylim(a_min, a_max)
-            ax.set_xlim(-max_val, max_val)
-            ax.set_ylim(-max_val, max_val)
+        for combo in combo_array:
+            ax = axes[combo]
+            x_min, x_max = ax.get_xlim()
+            y_min, y_max = ax.get_ylim()
+            a_min = np.minimum(x_min, y_min)
+            a_max = np.maximum(x_max, y_max)
+            ax.set_xlim(a_min, a_max)
+            ax.set_ylim(a_min, a_max)
+            # ax.set_xlim(-max_val, max_val)
+            # ax.set_ylim(-max_val, max_val)
+        
+        for row in range(3):
+            for col in range(3):
+                if row < col:
+                    axes[row, col].set_visible(False)
 
         fig_name = f'latent_fig.png'
         try:
             filepath = run_path / fig_name
-            print(f'\nSaved all variable latent space figure to {filepath}')
+            print(f'Saved all variable latent space figure to {filepath}')
             fig.savefig(filepath)
         except Exception as e:
             print(e)
-            print('\nException occured, saved all variable latent space figure to current directory')
+            print('Exception occured, saved all variable latent space figure to current directory')
             fig.savefig(fig_name)
         plt.close(fig)
         return
@@ -281,6 +300,8 @@ class Evaluator():
         #                   Right control left move is red ...
         for x, x_next, u in test_loader:
             x, x_next, u = x.to(self.device), x_next.to(self.device), u.to(self.device)
+            x = x.reshape(x.shape[0], -1, x.shape[-2], x.shape[-1])
+            x_next = torch.hstack([x_next for i in range(self.model.past_length)]).to(self.device)
             # Encode current and next state
             enc_out = self.model.encoder(x)
 
