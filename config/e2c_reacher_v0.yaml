@@ -1,5 +1,5 @@
 #
-# Config file cartpole
+# Config file reacher
 #
 # Encoder/Decoder
 vae:
@@ -11,8 +11,8 @@ vae:
 # Loss hyperparams
 loss:
   recon_mult: !!float 1e4           # Reconstruction loss multiplier
-  beta: !!float 5e-3                # Standard Gaussian KL multiplier
-  lambda: !!float 5e-3              # Transition KL multiplier
+  beta: !!float 1e-2                # Standard Gaussian KL multiplier
+  lambda: !!float 1e-2              # Transition KL multiplier
   kld_anneal_mode: linear           # Beta annealing mode: const | linear
 # Transition model hyperparams
 trans:
@@ -23,13 +23,13 @@ trans:
   weight_decay: !!float 1e-4        # Adam optimizer weight decay
 # Training settings
 train:
-  dataset: cartpole    # Which dataset to use for training (in data/)
-  batch_size: 32
-  num_epochs: 20
+  dataset: reacher_50k    # Which dataset to use for training (in data/)
+  batch_size: 128
+  num_epochs: 10
   device: cuda:2             # cpu | cuda:0 | cuda:1 | cuda:2
   render: False              # Whether to render live interactive training plot, or simply save after training is finished
-  save: True                 # Whether to save final trained model and training plot
+  save: False                 # Whether to save final trained model and training plot
   plot_freq: 10000           # Frequency to update the plot, in timesteps
   eval: True                 # Whether to eval model performance immediately after training
-  train_ratio: 0.8           # Ratio of dataset to use for training
-    
+  train_ratio: 0.9           # Ratio of dataset to use for training
+  load_path:                 # Path to load model from (for resuming training or eval only)    

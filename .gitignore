@@ -1,5 +1,9 @@
 venv/
 data/
-__pycache__/
+*.__pycache__/
 .vscode/
 runs/
+*.pyc
+.gitignore
+*.mp4
+*__init__.py

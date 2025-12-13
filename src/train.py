@@ -13,6 +13,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 import copy
+from tqdm import tqdm
 
 from src.e2c import E2CDataset, E2CLoss, E2C
 from src.utils import set_seed, anim_frames
@@ -61,12 +62,16 @@ def train(dataset, config):
 
     # Training loop
     print('\nBeginning Training:')
-    for epoch in range(num_epochs):
+    epoch_loss = 0.0
+    pbar = tqdm(range(num_epochs), desc="Training")
+    for epoch in pbar:
         total_loss = 0.0
 
         for x, x_next, u in train_loader:
             # Send training data to GPU
             x, x_next, u = x.to(device), x_next.to(device), u.to(device)
+            x = x.reshape(x.shape[0], -1, *config['vae']['out_image_shape'][1:])    # Stack obs history in channel dim
+            x_next = torch.hstack([x_next for i in range(model.past_length)]).to(device)
 
             # Forward pass
             train_return = model(x, x_next, u)
@@ -88,26 +93,26 @@ def train(dataset, config):
 
         # Display average loss for the epoch
         epoch_loss = total_loss / len(train_loader.dataset)
-        print(f'\n--------------------------------------------------')
-        print(f'EPOCH {epoch+1}/{num_epochs}')
-        print(f"Average Epoch Loss: {epoch_loss:.4f}")
-        print(f'--------------------------------------------------\n')
+        pbar.set_postfix({
+            'Epoch': epoch+1,
+            'Epoch Loss': f"{epoch_loss:.4f}"})
 
     if config['train']['save']: plotter.save(config['run_path'])
     else: plotter.close()
+    pbar.close()
+
     return model
 
 def main():
     print('*** STARTING ***\n')
     # Load config, make run path, and choose torch device
-    config_name = 'e2c_config3'
+    config_name = 'e2c_cartpole_v0'
     with open(CONFIG_PATH / f'{config_name}.yaml', "r") as f:
         config = yaml.safe_load(f)
     config['config_name'] = config_name
     config_save = copy.deepcopy(config)
     timestamp = datetime.fromtimestamp(time.time()).strftime("%Y-%m-%d_%H-%M-%S")
-    run_path = RUNS_PATH / timestamp
-    run_path.mkdir(parents=True, exist_ok=True)
+    run_path = RUNS_PATH / Path(config['train']['dataset'].split('_')[0]) / timestamp
     config['run_path'] = run_path
     device = torch.device(config['train']['device'])
     if 'cuda' in config['train']['device']: 
@@ -115,7 +120,7 @@ def main():
     config['train']['device'] = device   # Replace device string with device object in config
 
     # Make E2CDataset object
-    print(f"Loading dataset: {config['train']['dataset']}")
+    print(f"Loading dataset: {config['train']['dataset']}\n")
     dataset = E2CDataset(config)
     config['vae']['out_image_shape'] = dataset.img_shape
     config['trans']['control_size'] = dataset.U.shape[-1]
@@ -124,36 +129,59 @@ def main():
     train_size = int(len(dataset) * config['train']['train_ratio'])
     test_size = len(dataset) - train_size
     train_dataset, test_dataset = torch.utils.data.random_split(dataset, [train_size, test_size])
+    print(f"Train size: {train_size}        Test size: {test_size}\n")
 
     # Train on training dataet
-    model = train(train_dataset, config)
+    load_path = config['train'].get('load_path', None)
+    if load_path is None:
+        print(f'Training model from scratch\n')
+        run_path.mkdir(parents=True, exist_ok=True)
+        model = train(train_dataset, config)
+    else:
+        # Load existing model for eval
+        # TODO: We should be loading from the config saved with the model
+        model = E2C(
+            enc_latent_size=config['vae']['enc_latent_size'],
+            latent_size=config['trans']['latent_size'],
+            control_size=config['trans']['control_size'],
+            past_length=config['trans']['past_length'],
+            pred_length=config['trans']['pred_length'],
+            conv_params=config['vae'],
+            device=device
+        )
+        model.to(device)
+        model_path = load_path + '/model.pt'
+        model.load_state_dict(torch.load(model_path))
+        config['run_path'] = PROJECT_ROOT / Path(load_path)
+    model.eval()
 
     # Save model
     if config['train']['save']:
         model_name = 'model.pt'
         try:
             filepath = config['run_path'] / model_name
-            print(f'\nSaved model to {filepath}')
+            print(f'Saved model to {filepath}')
             torch.save(model.state_dict(), filepath)
         except Exception as e:
             print(e)
-            print('\nException occured, saved model to current directory')
+            print('Exception occured, saved model to current directory')
             torch.save(model.state_dict(), model_name)
 
         # Save config dictionary
         try:
             yaml_name = 'config.yaml'
             yaml_path = config['run_path'] / yaml_name
-            print(f'\nSaved config to {yaml_path}')
+            print(f'Saved config to {yaml_path}')
             with open(yaml_path, 'w') as f:
                 yaml.dump(config_save, f, default_flow_style=False) # Save original config so model can be loaded later
         except Exception as e:
             print(e)
-            print('\nException occurred, saved config to current directory')
+            print('Exception occurred, saved config to current directory')
             with open(yaml_name, 'w') as f:
                 yaml.dump(config_save, f, default_flow_style=False)
 
     # Evaluate model performance
+    print('\n*** EVAL ***\n')
     if config['train']['eval']:
         evaluator = Evaluator(
             model, 
