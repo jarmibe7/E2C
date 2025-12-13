@@ -47,7 +47,7 @@ class ConvEncoder(nn.Module):
 
     def forward(self, x):
         encoded = self.encoder_cnn(x)
-        flattened = encoded.view(encoded.size(0), -1)
+        flattened = encoded.reshape(encoded.size(0), -1)
         out = self.fc_encode(flattened)
         return out
 
