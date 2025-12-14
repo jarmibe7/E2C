@@ -11,7 +11,7 @@ import numpy as np
 import itertools
 from tqdm import tqdm
 
-from src.e2c import E2CDataset, E2CLoss, E2C
+from src.e2c import E2CDataset, E2CLoss, ConvE2C
 from src.utils import set_seed, anim_frames
 from torchmetrics import PeakSignalNoiseRatio as psnr
 from torchmetrics import StructuralSimilarityIndexMeasure as ssim
@@ -104,7 +104,6 @@ class Evaluator():
     def __init__(self, model, test_dataset, batch_size, device, dataset_name):
         # Set model to eval mode
         self.model = model
-        self.model.eval()
         self.test_dataset = test_dataset
 
         # Params
@@ -118,6 +117,7 @@ class Evaluator():
         self.dataset_name = dataset_name
 
     def eval(self, run_path, vid_max_frames=50):
+        self.model.eval()
         print("\Calculating eval metrics...")
         self.eval_metrics(run_path=run_path)
         print("Generating latent space figure...")
@@ -440,7 +440,7 @@ if __name__ == "__main__":
     train_dataset, test_dataset = torch.utils.data.random_split(dataset, [train_size, test_size])
     config['vae']['out_image_shape'] = dataset.img_shape
     config['trans']['control_size'] = dataset.U.shape[-1]
-    model = E2C(
+    model = ConvE2C(
         enc_latent_size=config['vae']['enc_latent_size'],
         latent_size=config['trans']['latent_size'],
         control_size=config['trans']['control_size'],

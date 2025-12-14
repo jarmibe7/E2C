@@ -129,9 +129,18 @@ class E2CLoss(nn.Module):
             breakpoint()
         return loss, recon, recon_next, kld, kld_trans
 
-class E2C(nn.Module):
+class ConvE2C(nn.Module):
     """
     An E2C model with convolutional encoder-decoder.
+
+    Args:
+        enc_latent_size: Latent dimension of encoder
+        latent_size: E2C latent dimension
+        control_size: Dimension of control vector
+        past_length: Length of training observation history
+        pred_length: Prediction horizon length
+        conv_params: Dictionary containing CNN params for encoder/decoder
+        device: Torch device object
     """
     def __init__(self, enc_latent_size, latent_size, control_size, past_length, pred_length, conv_params, device):
         super().__init__()
