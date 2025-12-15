@@ -17,7 +17,7 @@ from tqdm import tqdm
 
 from src.e2c import E2CDataset, E2CLoss, ConvE2C
 from src.utils import set_seed, anim_frames
-from src.eval import Plotter, Evaluator
+from src.policy import ConvPolicy
 from src.trainer import WorldModelPretrainer, ClosedLoopPolicyTrainer, ClosedLoopUncertaintyTrainer
 
 # Set random seed globally
@@ -74,13 +74,16 @@ def main():
     
     # Make Trainer
     # If active learning, just use env specified by dataset name
-    if config['train'].get('closed_loop', None) is not None:
-        raise NotImplementedError('closed loop training not yet implemented')
+    if config.get('closed_loop', None) is not None and config['closed_loop']['closed_loop']:
         env = None
-        if config['train'].get('policy', None) is not None:
-            policy = None
+        policy_type = config['closed_loop'].get('policy', None)
+        if policy_type == 'conv':
+            policy = ConvPolicy(config['trans']['control_size'], 
+                                config['vae']['out_image_shape'][0],
+                                config['vae'])
             trainer = ClosedLoopPolicyTrainer(dataset, model, config, device, policy)
         else:
+            raise NotImplementedError('no policy closed loop training not yet implemented')
             trainer = ClosedLoopUncertaintyTrainer(dataset, model, config, device, policy)
     else:
         trainer = WorldModelPretrainer(dataset, model, config, device)

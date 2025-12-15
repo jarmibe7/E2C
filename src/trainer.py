@@ -8,14 +8,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import yaml
-import time
-from datetime import datetime
 from pathlib import Path
-import copy
 from tqdm import tqdm
 
-from src.e2c import E2CDataset, E2CLoss, ConvE2C
-from src.utils import set_seed, anim_frames
+from src.e2c import E2CLoss, ConvE2C
 from src.eval import Plotter, Evaluator
 
 # Paths
@@ -24,9 +20,9 @@ DATA_PATH = PROJECT_ROOT / "data"
 CONFIG_PATH = PROJECT_ROOT / "config"
 RUNS_PATH = PROJECT_ROOT / "runs"
 
-class Trainer():
+class BaseTrainer():
     """
-    Abstract Trainer class for training world models/policies
+    Base Trainer class for training world models/policies
 
     Args:
         dataset: Torch dataset object that can be split into train/test sets
@@ -74,7 +70,7 @@ class Trainer():
                 dataset_name=config['train']['dataset']
             )
     
-    def collect_rollout(self):
+    def collect_rollouts(self):
         pass
 
     def train(self):
@@ -133,7 +129,7 @@ class Trainer():
             with open(yaml_name, 'w') as f:
                 yaml.dump(config_save, f, default_flow_style=False)
 
-class WorldModelPretrainer(Trainer):
+class WorldModelPretrainer(BaseTrainer):
     """
     Trainer for pretraining world model without active learning
 
@@ -197,7 +193,7 @@ class WorldModelPretrainer(Trainer):
     def learn(self):
         self.train()
 
-class ClosedLoopPolicyTrainer(Trainer):
+class ClosedLoopPolicyTrainer(BaseTrainer):
     """
     Train a world model in closed loop, where actions are chosen based an asychronous
     policy that is being trained concurrently.
@@ -214,7 +210,7 @@ class ClosedLoopPolicyTrainer(Trainer):
         super().__init__(dataset, model, config, device, policy)
         self.num_rollout_steps = num_rollout_steps
 
-    def collect_rollout(self):
+    def collect_rollouts(self):
         """
         Collect observations and save them to replay buffer
         """
@@ -232,7 +228,7 @@ class ClosedLoopPolicyTrainer(Trainer):
             self.collect_rollouts()
             self.train()
 
-class ClosedLoopUncertaintyTrainer(Trainer):
+class ClosedLoopUncertaintyTrainer(BaseTrainer):
     """
     Train a world model in closed loop, where actions are chosen based on prediction variance.
 
@@ -248,7 +244,7 @@ class ClosedLoopUncertaintyTrainer(Trainer):
         super().__init__(dataset, model, config, device, policy)
         self.num_rollout_steps = config['closed_loop']['num_rollout_steps']
 
-    def collect_rollout(self):
+    def collect_rollouts(self):
         """
         Collect observations and save them to replay buffer
         """

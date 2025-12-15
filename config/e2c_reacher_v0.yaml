@@ -23,7 +23,7 @@ trans:
   weight_decay: !!float 1e-4        # Adam optimizer weight decay
 # Training settings
 train:
-  dataset: reacher_500k    # Which dataset to use for training (in data/)
+  dataset: reacher_5k    # Which dataset to use for training (in data/)
   batch_size: 128
   num_epochs: 10
   device: cuda:2             # cpu | cuda:0 | cuda:1 | cuda:2
@@ -34,4 +34,8 @@ train:
   train_ratio: 0.9           # Ratio of dataset to use for training
   load_path:                 # Path to load model from (for resuming training or eval only)    
 # Policy settings for training closed loop
-closed_loop: null
+closed_loop: 
+  closed_loop: True          # Whether to use closed loop training
+  policy: conv               # What type of policy to use
+  num_rollout_steps: 100     # Number of timesteps to collect in a rollout
+    
