@@ -54,6 +54,6 @@ class ConvPolicy(nn.Module):
     def forward(self, x):
         conv_out = self.conv(x)
         flattened = conv_out.reshape(conv_out.size(0), -1)
-        action = self.fc_encode(flattened)
+        action = self.fc(flattened)
         return action
 

@@ -167,7 +167,7 @@ class Evaluator():
             x_recon, x_pred = x_recon_list[frame], x_pred_list[frame]
             ims[0].set_data(x_recon[:3].permute(1, 2, 0).detach().cpu().numpy())
             ims[1].set_data(x[:3].permute(1, 2, 0).detach().cpu().numpy())
-            ims[2].set_data(x_pred[:3].permute(2, 1, 0).detach().cpu().numpy()) # for some reason, need to transpose these differently?
+            ims[2].set_data(x_pred[:3].permute(1, 2, 0).detach().cpu().numpy()) # for some reason, need to transpose these differently?
             ims[3].set_data(x_next[:3].permute(2, 1, 0).detach().cpu().numpy()) # for some reason, need to transpose these differently?
 
             # plt.show()

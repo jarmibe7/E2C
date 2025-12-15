@@ -13,7 +13,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 import copy
-from tqdm import tqdm
+import traceback
 
 from src.e2c import E2CDataset, E2CLoss, ConvE2C
 from src.utils import set_seed, anim_frames
@@ -32,7 +32,9 @@ RUNS_PATH = PROJECT_ROOT / "runs"
 def main():
     print('*** STARTING ***\n')
     # Load config, make run path, and choose torch device
+    # ---------- CONFIG HERE ----------
     config_name = 'e2c_reacher_v0'
+    # ---------- CONFIG HERE ----------
     with open(CONFIG_PATH / f'{config_name}.yaml', "r") as f:
         config = yaml.safe_load(f)
     config['config_name'] = config_name
@@ -74,12 +76,13 @@ def main():
     
     # Make Trainer
     # If active learning, just use env specified by dataset name
+    # TODO: Should policy use past_length too?
     if config.get('closed_loop', None) is not None and config['closed_loop']['closed_loop']:
         env = None
         policy_type = config['closed_loop'].get('policy', None)
         if policy_type == 'conv':
             policy = ConvPolicy(config['trans']['control_size'], 
-                                config['vae']['out_image_shape'][0],
+                                config['vae']['out_image_shape'][0] // config['trans']['past_length'],
                                 config['vae'])
             trainer = ClosedLoopPolicyTrainer(dataset, model, config, device, policy)
         else:
@@ -95,10 +98,13 @@ def main():
         # Save and evaluate
         if config['train']['save']: trainer.save(config_save, config['run_path'])
         if config['train']['eval']: trainer.evaluate(config['run_path'])
-    except Exception as e:
-        print(f'\n\n{e}\n\n')
-        print(f'\nException occured, saving current checkpoint')
-        if config['train']['save']: trainer.save(config_save, config['run_path'])
+    except Exception:
+        print('\n\n'); traceback.print_exc(); print('\n\n')
+        if config['train']['save']: 
+            trainer.save(config_save, config['run_path'])
+            print(f'\nException occured, saving current checkpoint')
+        else: 
+            print('Exception occured, ending training')
 
     
 
