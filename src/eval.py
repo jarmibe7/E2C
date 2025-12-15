@@ -144,11 +144,9 @@ class Evaluator():
             x, x_next, u = x.to(self.device), x_next.to(self.device), u.to(self.device)
             x = x.reshape(x.shape[0], -1, x.shape[-2], x.shape[-1])
             x_next = torch.hstack([x_next for i in range(self.model.past_length)]).to(self.device)
-            x_list.append(x[0])
-            x_next_list.append(x_next[0])
             x_recon, x_pred = self.model.sample(x, u)
-            x_recon_list.append(x_recon)
-            x_pred_list.append(x_pred)
+            x_list.append(x[0]); x_next_list.append(x_next[0])
+            x_recon_list.append(x_recon); x_pred_list.append(x_pred)
 
         # Initialize axes
         ims = []
@@ -174,15 +172,14 @@ class Evaluator():
         # Create and save animation
         ani = FuncAnimation(fig, update_plot, frames=50, interval=5.)
         writer = FFMpegWriter(fps=2)
-        # if timestamp is None: timestamp = datetime.fromtimestamp(time.time()).strftime("%Y-%m-%d_%H-%M-%S")
         vid_name = f'eval_vid.mp4'
         try:
             filepath = run_path / vid_name
-            print(f'\nSaved eval video to {filepath}')
+            print(f'Saved eval video to {filepath}')
             ani.save(filepath, writer=writer)
         except Exception as e:
             print(e)
-            print('\nException occured, saved eval video to current directory')
+            print('Exception occured, saved eval video to current directory')
             ani.save(vid_name, writer=writer)
         plt.close(fig)
         return
