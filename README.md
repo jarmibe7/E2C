@@ -29,6 +29,17 @@ To run `embed_to_control_V6.ipynb`, make sure to first collect data using `rl_co
 - Embed_to_Control.ipynb<br>
 Main E2C architecture.
 
+#### Running training
+1. Specify dataset params in src/data_gen/gen_gym and run the following command:
+```
+python -m src.data_gen.gen_gym
+```
+2. Create a training config file in config/
+3. Run the following command:
+```
+python -m src.main
+```
+
 #### Running on server
 ```ssh -v jarmibe7@dingo.mech.northwestern.edu```
 
