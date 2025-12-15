@@ -48,6 +48,7 @@ class BaseTrainer():
         self.device = device
         self.config = config
         if config['closed_loop']['closed_loop']:
+            # TODO: This is actually not true, because samples are added gradually to training set
             print(f"Model will be trained on {self.batch_size*self.num_epochs*config['closed_loop']['num_batches']} samples in {config['closed_loop']['num_batches']*self.num_epochs} gradient updates\n")
         else:
             print(f"Train size: {train_size}        Test size: {test_size}\n")
