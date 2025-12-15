@@ -87,11 +87,20 @@ def main():
             trainer = ClosedLoopUncertaintyTrainer(dataset, model, config, device, policy)
     else:
         trainer = WorldModelPretrainer(dataset, model, config, device)
-    trainer.learn()
 
-    # Save and evaluate
-    if config['train']['save']: trainer.save(config_save, config['run_path'])
-    if config['train']['eval']: trainer.evaluate(config['run_path'])
+    # Train, save, and evaluate
+    try:
+        trainer.learn()
+
+        # Save and evaluate
+        if config['train']['save']: trainer.save(config_save, config['run_path'])
+        if config['train']['eval']: trainer.evaluate(config['run_path'])
+    except Exception as e:
+        print(f'\n\n{e}\n\n')
+        print(f'\nException occured, saving current checkpoint')
+        if config['train']['save']: trainer.save(config_save, config['run_path'])
+
+    
 
     print('\n*** DONE ***')
     return
