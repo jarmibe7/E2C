@@ -300,7 +300,7 @@ class Evaluator():
             max_val = max(max_val, z_mean_np.max())
 
             # Represent uncertainty by point size
-            point_sizes = np.mean(z_var_np, axis=1) * 10000  # Adjust scaling as needed
+            point_sizes = np.mean(z_var_np, axis=1) * 1000  # Adjust scaling as needed
 
             # Choose colors based on configuration
             if 'cartpole' in self.dataset_name or 'particle_grav' in self.dataset_name: 
