@@ -21,7 +21,7 @@ set_seed(42)
 # Paths
 PROJECT_ROOT = Path(__file__).parent.parent
 DATA_PATH = PROJECT_ROOT / "data"
-RUN_PATH = PROJECT_ROOT / "runs" / "reacher_large"
+RUN_PATH = PROJECT_ROOT / "runs" / "reacher_500k"
 
 # Parameters
 TIME_HORIZON = 8    # How many timesteps to predict into future
