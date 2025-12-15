@@ -1,5 +1,5 @@
 ## E2C: Embed to Control
-**Author: Jared Berry**
+**Authors: Jared Berry, Ayush Gaggar**
 
 #### Objective
 The goal of this project was to implement the architecture of Embed to Control: A Locally Linear Latent Dynamics Model for Control from Raw Images.
