@@ -21,7 +21,7 @@ from src.utils import set_seed
 
 # Parameters for dataset
 env_name = 'reacher'
-new_dt = 0.1 # new dt for downsampled env
+new_dt = 0.0075 # new dt for downsampled env
 dt_ms = int(new_dt * 1000)
 OUTPUT_NAME = env_name + '_' + str(dt_ms) + 'ms_500k'
 dataset_size = int(5e5)

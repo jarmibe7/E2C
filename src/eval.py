@@ -113,6 +113,7 @@ class Evaluator():
         if dataset_name == 'particle_grav': self.dataset_latent_func = self.eval_four_var_latent
         elif dataset_name == 'cartpole': self.dataset_latent_func = self.eval_four_var_latent
         elif dataset_name == 'reacher': self.dataset_latent_func = self.eval_four_var_latent
+        else: self.dataset_latent_func = self.eval_four_var_latent
         self.dataset_name = dataset_name
 
     def eval(self, run_path, vid_max_frames=50):
@@ -143,9 +144,11 @@ class Evaluator():
             x, x_next, u = x.to(self.device), x_next.to(self.device), u.to(self.device)
             x = x.reshape(x.shape[0], -1, x.shape[-2], x.shape[-1])
             x_next = torch.hstack([x_next for i in range(self.model.past_length)]).to(self.device)
+            x_list.append(x[0])
+            x_next_list.append(x_next[0])
             x_recon, x_pred = self.model.sample(x, u)
-            x_list.append(x[0]); x_next_list.append(x_next[0])
-            x_recon_list.append(x_recon); x_pred_list.append(x_pred)
+            x_recon_list.append(x_recon)
+            x_pred_list.append(x_pred)
 
         # Initialize axes
         ims = []
@@ -248,10 +251,10 @@ class Evaluator():
         # Initialize axes
         combo_array = pairs = [(i, j) for i in range(lv-1) for j in range(i + 1)]
         lv_array = list(itertools.combinations([0, 1, 2, 3], r=2))
-        for combo, lv in zip(combo_array, lv_array):
+        for combo, lv_arr in zip(combo_array, lv_array):
             ax = axes[combo]
             ax.set_aspect('equal')
-            ax.set_title(f'Latent Space from Test Dataset (Vars {lv[0]+1} and {lv[1]+1})')
+            ax.set_title(f'Latent Space from Test Dataset (Vars {lv_arr[0]+1} and {lv_arr[1]+1})')
 
         latent_mean = []
         latent_var = []
@@ -287,7 +290,7 @@ class Evaluator():
             # Choose colors based on configuration
             if self.dataset_name in ['particle_grav', 'cartpole']: 
                 color = colors[round(u.cpu().detach().numpy().flatten()[0])]
-            elif self.dataset_name == 'reacher':
+            else: # dataset is reacher
                 u = u.cpu().detach().numpy().flatten()
                 if u[0] > 0.0 and u[1] > 0.0: color = 'blue'
                 elif u[0] > 0.0 and u[1] < 0.0: color = 'green'
@@ -296,8 +299,8 @@ class Evaluator():
 
             # Plotting all variable combos
 
-            for combo, lv in zip(combo_array, lv_array):
-                sc = axes[combo].scatter(z_mean_np[:, lv[0]], z_mean_np[:, lv[1]], s=point_sizes, alpha=0.1, label=None, color=color)
+            for combo, lv_arr in zip(combo_array, lv_array):
+                sc = axes[combo].scatter(z_mean_np[:, lv_arr[0]], z_mean_np[:, lv_arr[1]], s=point_sizes, alpha=0.1, label=None, color=color)
 
         # Combine all latent means and variances
         latent_mean = torch.cat(latent_mean).cpu().detach().numpy()
@@ -315,8 +318,8 @@ class Evaluator():
             # ax.set_xlim(-max_val, max_val)
             # ax.set_ylim(-max_val, max_val)
         
-        for row in range(3):
-            for col in range(3):
+        for row in range(lv-1):
+            for col in range(lv-1):
                 if row < col:
                     axes[row, col].set_visible(False)
 
@@ -410,7 +413,8 @@ if __name__ == "__main__":
     CONFIG_PATH = PROJECT_ROOT / "config"
     RUNS_PATH = PROJECT_ROOT / "runs"
 
-    config_name = 'e2c_reacher_500k'
+    print('*** Loading config and dataset ***\n')
+    config_name = 'e2c_reacher_dt_7dot5ms'
     with open(CONFIG_PATH / f'{config_name}.yaml', "r") as f:
         config = yaml.safe_load(f)
     device = torch.device(config['train']['device'])
