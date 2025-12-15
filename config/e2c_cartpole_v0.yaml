@@ -33,4 +33,8 @@ train:
   plot_freq: 10000           # Frequency to update the plot, in timesteps
   eval: True                 # Whether to eval model performance immediately after training
   train_ratio: 0.8           # Ratio of dataset to use for training
+# Policy settings for training closed loop
+closed_loop: 
+  policy: null               # What type of policy to use
+  num_rollout_steps: 100     # Number of timesteps to collect in a rollout
     

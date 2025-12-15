@@ -15,7 +15,7 @@ from pathlib import Path
 import copy
 from tqdm import tqdm
 
-from src.e2c import E2CDataset, E2CLoss, E2C
+from src.e2c import E2CDataset, E2CLoss, ConvE2C
 from src.utils import set_seed, anim_frames
 from src.eval import Plotter, Evaluator
 
@@ -37,7 +37,7 @@ def train(dataset, config):
     device = config['train']['device']
 
     # Create autoencoder model and optimizer
-    model = E2C(
+    model = ConvE2C(
         enc_latent_size=config['vae']['enc_latent_size'],
         latent_size=config['trans']['latent_size'],
         control_size=config['trans']['control_size'],
@@ -106,7 +106,7 @@ def train(dataset, config):
 def main():
     print('*** STARTING ***\n')
     # Load config, make run path, and choose torch device
-    config_name = 'e2c_cartpole_v0'
+    config_name = 'e2c_reacher_v0'
     with open(CONFIG_PATH / f'{config_name}.yaml', "r") as f:
         config = yaml.safe_load(f)
     config['config_name'] = config_name
@@ -114,9 +114,9 @@ def main():
     timestamp = datetime.fromtimestamp(time.time()).strftime("%Y-%m-%d_%H-%M-%S")
     run_path = RUNS_PATH / Path(config['train']['dataset'].split('_')[0]) / timestamp
     config['run_path'] = run_path
-    device = torch.device(config['train']['device'])
     if 'cuda' in config['train']['device']: 
         assert torch.cuda.is_available(), f"{config['train']['device']} selected in {config_name}, but is unavailable!"
+    device = torch.device(config['train']['device'])
     config['train']['device'] = device   # Replace device string with device object in config
 
     # Make E2CDataset object
@@ -140,7 +140,7 @@ def main():
     else:
         # Load existing model for eval
         # TODO: We should be loading from the config saved with the model
-        model = E2C(
+        model = ConvE2C(
             enc_latent_size=config['vae']['enc_latent_size'],
             latent_size=config['trans']['latent_size'],
             control_size=config['trans']['control_size'],
@@ -187,7 +187,7 @@ def main():
             model, 
             test_dataset,
             batch_size=config['train']['batch_size'], 
-            device=config['train']['device'],
+            device=device,
             dataset_name=config['train']['dataset']
         )
         evaluator.eval(config['run_path'])
