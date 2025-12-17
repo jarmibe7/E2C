@@ -10,6 +10,7 @@ import os
 import re
 import numpy as np
 import torch
+import time
 import gymnasium as gym
 import torchvision
 import matplotlib.pyplot as plt
@@ -19,7 +20,7 @@ from tqdm import tqdm
 import yaml
 from datetime import datetime
 
-from src.utils import set_seed
+from src.utils import set_seed, format_time
 
 # Parameters for dataset
 env_name = 'reacher'                                       # Gym environment name
@@ -95,6 +96,7 @@ def process_image(image, dataset_name=env_name, image_shape=image_shape):
 
 
 def main():
+    start_time = time.perf_counter()
     # Create virtual display for running on server
     disp = Display(visible=0, size=(480, 480))
     disp.start()
@@ -173,6 +175,7 @@ def main():
         dataset_name=OUTPUT_NAME,
         params={
             "env_name": env_name,
+            "runtime": format_time(time.perf_counter() - start_time),
             "dataset_size": dataset_size,
             "image_shape": list(image_shape),
             "past_length": past_length,

@@ -13,12 +13,12 @@ import time
 from datetime import datetime
 from pathlib import Path
 import copy
-from tqdm import tqdm
+import traceback
 
 from src.e2c import E2CDataset, E2CLoss, ConvE2C
-from src.utils import set_seed, anim_frames
-from src.eval import Plotter, Evaluator
-from src.trainer import WorldModelPretrainer, ClosedLoopPolicyTrainer, ClosedLoopUncertaintyTrainer
+from src.utils import set_seed, anim_frames, format_time
+from src.policy import ConvPolicy
+from src.trainer import WorldModelPretrainer, ClosedLoopPolicyTrainer, ClosedLoopUncertaintyTrainer, ClosedLoopRandomTrainer
 
 # Set random seed globally
 set_seed(42)
@@ -30,9 +30,12 @@ CONFIG_PATH = PROJECT_ROOT / "config"
 RUNS_PATH = PROJECT_ROOT / "runs"
 
 def main():
+    start_time = time.perf_counter()
     print('*** STARTING ***\n')
     # Load config, make run path, and choose torch device
-    config_name = 'e2c_reacher_v0'
+    # ---------- CONFIG HERE ----------
+    config_name = 'e2c_reacher_v3'
+    # ---------- CONFIG HERE ----------
     with open(CONFIG_PATH / f'{config_name}.yaml', "r") as f:
         config = yaml.safe_load(f)
     config['config_name'] = config_name
@@ -74,21 +77,40 @@ def main():
     
     # Make Trainer
     # If active learning, just use env specified by dataset name
-    if config['train'].get('closed_loop', None) is not None:
-        raise NotImplementedError('closed loop training not yet implemented')
+    # TODO: Should policy use past_length too?
+    if config.get('closed_loop', None) is not None and config['closed_loop']['closed_loop']:
         env = None
-        if config['train'].get('policy', None) is not None:
-            policy = None
+        policy_type = config['closed_loop'].get('policy', None)
+        if policy_type == 'conv':
+            policy = ConvPolicy(config['trans']['control_size'], 
+                                config['vae']['out_image_shape'][0] // config['trans']['past_length'],
+                                config['vae'])
             trainer = ClosedLoopPolicyTrainer(dataset, model, config, device, policy)
+        elif policy_type == 'random':
+            trainer = ClosedLoopRandomTrainer(dataset, model, config, device)
         else:
+            raise NotImplementedError('no policy closed loop training not yet implemented')
             trainer = ClosedLoopUncertaintyTrainer(dataset, model, config, device, policy)
     else:
         trainer = WorldModelPretrainer(dataset, model, config, device)
-    trainer.learn()
 
-    # Save and evaluate
-    if config['train']['save']: trainer.save(config_save, config['run_path'])
-    if config['train']['eval']: trainer.evaluate(config['run_path'])
+    # Train, save, and evaluate
+    try:
+        trainer.learn()
+
+        # Save and evaluate
+        config_save['runtime'] = format_time(time.perf_counter() - start_time)
+        if config['train']['save']: trainer.save(config_save, config['run_path'])
+        if config['train']['eval']: trainer.evaluate(config['run_path'])
+    except Exception:
+        print('\n\n'); traceback.print_exc(); print('\n\n')
+        if config['train']['save']: 
+            trainer.save(config_save, config['run_path'])
+            print(f'\nException occured, saving current checkpoint')
+        else: 
+            print('Exception occured, ending training')
+
+    
 
     print('\n*** DONE ***')
     return

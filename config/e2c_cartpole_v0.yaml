@@ -35,6 +35,7 @@ train:
   train_ratio: 0.8           # Ratio of dataset to use for training
 # Policy settings for training closed loop
 closed_loop: 
+  closed_loop: False
   policy: null               # What type of policy to use
   num_rollout_steps: 100     # Number of timesteps to collect in a rollout
     
