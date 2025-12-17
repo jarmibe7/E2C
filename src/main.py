@@ -29,7 +29,14 @@ DATA_PATH = PROJECT_ROOT / "data"
 CONFIG_PATH = PROJECT_ROOT / "config"
 RUNS_PATH = PROJECT_ROOT / "runs"
 
+def format_time(seconds):
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = int(seconds % 60)
+    return f'{h:02d}:{m:02d}:{s:02d}'
+
 def main():
+    start_time = time.perf_counter()
     print('*** STARTING ***\n')
     # Load config, make run path, and choose torch device
     # ---------- CONFIG HERE ----------
@@ -96,6 +103,7 @@ def main():
         trainer.learn()
 
         # Save and evaluate
+        config_save['runtime'] = format_time(time.perf_counter() - start_time)
         if config['train']['save']: trainer.save(config_save, config['run_path'])
         if config['train']['eval']: trainer.evaluate(config['run_path'])
     except Exception:

@@ -24,7 +24,7 @@ trans:
 # Training settings
 train:
   dataset: reacher_5k    # Which dataset to use for training (in data/)
-  batch_size: 128
+  batch_size: 100
   num_epochs: 10
   device: cuda:2             # cpu | cuda:0 | cuda:1 | cuda:2
   render: False              # Whether to render live interactive training plot, or simply save after training is finished
@@ -34,14 +34,12 @@ train:
   train_ratio: 0.9           # Ratio of dataset to use for training
   load_path:                 # Path to load model from (for resuming training or eval only)    
 # Policy settings for training closed loop
-#
-# Model / Policy get trained for a total of batch_size*num_batches*num_epochs steps
 closed_loop: 
-  closed_loop: True                 # Whether to use closed loop training
+  closed_loop: False                 # Whether to use closed loop training
   policy: conv                      # What type of policy to use
-  num_rollout_steps: 50000            # Number of timesteps to collect in a rollout
-  num_batches: 1000                   # Number of batches to train on per gradient update
-  buffer_capacity: 500000        # Replay buffer capacity
+  num_rollout_steps: 1000            # Number of timesteps to collect in a rollout
+  num_batches: 10                   # Number of batches to train on per gradient update
+  buffer_capacity: 10000           # Replay buffer capacity
   alpha: !!float 1e-4               # Learning rate
   weight_decay: !!float 1e-4        # Adam optimizer weight decay
     
