@@ -64,4 +64,10 @@ def rk4_sim(f, x0, tspan, dt):
       x = np.copy(xtraj[i,:])
   return xtraj
 
+def format_time(seconds):
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = int(seconds % 60)
+    return f'{h:02d}:{m:02d}:{s:02d}'
+
     

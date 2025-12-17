@@ -16,7 +16,7 @@ import copy
 import traceback
 
 from src.e2c import E2CDataset, E2CLoss, ConvE2C
-from src.utils import set_seed, anim_frames
+from src.utils import set_seed, anim_frames, format_time
 from src.policy import ConvPolicy
 from src.trainer import WorldModelPretrainer, ClosedLoopPolicyTrainer, ClosedLoopUncertaintyTrainer
 
@@ -28,12 +28,6 @@ PROJECT_ROOT = Path(__file__).parent.parent
 DATA_PATH = PROJECT_ROOT / "data"
 CONFIG_PATH = PROJECT_ROOT / "config"
 RUNS_PATH = PROJECT_ROOT / "runs"
-
-def format_time(seconds):
-    h = int(seconds // 3600)
-    m = int((seconds % 3600) // 60)
-    s = int(seconds % 60)
-    return f'{h:02d}:{m:02d}:{s:02d}'
 
 def main():
     start_time = time.perf_counter()
