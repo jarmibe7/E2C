@@ -18,7 +18,7 @@ import traceback
 from src.e2c import E2CDataset, E2CLoss, ConvE2C
 from src.utils import set_seed, anim_frames, format_time
 from src.policy import ConvPolicy
-from src.trainer import WorldModelPretrainer, ClosedLoopPolicyTrainer, ClosedLoopUncertaintyTrainer
+from src.trainer import WorldModelPretrainer, ClosedLoopPolicyTrainer, ClosedLoopUncertaintyTrainer, ClosedLoopRandomTrainer
 
 # Set random seed globally
 set_seed(42)
@@ -34,7 +34,7 @@ def main():
     print('*** STARTING ***\n')
     # Load config, make run path, and choose torch device
     # ---------- CONFIG HERE ----------
-    config_name = 'e2c_reacher_v0'
+    config_name = 'e2c_reacher_v3'
     # ---------- CONFIG HERE ----------
     with open(CONFIG_PATH / f'{config_name}.yaml', "r") as f:
         config = yaml.safe_load(f)
@@ -86,6 +86,8 @@ def main():
                                 config['vae']['out_image_shape'][0] // config['trans']['past_length'],
                                 config['vae'])
             trainer = ClosedLoopPolicyTrainer(dataset, model, config, device, policy)
+        elif policy_type == 'random':
+            trainer = ClosedLoopRandomTrainer(dataset, model, config, device)
         else:
             raise NotImplementedError('no policy closed loop training not yet implemented')
             trainer = ClosedLoopUncertaintyTrainer(dataset, model, config, device, policy)

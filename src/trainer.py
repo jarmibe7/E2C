@@ -201,6 +201,136 @@ class WorldModelPretrainer(BaseTrainer):
     def learn(self):
         self.train()
 
+class ClosedLoopRandomTrainer(BaseTrainer):
+    """
+    Train a world model in closed loop, where actions are chosen randomly.
+    Args:
+        dataset: Torch dataset object, from which test set is used during evaluation.
+        model: A world model class instance for training
+        config: Config dictionary with required params
+        device: Torch device object
+    """
+    def __init__(self, dataset, model, config, device):
+        super().__init__(dataset, model, config, device)
+        self.num_rollout_steps = config['closed_loop']['num_rollout_steps']
+        self.num_batches = config['closed_loop']['num_batches']
+        assert self.num_rollout_steps > self.batch_size, 'Steps per rollout must be > batch_size!'
+
+        # Initialize environment
+        disp = Display(visible=0, size=(480, 480))
+        disp.start()
+        env_name = config['train']['dataset'].split('_')[0]
+        self.env = gym.make(name_to_env[env_name], render_mode="rgb_array")
+        self.env_continuous = (env_to_aspace[env_name] == 'continuous')
+        self.past_length = config['trans']['past_length']
+
+        # Initialize replay buffer
+        self.replay_buffer = ReplayBuffer(
+            self.out_image_shape, 
+            model.control_size, 
+            config['closed_loop']['buffer_capacity'],
+            device,
+            config
+        )
+        assert self.num_rollout_steps <= self.replay_buffer.capacity, 'Steps per rollout should be <= buffer_capacity!'
+
+    def collect_rollouts(self):
+        """
+        Collect observations and save them to replay buffer
+        """
+        # Initialize env and buffers
+        obs, _ = self.env.reset()
+        frame_buffer = []
+        act_buffer = []
+        idx = 0
+        while idx < self.num_rollout_steps:
+            # Render current frame
+            curr_img = process_image(self.env.render()).squeeze(0).permute(2, 0, 1)
+            if len(frame_buffer) == 0:
+                frame_buffer.append(curr_img)
+
+            # Sample and take action
+            act = torch.from_numpy(self.env.action_space.sample()).to(self.device)
+            act_buffer.append(act)
+            next_obs, rew, done, _, _ = self.env.step(act.cpu().detach().numpy())
+
+            # If done reset env, otherwise add sample to dataset
+            if done:
+                obs, _ = self.env.reset()
+                done = False
+                frame_buffer = []
+                act_buffer = []
+                continue
+            else:
+                # Slide frame obs history frame buffer to next image
+                if len(frame_buffer) == self.past_length + 1:
+                    frame_buffer.pop(0)
+                    act_buffer.pop(0)
+                next_image = process_image(self.env.render()).squeeze(0).permute(2, 0, 1)
+                frame_buffer.append(next_image)
+
+                # Add sample to replay buffer
+                if len(frame_buffer) == self.past_length + 1:
+                    self.replay_buffer.add(
+                        img = torch.stack(frame_buffer[0:self.past_length], dim=0),
+                        action = act_buffer[-1],
+                        reward = rew,
+                        next_img = frame_buffer[self.past_length],
+                        done = done
+                    )
+                    idx += 1
+
+    def train(self, epoch):
+        """
+        Gradient update for model and asychronous policy
+        """
+        # World model gradient update
+        total_model_loss, total_policy_loss = 0.0, 0.0
+        for i in range(self.num_batches):
+            # Unload batch
+            x, u, r, x_next, done  = self.replay_buffer.sample(self.batch_size)
+            x, x_next, u = x.to(self.device), x_next.to(self.device), u.to(self.device)
+            x = x.reshape(x.shape[0], -1, *self.out_image_shape[1:])    # Stack obs history in channel dim
+            x_next = torch.hstack([x_next for i in range(self.model.past_length)]).to(self.device)
+
+            # Forward pass
+            train_return = self.model(x, x_next, u)
+            train_return['x'] = x
+            train_return['x_next'] = x_next
+
+            # Model loss and backprop
+            model_loss, recon, recon_next, kld, kld_trans = self.model_criterion(train_return, epoch)
+            self.plotter.log(recon, recon_next, kld, kld_trans)
+            self.model_optimizer.zero_grad()
+            model_loss.backward()
+            self.model_optimizer.step()
+
+            # TODO: Raise exception
+            if torch.isnan(model_loss):
+                print("NaN loss encountered, stopping training.")
+                break
+
+            total_model_loss += model_loss.item() * x.size(0)   # Aggregate total epoch loss
+
+        # Compute average model loss
+        avg_model_loss = total_model_loss / (self.batch_size*self.num_batches)
+
+        return avg_model_loss
+    
+    def learn(self):
+        model_loss = 0.0
+        pbar = tqdm(range(self.num_epochs), desc="Training")
+        for epoch in range(self.num_epochs):
+            self.collect_rollouts()
+            model_loss = self.train(epoch)
+
+            pbar.set_postfix({
+                'Epoch': epoch+1,
+                'Model Loss': f"{model_loss:.4f}"})
+            pbar.update(1)
+            
+        pbar.close()
+
 class ClosedLoopPolicyTrainer(BaseTrainer):
     """
     Train a world model in closed loop, where actions are chosen based an asychronous
