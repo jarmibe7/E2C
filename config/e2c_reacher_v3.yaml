@@ -1,5 +1,5 @@
 #
-# Config file reacher
+# Config file reacher ClosedLoopUncertaintyTrainer
 #
 # Encoder/Decoder
 vae:
@@ -10,9 +10,10 @@ vae:
   pad: 1
 # Loss hyperparams
 loss:
+  loss_type: uncertainty         # Loss type to use: default | uncertainty
   recon_mult: !!float 1e4           # Reconstruction loss multiplier
-  beta: !!float 1e-1                # Standard Gaussian KL multiplier
-  lambda: !!float 1e-1              # Transition KL multiplier
+  beta: !!float 1e-2                # Standard Gaussian KL multiplier
+  lambda: !!float 1e-2              # Transition KL multiplier
   kld_anneal_mode: linear           # Beta annealing mode: const | linear
 # Transition model hyperparams
 trans:
@@ -25,7 +26,7 @@ trans:
 train:
   dataset: reacher_5k    # Which dataset to use for training (in data/)
   batch_size: 128
-  num_epochs: 50
+  num_epochs: 20
   device: cuda:2             # cpu | cuda:0 | cuda:1 | cuda:2
   render: False              # Whether to render live interactive training plot, or simply save after training is finished
   save: True                 # Whether to save final trained model and training plot
@@ -35,11 +36,11 @@ train:
   load_path:                 # Path to load model from (for resuming training or eval only)    
 # Policy settings for training closed loop
 closed_loop: 
-  closed_loop: False                 # Whether to use closed loop training
-  policy: random                      # What type of policy to use
-  num_rollout_steps: 10000            # Number of timesteps to collect in a rollout
+  closed_loop: True                 # Whether to use closed loop training
+  policy: uncertainty               # What type of policy to use: conv | random | uncertainty
+  num_rollout_steps: 10000          # Number of timesteps to collect in a rollout
   num_batches: 10                   # Number of batches to train on per gradient update
-  buffer_capacity: 10000           # Replay buffer capacity
+  buffer_capacity: 10000            # Replay buffer capacity
   alpha: !!float 1e-5               # Learning rate
   weight_decay: !!float 1e-4        # Adam optimizer weight decay
     
