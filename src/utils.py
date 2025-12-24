@@ -70,4 +70,26 @@ def format_time(seconds):
     s = int(seconds % 60)
     return f'{h:02d}:{m:02d}:{s:02d}'
 
+
+#
+# ----- Metrics -----
+#
+def central_mass_ratio(mu_vec, r=1.0, dim=0):
+    mu = mu_vec.mean(dim=dim, keepdim=True)
+    std = mu_vec.std(dim=dim, keepdim=True)
+    return (torch.abs(mu_vec - mu) <= r * std).float().mean(dim=dim)
+
+def excess_kurtosis(mu_vec, dim=0, eps=1e-8):
+    mean = mu_vec.mean(dim=dim, keepdim=True)
+    var = ((mu_vec - mean)**2).mean(dim=dim, keepdim=True)
+    fourth = ((mu_vec - mean)**4).mean(dim=dim, keepdim=True)
+    kurt = fourth / (var**2 + eps)
+    return kurt - 3.0
+
+def shoulder_mass(mu_vec, r1=0.5, r2=2.0, dim=0):
+    mean = mu_vec.mean(dim=dim, keepdim=True)
+    std = mu_vec.std(dim=dim, keepdim=True)
+    d = torch.abs(mu_vec - mean)
+    return ((d > r1 * std) & (d <= r2 * std)).float().mean(dim=dim)
+
     
