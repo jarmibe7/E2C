@@ -11,7 +11,7 @@ vae:
 # Loss hyperparams
 loss:
   loss_type: uncertainty         # Loss type to use: default | uncertainty
-  recon_mult: !!float 1.0           # Reconstruction loss multiplier
+  recon_mult: !!float 0.0           # MSE Reconstruction loss multiplier
   beta: !!float 1e-2                # Standard Gaussian KL multiplier
   lambda: !!float 1e-2              # Transition KL multiplier
   kld_anneal_mode: linear           # Beta annealing mode: const | linear
@@ -24,9 +24,9 @@ trans:
   weight_decay: !!float 1e-4        # Adam optimizer weight decay
 # Training settings
 train:
-  dataset: reacher_5k    # Which dataset to use for training (in data/)
+  dataset: reacher_500k      # Which dataset to use for training (in data/)
   batch_size: 128
-  num_epochs: 30
+  num_epochs: 10
   device: cuda:2             # cpu | cuda:0 | cuda:1 | cuda:2
   render: False              # Whether to render live interactive training plot, or simply save after training is finished
   save: True                 # Whether to save final trained model and training plot

@@ -11,7 +11,7 @@ vae:
 # Loss hyperparams
 loss:
   loss_type: default         # Loss type to use: default | uncertainty
-  recon_mult: !!float 1e4           # Reconstruction loss multiplier
+  recon_mult: !!float 1e4           # MSE Reconstruction loss multiplier
   beta: !!float 1e-2                # Standard Gaussian KL multiplier
   lambda: !!float 1e-2              # Transition KL multiplier
   kld_anneal_mode: linear           # Beta annealing mode: const | linear
