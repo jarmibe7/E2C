@@ -12,7 +12,7 @@ import itertools
 from tqdm import tqdm
 
 from src.e2c import E2CDataset, E2CLoss, ConvE2C
-from src.utils import set_seed, anim_frames
+from src.utils import set_seed, anim_frames, shoulder_mass, excess_kurtosis, central_mass_ratio
 from torchmetrics import PeakSignalNoiseRatio as psnr
 from torchmetrics import StructuralSimilarityIndexMeasure as ssim
 import lpips
@@ -189,16 +189,17 @@ class Evaluator():
     
     def eval_metrics(self, max_samples=None, run_path=None):
         """
-        Calculate image metrics for test set
+        Calculate metrics for test set
         """
-        
+        # Image metrics
         psnr_fn = psnr(data_range=1.0).to(self.device)
         ssim_fn = ssim(data_range=1.0).to(self.device)
-        # have to double check this is correct for lpips - check nerfstudio code
+        # TODO: have to double check this is correct for lpips - check nerfstudio code
         lpips_fn = lpips.LPIPS(net='alex').to(self.device)
 
         recon_psnr, recon_ssim, recon_lpips, recon_mse = [], [], [], []
         pred_psnr, pred_ssim, pred_lpips, pred_mse = [], [], [], []
+        pred_cmr, pred_kurt, pred_shoulder = [], [], []
 
         test_loader = torch.utils.data.DataLoader(self.test_dataset, batch_size=128, shuffle=False)
 
@@ -210,7 +211,7 @@ class Evaluator():
             x = x.reshape(x.shape[0], -1, x.shape[-2], x.shape[-1])
             x_next = torch.hstack([x_next for _ in range(self.model.past_length)]).to(self.device)
 
-            x_recon, x_pred = self.model.sample(x, u)
+            x_recon, x_pred, mu_pred, log_var_pred, z_pred = self.model.sample(x, u, return_all=True)
 
             img_true = x[0][:3].unsqueeze(0)
             img_true_next = x_next[0][:3].unsqueeze(0)
@@ -231,6 +232,11 @@ class Evaluator():
             # recon_lpips.append(lpips_fn(img_recon*2-1, img_true*2-1).item())
             pred_lpips.append(lpips_fn(img_pred*2-1, img_true_next*2-1).item())
 
+            # CMR, Kurtosis, Shoulder Mass
+            pred_cmr.append(central_mass_ratio(mu_pred).mean().item())
+            pred_kurt.append(excess_kurtosis(mu_pred).mean().item())
+            pred_shoulder.append(shoulder_mass(mu_pred).mean().item())
+
         results = {
             # "recon_psnr": np.mean(recon_psnr),
             # "recon_ssim": np.mean(recon_ssim),
@@ -240,6 +246,9 @@ class Evaluator():
             "pred_ssim": np.mean(pred_ssim),
             "pred_lpips": np.mean(pred_lpips),
             # "pred_mse": np.mean(pred_mse),
+            "pred_cmr": np.mean(pred_cmr),
+            "pred_kurt": np.mean(pred_kurt),
+            "pred_shoulder": np.mean(pred_shoulder)
         }
 
         # Save metrics as JSON
