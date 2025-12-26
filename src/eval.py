@@ -28,36 +28,24 @@ class Plotter():
         self.num_steps = 0
         self.render = render
         self.plot_freq = plot_freq
-        self.plot_history = {"recon": [], "recon_next": [], "kld": [], "kld_trans": []}
-        self.fig, self.axs = plt.subplots(4, 1, figsize=(8, 10))
-        self.titles = [
-            r"$x$ Reconstruction Loss",
-            r"$x_{next}$ Reconstruction Loss",
-            "KLD",
-            "Transition KLD"
-        ]
-        self.colors = ['blue', 'orange', 'green', 'red']
-        for ax, title in zip(self.axs, self.titles):
-            ax.set_title(title)
-            ax.set_xlabel("Step")
-            ax.grid(True)
-        plt.tight_layout()
-        if self.render: 
-            plt.ion()
-            plt.show()
-        else:
-            plt.ioff()
+        self.plot_history = None
+        self.fig = None
+        self.colors = ['blue', 'orange', 'green', 'red', 'purple', 'yellow']
 
-    def log(self, recon_loss, recon_next_loss, kld_loss, kld_trans_loss):
+    def log(self, lr):
         """
         Update live training plot logs, and plot at frequency self.plot_freq
         """
-        # Update plot history arrays
+        # Create plot history dictionary if none exists
         self.num_steps += 1
-        self.plot_history["recon"].append(recon_loss.detach().cpu().item())
-        self.plot_history["recon_next"].append(recon_next_loss.detach().cpu().item())
-        self.plot_history["kld"].append(kld_loss.detach().cpu().item())
-        self.plot_history["kld_trans"].append(kld_trans_loss.detach().cpu().item())
+        if self.plot_history is None:
+            self.plot_history = {}
+            for key in lr.keys():
+                self.plot_history[key] = []
+
+        # Update plot history arrays
+        for key in lr.keys():
+            self.plot_history[key].append(lr[key])
 
         # Replot
         if self.num_steps % self.plot_freq == 0: self.plot()
@@ -66,9 +54,23 @@ class Plotter():
         """
         Update live plot
         """
+        # Initialize figure if first plot
+        if self.fig is None:
+            self.fig, self.axs = plt.subplots(len(self.plot_history), 1, figsize=(8, len(self.plot_history)*3))
+            for ax, key in zip(self.axs, self.plot_history.keys()):
+                ax.set_title(key)
+                ax.set_xlabel("Step")
+                ax.grid(True)
+            plt.tight_layout()
+            if self.render: 
+                plt.ion()
+                plt.show()
+            else:
+                plt.ioff()
+
         for i, key in enumerate(self.plot_history.keys()):
             self.axs[i].cla() 
-            self.axs[i].plot(self.plot_history[key], label=self.titles[i], color=self.colors[i])
+            self.axs[i].plot(self.plot_history[key], label=key, color=self.colors[i])
             self.axs[i].legend()
             self.axs[i].grid(True)
 
