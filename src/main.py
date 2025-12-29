@@ -34,7 +34,7 @@ def main():
     print('*** STARTING ***\n')
     # Load config, make run path, and choose torch device
     # ---------- CONFIG HERE ----------
-    config_name = 'e2c_reacher_v3'
+    config_name = 'e2c_reacher_v4'
     # ---------- CONFIG HERE ----------
     with open(CONFIG_PATH / f'{config_name}.yaml', "r") as f:
         config = yaml.safe_load(f)
@@ -61,7 +61,8 @@ def main():
         past_length=config['trans']['past_length'],
         pred_length=config['trans']['pred_length'],
         conv_params=config['vae'],
-        device=device
+        device=device,
+        output_uncertainty=(config['loss']['loss_type'] == 'uncertainty')
     )
     load_path = config['train'].get('load_path', None)
     if load_path is None:
@@ -88,9 +89,10 @@ def main():
             trainer = ClosedLoopPolicyTrainer(dataset, model, config, device, policy)
         elif policy_type == 'random':
             trainer = ClosedLoopRandomTrainer(dataset, model, config, device)
-        else:
-            raise NotImplementedError('no policy closed loop training not yet implemented')
-            trainer = ClosedLoopUncertaintyTrainer(dataset, model, config, device, policy)
+        elif policy_type == 'uncertainty':
+            trainer = ClosedLoopUncertaintyTrainer(dataset, model, config, device)
+        else: 
+            raise NotImplementedError(f'Policy type "{policy_type}" not supported!')
     else:
         trainer = WorldModelPretrainer(dataset, model, config, device)
 
@@ -104,11 +106,21 @@ def main():
         if config['train']['eval']: trainer.evaluate(config['run_path'])
     except Exception:
         print('\n\n'); traceback.print_exc(); print('\n\n')
-        if config['train']['save']: 
+        if config['train']['save']:
+            config_save['runtime'] = format_time(time.perf_counter() - start_time)
             trainer.save(config_save, config['run_path'])
+            if config['train']['eval']: trainer.evaluate(config['run_path'])    
             print(f'\nException occured, saving current checkpoint')
         else: 
             print('Exception occured, ending training')
+    except KeyboardInterrupt:
+        if config['train']['save']:
+            config_save['runtime'] = format_time(time.perf_counter() - start_time)
+            trainer.save(config_save, config['run_path'])
+            if config['train']['eval']: trainer.evaluate(config['run_path'])    
+            print(f'\nManual interrupt occured, saving current checkpoint')
+        else: 
+            print('Manual interrupt occured, ending training')
 
     
 
