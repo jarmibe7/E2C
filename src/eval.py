@@ -30,7 +30,7 @@ class Plotter():
         self.plot_freq = plot_freq
         self.plot_history = None
         self.fig = None
-        self.colors = ['blue', 'orange', 'green', 'red', 'purple', 'yellow']
+        self.colors = ['blue', 'orange', 'green', 'red', 'purple', 'black']
 
     def log(self, lr):
         """
@@ -143,15 +143,17 @@ class Evaluator():
         # Precompute frames
         assert self.model.pred_length == 1, 'Pred length >1 not supported for eval video'
         x_list, x_next_list, x_recon_list, x_pred_list = [], [], [], []
+        if self.model.output_uncertainty: x_pred_uncertainty_list = []
         for i, (x, x_next, u) in enumerate(test_loader):
             if i >= max_frames:
                 break
             x, x_next, u = x.to(self.device), x_next.to(self.device), u.to(self.device)
             x = x.reshape(x.shape[0], -1, x.shape[-2], x.shape[-1])
             x_next = torch.hstack([x_next for i in range(self.model.past_length)]).to(self.device)
-            x_recon, x_pred = self.model.sample(x, u)
+            x_recon, x_pred, sample_return = self.model.sample(x, u, return_all=True)
             x_list.append(x[0]); x_next_list.append(x_next[0])
             x_recon_list.append(x_recon); x_pred_list.append(x_pred)
+            if self.model.output_uncertainty: x_pred_uncertainty_list.append(sample_return['x_pred_recon_uncertainty'].mean().item())
 
         # Initialize axes
         ims = []
@@ -167,10 +169,13 @@ class Evaluator():
         def update_plot(frame):
             x, x_next = x_list[frame], x_next_list[frame]
             x_recon, x_pred = x_recon_list[frame], x_pred_list[frame]
+            x_pred_uncertainty = x_pred_uncertainty_list[frame]
             ims[0].set_data(x_recon[:3].permute(1, 2, 0).detach().cpu().numpy())
             ims[1].set_data(x[:3].permute(1, 2, 0).detach().cpu().numpy())
             ims[2].set_data(x_pred[:3].permute(1, 2, 0).detach().cpu().numpy())
             ims[3].set_data(x_next[:3].permute(1, 2, 0).detach().cpu().numpy())
+            if self.model.output_uncertainty: 
+                ax[0, 1].set_title(f"Pred: Uncertainty={x_pred_uncertainty:.4f}")
 
             # plt.show()
 
@@ -213,7 +218,8 @@ class Evaluator():
             x = x.reshape(x.shape[0], -1, x.shape[-2], x.shape[-1])
             x_next = torch.hstack([x_next for _ in range(self.model.past_length)]).to(self.device)
 
-            x_recon, x_pred, mu_pred, log_var_pred, z_pred = self.model.sample(x, u, return_all=True)
+            x_recon, x_pred, sample_return = self.model.sample(x, u, return_all=True)
+            mu_pred = sample_return['mu_pred']
 
             img_true = x[0][:3].unsqueeze(0)
             img_true_next = x_next[0][:3].unsqueeze(0)
