@@ -30,6 +30,9 @@ class ReplayBuffer:
         self.X_next = torch.zeros((capacity, C, H, W), device=device)
         self.dones = torch.zeros((capacity, 1), device=device)
 
+    def __len__(self):
+        return self.size
+
     @torch.no_grad()
     def add(self, img, action, reward, next_img, done):
         self.X[self.ptr] = img.to(self.device).contiguous()
