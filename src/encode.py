@@ -101,7 +101,8 @@ class ChannelUncertaintyConvDecoder(ConvDecoder):
     def __init__(self, latent_size, conv_params, enc_out_dim, enc_out_shape):
         super().__init__(latent_size, conv_params, enc_out_dim, enc_out_shape)
 
-        self.num_var_channels = self.out_image_shape[0]
+        # self.num_var_channels = self.out_image_shape[0]
+        self.num_var_channels = 1
 
         # Output image channels + uncerainty channel for each pixel
         k = conv_params['dec_kernel_size']
