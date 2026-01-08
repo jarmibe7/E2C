@@ -15,7 +15,8 @@ from pathlib import Path
 import copy
 import traceback
 
-from src.e2c import E2CDataset, E2CLoss, ConvE2C
+from src.conv_e2c import ConvE2C
+from src.dataset import E2CDataset
 from src.utils import set_seed, anim_frames, format_time
 from src.policy import ConvPolicy
 from src.trainer import WorldModelPretrainer, ClosedLoopPolicyTrainer, ClosedLoopUncertaintyTrainer, ClosedLoopRandomTrainer

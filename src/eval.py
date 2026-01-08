@@ -10,12 +10,13 @@ import torch
 import numpy as np
 import itertools
 from tqdm import tqdm
-
-from src.e2c import E2CDataset, E2CLoss, ConvE2C
-from src.utils import set_seed, anim_frames, shoulder_mass, excess_kurtosis, central_mass_ratio
 from torchmetrics import PeakSignalNoiseRatio as psnr
 from torchmetrics import StructuralSimilarityIndexMeasure as ssim
 import lpips
+
+from src.conv_e2c import ConvE2C
+from src.dataset import E2CDataset
+from src.utils import set_seed, anim_frames, shoulder_mass, excess_kurtosis, central_mass_ratio
 
 class Plotter():
     """
