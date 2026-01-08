@@ -12,7 +12,7 @@ import itertools
 from tqdm import tqdm
 
 from src.e2c import E2CDataset, E2CLoss, ConvE2C
-from src.utils import set_seed, anim_frames
+from src.utils import set_seed, anim_frames, shoulder_mass, excess_kurtosis, central_mass_ratio
 from torchmetrics import PeakSignalNoiseRatio as psnr
 from torchmetrics import StructuralSimilarityIndexMeasure as ssim
 import lpips
@@ -28,36 +28,24 @@ class Plotter():
         self.num_steps = 0
         self.render = render
         self.plot_freq = plot_freq
-        self.plot_history = {"recon": [], "recon_next": [], "kld": [], "kld_trans": []}
-        self.fig, self.axs = plt.subplots(4, 1, figsize=(8, 10))
-        self.titles = [
-            r"$x$ Reconstruction Loss",
-            r"$x_{next}$ Reconstruction Loss",
-            "KLD",
-            "Transition KLD"
-        ]
-        self.colors = ['blue', 'orange', 'green', 'red']
-        for ax, title in zip(self.axs, self.titles):
-            ax.set_title(title)
-            ax.set_xlabel("Step")
-            ax.grid(True)
-        plt.tight_layout()
-        if self.render: 
-            plt.ion()
-            plt.show()
-        else:
-            plt.ioff()
+        self.plot_history = None
+        self.fig = None
+        self.colors = ['blue', 'orange', 'green', 'red', 'purple', 'black']
 
-    def log(self, recon_loss, recon_next_loss, kld_loss, kld_trans_loss):
+    def log(self, lr):
         """
         Update live training plot logs, and plot at frequency self.plot_freq
         """
-        # Update plot history arrays
+        # Create plot history dictionary if none exists
         self.num_steps += 1
-        self.plot_history["recon"].append(recon_loss.detach().cpu().item())
-        self.plot_history["recon_next"].append(recon_next_loss.detach().cpu().item())
-        self.plot_history["kld"].append(kld_loss.detach().cpu().item())
-        self.plot_history["kld_trans"].append(kld_trans_loss.detach().cpu().item())
+        if self.plot_history is None:
+            self.plot_history = {}
+            for key in lr.keys():
+                self.plot_history[key] = []
+
+        # Update plot history arrays
+        for key in lr.keys():
+            self.plot_history[key].append(lr[key])
 
         # Replot
         if self.num_steps % self.plot_freq == 0: self.plot()
@@ -66,9 +54,23 @@ class Plotter():
         """
         Update live plot
         """
+        # Initialize figure if first plot
+        if self.fig is None:
+            self.fig, self.axs = plt.subplots(len(self.plot_history), 1, figsize=(8, len(self.plot_history)*3))
+            for ax, key in zip(self.axs, self.plot_history.keys()):
+                ax.set_title(key)
+                ax.set_xlabel("Step")
+                ax.grid(True)
+            plt.tight_layout()
+            if self.render: 
+                plt.ion()
+                plt.show()
+            else:
+                plt.ioff()
+
         for i, key in enumerate(self.plot_history.keys()):
             self.axs[i].cla() 
-            self.axs[i].plot(self.plot_history[key], label=self.titles[i], color=self.colors[i])
+            self.axs[i].plot(self.plot_history[key], label=key, color=self.colors[i])
             self.axs[i].legend()
             self.axs[i].grid(True)
 
@@ -141,15 +143,17 @@ class Evaluator():
         # Precompute frames
         assert self.model.pred_length == 1, 'Pred length >1 not supported for eval video'
         x_list, x_next_list, x_recon_list, x_pred_list = [], [], [], []
+        if self.model.output_uncertainty: x_pred_uncertainty_list = []
         for i, (x, x_next, u) in enumerate(test_loader):
             if i >= max_frames:
                 break
             x, x_next, u = x.to(self.device), x_next.to(self.device), u.to(self.device)
             x = x.reshape(x.shape[0], -1, x.shape[-2], x.shape[-1])
             x_next = torch.hstack([x_next for i in range(self.model.past_length)]).to(self.device)
-            x_recon, x_pred = self.model.sample(x, u)
+            x_recon, x_pred, sample_return = self.model.sample(x, u, return_all=True)
             x_list.append(x[0]); x_next_list.append(x_next[0])
             x_recon_list.append(x_recon); x_pred_list.append(x_pred)
+            if self.model.output_uncertainty: x_pred_uncertainty_list.append(sample_return['x_pred_recon_uncertainty'].mean().item())
 
         # Initialize axes
         ims = []
@@ -165,10 +169,13 @@ class Evaluator():
         def update_plot(frame):
             x, x_next = x_list[frame], x_next_list[frame]
             x_recon, x_pred = x_recon_list[frame], x_pred_list[frame]
+            x_pred_uncertainty = x_pred_uncertainty_list[frame]
             ims[0].set_data(x_recon[:3].permute(1, 2, 0).detach().cpu().numpy())
             ims[1].set_data(x[:3].permute(1, 2, 0).detach().cpu().numpy())
             ims[2].set_data(x_pred[:3].permute(1, 2, 0).detach().cpu().numpy())
             ims[3].set_data(x_next[:3].permute(1, 2, 0).detach().cpu().numpy())
+            if self.model.output_uncertainty: 
+                ax[0, 1].set_title(f"Pred: Uncertainty={x_pred_uncertainty:.4f}")
 
             # plt.show()
 
@@ -189,16 +196,17 @@ class Evaluator():
     
     def eval_metrics(self, max_samples=None, run_path=None):
         """
-        Calculate image metrics for test set
+        Calculate metrics for test set
         """
-        
+        # Image metrics
         psnr_fn = psnr(data_range=1.0).to(self.device)
         ssim_fn = ssim(data_range=1.0).to(self.device)
-        # have to double check this is correct for lpips - check nerfstudio code
+        # TODO: have to double check this is correct for lpips - check nerfstudio code
         lpips_fn = lpips.LPIPS(net='alex').to(self.device)
 
         recon_psnr, recon_ssim, recon_lpips, recon_mse = [], [], [], []
         pred_psnr, pred_ssim, pred_lpips, pred_mse = [], [], [], []
+        pred_cmr, pred_kurt, pred_shoulder = [], [], []
 
         test_loader = torch.utils.data.DataLoader(self.test_dataset, batch_size=128, shuffle=False)
 
@@ -210,7 +218,8 @@ class Evaluator():
             x = x.reshape(x.shape[0], -1, x.shape[-2], x.shape[-1])
             x_next = torch.hstack([x_next for _ in range(self.model.past_length)]).to(self.device)
 
-            x_recon, x_pred = self.model.sample(x, u)
+            x_recon, x_pred, sample_return = self.model.sample(x, u, return_all=True)
+            mu_pred = sample_return['mu_pred']
 
             img_true = x[0][:3].unsqueeze(0)
             img_true_next = x_next[0][:3].unsqueeze(0)
@@ -231,6 +240,11 @@ class Evaluator():
             # recon_lpips.append(lpips_fn(img_recon*2-1, img_true*2-1).item())
             pred_lpips.append(lpips_fn(img_pred*2-1, img_true_next*2-1).item())
 
+            # CMR, Kurtosis, Shoulder Mass
+            pred_cmr.append(central_mass_ratio(mu_pred).mean().item())
+            pred_kurt.append(excess_kurtosis(mu_pred).mean().item())
+            pred_shoulder.append(shoulder_mass(mu_pred).mean().item())
+
         results = {
             # "recon_psnr": np.mean(recon_psnr),
             # "recon_ssim": np.mean(recon_ssim),
@@ -240,6 +254,9 @@ class Evaluator():
             "pred_ssim": np.mean(pred_ssim),
             "pred_lpips": np.mean(pred_lpips),
             # "pred_mse": np.mean(pred_mse),
+            "pred_cmr": np.mean(pred_cmr),
+            "pred_kurt": np.mean(pred_kurt),
+            "pred_shoulder": np.mean(pred_shoulder)
         }
 
         # Save metrics as JSON

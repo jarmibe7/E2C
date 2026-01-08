@@ -1,5 +1,5 @@
 #
-# Config file reacher
+# Config file reacher ClosedLoopPolicyTrainer
 #
 # Encoder/Decoder
 vae:
@@ -10,7 +10,8 @@ vae:
   pad: 1
 # Loss hyperparams
 loss:
-  recon_mult: !!float 1e4           # Reconstruction loss multiplier
+  loss_type: default          # Loss type to use: default | uncertainty
+  recon_mult: !!float 1e4           # MSE Reconstruction loss multiplier
   beta: !!float 1e-2                # Standard Gaussian KL multiplier
   lambda: !!float 1e-2              # Transition KL multiplier
   kld_anneal_mode: linear           # Beta annealing mode: const | linear
@@ -32,4 +33,13 @@ train:
   plot_freq: 10000           # Frequency to update the plot, in timesteps
   eval: True                 # Whether to eval model performance immediately after training
   train_ratio: 0.9           # Ratio of dataset to use for training
-  load_path: runs/reacher/2025-12-05_14-17-59 # Path to load model from (for resuming training or eval only)    
+  load_path:  # Path to load model from (for resuming training or eval only)
+# Policy settings for training closed loop
+closed_loop: 
+  closed_loop: True                 # Whether to use closed loop training
+  policy: conv                      # What type of policy to use: conv | random | uncertainty
+  num_rollout_steps: 10000          # Number of timesteps to collect in a rollout
+  num_batches: 10                   # Number of batches to train on per gradient update
+  buffer_capacity: 10000            # Replay buffer capacity
+  alpha: !!float 1e-5               # Learning rate
+  weight_decay: !!float 1e-4        # Adam optimizer weight decay

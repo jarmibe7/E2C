@@ -8,8 +8,9 @@ Authors: Jared Berry, Ayush Gaggar
 import torch
 from torch import nn
 from pathlib import Path
+import numpy as np
 
-from src.encode import ConvEncoder, ConvDecoder
+from src.encode import ConvEncoder, ConvDecoder, ChannelUncertaintyConvDecoder, ScalarUncertaintyConvDecoder
 
 # Get paths relative to the project root
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -121,13 +122,146 @@ class E2CLoss(nn.Module):
         # log_term = torch.log(1 + dot)
         # kld_trans_vec = 2*(sum_term - log_term)
         # kld_trans = self.lam*torch.sum(kld_trans_vec)
+
+        # def kl_diag_gaussians(mu_p, log_var_p, mu_q, log_var_q):
+        #     var_p = torch.exp(log_var_p)
+        #     var_q = torch.exp(log_var_q)
+
+        #     return 0.5 * torch.sum(
+        #         log_var_q - log_var_p
+        #         + (var_p + (mu_p - mu_q).pow(2)) / var_q
+        #         - 1,
+        #         dim=-1
+        #     )
+        # kld_trans = self.lam * kl_diag_gaussians(
+        #     mu_pred, log_var_pred,
+        #     mu_next, log_var_next
+        # ).mean()
+
         z_pred = tr['z_pred']
         kld_trans = self.lam*(-0.5 * torch.sum(1 + log_var_next - (z_pred - mu_next).pow(2) - log_var_next.exp(), dim=-1).mean())
 
         loss = recon + recon_next + kld + kld_trans
         if torch.isnan(loss):
             breakpoint()
-        return loss, recon, recon_next, kld, kld_trans
+
+        # Make return dictionary for loss values
+        loss_return = {
+            r"$x$ Reconstruction Loss": recon.detach().cpu().item(),
+            r"$x_{next}$ Reconstruction Loss": recon_next.detach().cpu().item(),
+            "KLD": kld.detach().cpu().item(),
+            "Transition KLD": kld_trans.detach().cpu().item()
+        }
+        return loss, loss_return
+    
+class UncertaintyE2CLoss(E2CLoss):
+    """
+    E2C loss with full image prediction uncertainty estimates, with reconstruction losses as negative loss likelihood.
+    """
+    def __init__(self, num_epochs, loss_params):
+        super().__init__(num_epochs, loss_params)
+
+    def expand_uncertainty(self, logvar, target):
+        """
+        Ensure uncertainty (log variance) output from decoder is of correct shape to be used by 
+        gaussian_nll loss function in PyTorch API.
+
+        Args:
+            logvar: uncertainty tensor (any of:
+                    [B], [B,1], [B,1,1,1], [B,K,H,W], [B,C,H,W])
+                    where C % k == 0
+            target: image tensor [B,C,H,W]
+        """
+        B, C, H, W = target.shape
+
+        # Ensure 4D
+        while logvar.dim() < 4:
+            logvar = logvar.unsqueeze(-1)
+
+        # [B,1,1,1] -> [B,C,H,W]
+        if logvar.shape[1] == 1:
+            logvar = logvar.expand(B, C, H, W)
+
+        # [B,K,H,W] where K != C
+        elif logvar.shape[1] != C:
+            if C % logvar.shape[1] != 0:
+                raise ValueError(
+                    f"Cannot expand uncertainty with {logvar.shape[1]} channels "
+                    f"to match image with {C} channels"
+                )
+            
+            # Tile uncertainty to be shape compatible
+            repeat_factor = C // logvar.shape[1]
+            logvar = logvar.repeat(1, repeat_factor, 1, 1)
+
+        return logvar
+
+    def forward(self, tr, epoch):
+        # Ensure uncertainty shape is compatible with loss function
+        x_recon_uncertainty = self.expand_uncertainty(tr['x_recon_uncertainty'], tr['x_recon'])
+        x_pred_recon_uncertainty = self.expand_uncertainty(tr['x_pred_recon_uncertainty'], tr['x_pred'])
+        recon_nll = nn.functional.gaussian_nll_loss(
+            tr['x_recon'],
+            tr['x'], 
+            torch.exp(x_recon_uncertainty) + 1e-6,    # Train decoder uncertainty outputs to be log variance
+            reduction='mean'
+        )
+        pred_nll = nn.functional.gaussian_nll_loss(
+            tr['x_pred'],
+            tr['x_next'], 
+            torch.exp(x_pred_recon_uncertainty) + 1e-6,
+            reduction='mean'
+        )
+        # recon_nll = nn.functional.gaussian_nll_loss(
+        #     tr['x_recon'],
+        #     tr['x'], 
+        #     torch.exp(tr['x_recon_uncertainty'].view(-1, 1, 1, 1).expand_as(tr['x_recon'])) + 1e-6,    # Train decoder uncertainty outputs to be log variance
+        #     reduction='mean'
+        # )
+        # pred_nll = nn.functional.gaussian_nll_loss(
+        #     tr['x_pred'],
+        #     tr['x_next'], 
+        #     torch.exp(tr['x_pred_recon_uncertainty'].view(-1, 1, 1, 1).expand_as(tr['x_pred'])) + 1e-6,
+        #     reduction='mean'
+        # )
+        # recon_logvar = tr['x_recon_uncertainty'].expand_as(tr['x_recon']) + 1e-6
+        # recon_var = torch.exp(recon_logvar ** 2) + 1e-6
+        # recon_nll = -((tr['x'] - tr['x_recon']) ** 2) / (2 * recon_var) - recon_logvar - np.log(np.sqrt(2 * np.pi))
+        # recon_nll = recon_nll.mean()
+
+        # pred_logvar = tr['x_pred_recon_uncertainty'].expand_as(tr['x_pred']) + 1e-6
+        # pred_var = torch.exp(pred_logvar ** 2) + 1e-6
+        # pred_nll = -((tr['x_next'] - tr['x_pred']) ** 2) / (2 * pred_var) - pred_logvar - np.log(np.sqrt(2 * np.pi))
+        # pred_nll = pred_nll.mean()
+
+        recon = recon_nll + self.recon_mult*nn.functional.mse_loss(tr['x'], tr['x_recon'], reduction='mean')
+        recon_next = pred_nll + self.recon_mult*nn.functional.mse_loss(tr['x_next'], tr['x_pred'], reduction='mean')
+
+        # Encoding KL Divergence
+        log_var, mu = tr['log_var'], tr['mu']
+        kld = self.kld_anneal(epoch)*(-0.5 * torch.sum(1 + log_var - mu.pow(2) - log_var.exp(), dim=-1).mean())
+
+        # Transition model KLD
+        # https://stats.stackexchange.com/questions/7440/kl-divergence-between-two-univariate-gaussians
+        log_var_pred, mu_pred = tr['log_var_pred'], tr['mu_pred']
+        log_var_next, mu_next = tr['log_var_next'], tr['mu_next']
+        z_pred = tr['z_pred']
+        kld_trans = self.lam*(-0.5 * torch.sum(1 + log_var_next - (z_pred - mu_next).pow(2) - log_var_next.exp(), dim=-1).mean())
+
+        loss = recon + recon_next + kld + kld_trans
+        if torch.isnan(loss):
+            breakpoint()
+
+        # Make return dictionary for loss values
+        loss_return = {
+            r"$x$ Reconstruction Loss": recon.detach().cpu().item(),
+            r"$x_{next}$ Reconstruction Loss": recon_next.detach().cpu().item(),
+            r"$x$ NLL Reconstruction Loss": recon_nll.detach().cpu().item(),
+            r"$x_{next}$ NLL Reconstruction Loss": pred_nll.detach().cpu().item(),
+            "KLD": kld.detach().cpu().item(),
+            "Transition KLD": kld_trans.detach().cpu().item()
+        }
+        return loss, loss_return
 
 class ConvE2C(nn.Module):
     """
@@ -141,10 +275,12 @@ class ConvE2C(nn.Module):
         pred_length: Prediction horizon length
         conv_params: Dictionary containing CNN params for encoder/decoder
         device: Torch device object
+        uncertainty_output: Whether to use ChannelUncertainty decoder
     """
-    def __init__(self, enc_latent_size, latent_size, control_size, past_length, pred_length, conv_params, device):
+    def __init__(self, enc_latent_size, latent_size, control_size, past_length, pred_length, conv_params, device, output_uncertainty=False):
         super().__init__()
         self.device = device
+        self.output_uncertainty = output_uncertainty
 
         # Set number of hidden units
         self.enc_latent_size = enc_latent_size
@@ -159,7 +295,10 @@ class ConvE2C(nn.Module):
         # Encoder and decoder
         in_channels = conv_params['out_image_shape'][0]
         self.encoder = ConvEncoder(enc_latent_size, in_channels, conv_params)
-        self.decoder = ConvDecoder(latent_size, conv_params, self.encoder.out_dim_flat, self.encoder.out_shape)
+        if self.output_uncertainty:
+            self.decoder = ChannelUncertaintyConvDecoder(latent_size, conv_params, self.encoder.out_dim_flat, self.encoder.out_shape)
+        else:
+            self.decoder = ConvDecoder(latent_size, conv_params, self.encoder.out_dim_flat, self.encoder.out_shape)
 
         # VAE
         self.mu = nn.Linear(self.enc_latent_size, self.latent_size)
@@ -217,7 +356,7 @@ class ConvE2C(nn.Module):
         log_var_pred = torch.log(torch.diagonal(C, dim1=-2, dim2=-1) + 1e-8)             #   [batch, z]
         z_pred = self.reparameterize(mu_pred, log_var_pred)                              #   [batch, z]
 
-        return mu_pred, log_var_pred, z_pred, v.squeeze(-1), r.squeeze(-1)
+        return mu_pred, log_var_pred, z_pred
 
     def forward(self, x, x_next, u):
         # Encode current and next state
@@ -235,27 +374,44 @@ class ConvE2C(nn.Module):
         z_next = self.reparameterize(mu_next, log_var_next)
 
         # Transition model
-        mu_pred, log_var_pred, z_pred, v, r = self.transition(z, mu, log_var, u)
+        mu_pred, log_var_pred, z_pred = self.transition(z, mu, log_var, u)
 
         # Get reconstruction and prediction
-        x_recon = self.decoder(z)
-        x_next_recon = self.decoder(z_next)
-        x_pred = self.decoder(z_pred)
-
-        train_return = {
-            'x_recon': x_recon,
-            'mu': mu,
-            'log_var': log_var,
-            'x_next_recon': x_next_recon,
-            'mu_next': mu_next,
-            'log_var_next': log_var_next,
-            'x_pred': x_pred,
-            'z_pred': z_pred,
-            'mu_pred': mu_pred,
-            'log_var_pred': log_var_pred,
-            'v': v,
-            'r': r
-        }
+        if self.output_uncertainty:
+            x_recon, x_recon_uncertainty = self.decoder(z)
+            x_next_recon, x_next_recon_uncertainty = self.decoder(z_next)
+            x_pred, x_pred_recon_uncertainty = self.decoder(z_pred)
+            train_return = {
+                'x_recon': x_recon,
+                'mu': mu,
+                'log_var': log_var,
+                'x_next_recon': x_next_recon,
+                'mu_next': mu_next,
+                'log_var_next': log_var_next,
+                'x_pred': x_pred,
+                'z_pred': z_pred,
+                'mu_pred': mu_pred,
+                'log_var_pred': log_var_pred,
+                'x_recon_uncertainty': x_recon_uncertainty,
+                'x_next_recon_uncertainty': x_next_recon_uncertainty,
+                'x_pred_recon_uncertainty': x_pred_recon_uncertainty
+            }
+        else:
+            x_recon = self.decoder(z)
+            x_next_recon = self.decoder(z_next)
+            x_pred = self.decoder(z_pred)
+            train_return = {
+                'x_recon': x_recon,
+                'mu': mu,
+                'log_var': log_var,
+                'x_next_recon': x_next_recon,
+                'mu_next': mu_next,
+                'log_var_next': log_var_next,
+                'x_pred': x_pred,
+                'z_pred': z_pred,
+                'mu_pred': mu_pred,
+                'log_var_pred': log_var_pred,
+            }
 
         return train_return
 
@@ -301,11 +457,12 @@ class ConvE2C(nn.Module):
 
             return torch.concat(frames, dim=0).squeeze(0).to('cpu').permute(0, 2, 3, 1)
         
-    def sample(self, x, u):
+    def sample(self, x, u, return_all=False):
         """
         Predict the next image in a sequence
         """
         with torch.no_grad():
+            sample_return = {}
             # Encode current state
             encoded = self.encoder(x.to(self.device))
             flattened = encoded.view(encoded.size(0), -1)
@@ -316,7 +473,20 @@ class ConvE2C(nn.Module):
             z = self.reparameterize(mu, log_var)
 
             # Predict transition and decode current pred and next pred
-            mu_pred, log_var_pred, z_pred, _, _ = self.transition(z, mu, log_var, u)
-            x_recon = self.decoder(z).squeeze(0)
-            x_pred = self.decoder(z_pred).squeeze(0)
-            return x_recon, x_pred
+            mu_pred, log_var_pred, z_pred = self.transition(z, mu, log_var, u)
+            sample_return['mu_pred'] = mu_pred
+            sample_return['log_var_pred'] = log_var_pred
+            sample_return['z_pred'] = z_pred
+            if self.output_uncertainty:
+                x_recon, x_recon_uncertainty = self.decoder(z)
+                x_pred, x_pred_recon_uncertainty = self.decoder(z_pred)
+                sample_return['x_recon_uncertainty'] = x_recon_uncertainty
+                sample_return['x_pred_recon_uncertainty'] = x_pred_recon_uncertainty
+            else:
+                x_recon = self.decoder(z)
+                x_pred = self.decoder(z_pred)
+
+            if return_all and self.output_uncertainty:
+                return x_recon.squeeze(0), x_pred.squeeze(0), sample_return
+            else:
+                return x_recon.squeeze(0), x_pred.squeeze(0)
