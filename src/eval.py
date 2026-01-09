@@ -58,6 +58,11 @@ class Plotter():
         # Initialize figure if first plot
         if self.fig is None:
             self.fig, self.axs = plt.subplots(len(self.plot_history), 1, figsize=(8, len(self.plot_history)*3))
+
+            # Ensure self.axs is a list
+            if len(self.plot_history) == 1:
+                self.axs = [self.axs]
+
             for ax, key in zip(self.axs, self.plot_history.keys()):
                 ax.set_title(key)
                 ax.set_xlabel("Step")

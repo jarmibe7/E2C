@@ -54,7 +54,7 @@ def main():
     config['vae']['out_image_shape'] = dataset.img_shape
     config['trans']['control_size'] = dataset.U.shape[-1]
 
-    # Train on training dataet
+    # Create or load model
     model = ConvE2C(
         enc_latent_size=config['vae']['enc_latent_size'],
         latent_size=config['trans']['latent_size'],
