@@ -221,6 +221,8 @@ class ConvE2C(nn.Module):
             mu = self.mu(flattened)
             log_var = self.log_var(flattened)
             z = self.reparameterize(mu, log_var)
+            sample_return['mu'] = mu
+            sample_return['log_var'] = log_var
 
             # Predict transition and decode current pred and next pred
             mu_pred, log_var_pred, z_pred = self.transition(z, mu, log_var, u)

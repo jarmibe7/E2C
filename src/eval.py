@@ -15,6 +15,7 @@ from torchmetrics import StructuralSimilarityIndexMeasure as ssim
 import lpips
 
 from src.conv_e2c import ConvE2C
+from src.rssm_e2c import RSSME2C
 from src.dataset import E2CDataset
 from src.utils import set_seed, anim_frames, shoulder_mass, excess_kurtosis, central_mass_ratio
 
@@ -308,12 +309,15 @@ class Evaluator():
             x, x_next, u = x.to(self.device), x_next.to(self.device), u.to(self.device)
             x = x.reshape(x.shape[0], -1, x.shape[-2], x.shape[-1])
             x_next = torch.hstack([x_next for i in range(self.model.past_length)]).to(self.device)
-            # Encode current and next state
-            enc_out = self.model.encoder(x)
+            # # Encode current and next state
+            # enc_out = self.model.encoder(x)
 
-            # Get record latent space
-            mu = self.model.mu(enc_out)
-            log_var = self.model.log_var(enc_out)
+            # # Get record latent space
+            # mu = self.model.mu(enc_out)
+            # log_var = self.model.log_var(enc_out)
+            x_recon, x_pred, sample_return = self.model.sample(x, u, return_all=True)
+            mu, log_var = sample_return['mu'], sample_return['log_var']
+
             latent_mean.append(mu)
             latent_var.append(torch.exp(log_var))
 

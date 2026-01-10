@@ -16,6 +16,7 @@ import copy
 import traceback
 
 from src.conv_e2c import ConvE2C
+from src.rssm_e2c import RSSME2C
 from src.dataset import E2CDataset
 from src.utils import set_seed, anim_frames, format_time
 from src.policy import ConvPolicy
@@ -35,7 +36,7 @@ def main():
     print('*** STARTING ***\n')
     # Load config, make run path, and choose torch device
     # ---------- CONFIG HERE ----------
-    config_name = 'e2c_reacher_v1'
+    config_name = 'rssm_reacher_v0'
     # ---------- CONFIG HERE ----------
     with open(CONFIG_PATH / f'{config_name}.yaml', "r") as f:
         config = yaml.safe_load(f)
@@ -55,7 +56,20 @@ def main():
     config['trans']['control_size'] = dataset.U.shape[-1]
 
     # Create or load model
-    model = ConvE2C(
+    if 'rssm' in config_name:
+        model = RSSME2C(
+            enc_latent_size=config['vae']['enc_latent_size'],
+            stochastic_size=config['trans']['stochastic_size'],
+            deterministic_size=config['trans']['deterministic_size'],
+            control_size=config['trans']['control_size'],
+            past_length=config['trans']['past_length'],
+            pred_length=config['trans']['pred_length'],
+            conv_params=config['vae'],
+            device=device,
+            output_uncertainty=(config['loss']['loss_type'] == 'uncertainty')
+        )
+    else:
+        model = ConvE2C(
         enc_latent_size=config['vae']['enc_latent_size'],
         latent_size=config['trans']['latent_size'],
         control_size=config['trans']['control_size'],
