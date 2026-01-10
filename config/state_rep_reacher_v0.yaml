@@ -12,10 +12,10 @@ loss:
   recon_mult: !!float 1.0           # MSE Reconstruction loss multiplier
 # Training hyperparams
 train:
-  dataset: reacher_5k      # Which dataset to use for training (in data/)
-  alpha: !!float 1e-3               # Learning rate
+  dataset: reacher_500k      # Which dataset to use for training (in data/)
+  alpha: !!float 1e-4               # Learning rate
   weight_decay: !!float 1e-4        # Adam optimizer weight decay
-  batch_size: 32
+  batch_size: 128
   num_epochs: 20
   device: cuda:2             # cpu | cuda:0 | cuda:1 | cuda:2
   render: False              # Whether to render live interactive training plot, or simply save after training is finished

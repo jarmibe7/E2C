@@ -4,6 +4,7 @@ A pretrained state estimation model that infers states from gym.env images
 Authors: Jared Berry, Ayush Gaggar
 """
 import torch
+import math
 from torch import nn
 import torch.nn.functional as F
 from tqdm import tqdm
@@ -17,8 +18,9 @@ import traceback
 import json
 
 from src.eval import Plotter
-from src.utils import set_seed, anim_frames, format_time
+from src.utils import set_seed, wrapped_angle_error, format_time
 
+set_seed(42)
 
 PROJECT_ROOT = Path(__file__).parent.parent
 DATA_PATH = PROJECT_ROOT / "data"
@@ -54,8 +56,8 @@ class StateRepresentationModel(nn.Module):
             nn.ReLU(),
             nn.Conv2d(32, 32, kernel_size=k, stride=s, padding=p),
             nn.ReLU(),
-            nn.Conv2d(32, 32, kernel_size=k, stride=s, padding=p),
-            nn.ReLU(),
+            # nn.Conv2d(32, 32, kernel_size=k, stride=s, padding=p),
+            # nn.ReLU(),
         )
 
         with torch.no_grad():
@@ -71,6 +73,8 @@ class StateRepresentationModel(nn.Module):
             nn.Linear(256, 128),
             nn.ReLU(),
             nn.Linear(128, self.state_size),
+            # nn.ReLU(),
+            # nn.Linear(64, self.state_size),
         )
 
     def forward(self, x):
@@ -92,8 +96,21 @@ class StateRepresentationLoss(nn.Module):
         self.recon_mult = loss_params['recon_mult']
 
     def forward(self, tr):
-        # Reconstruction loss
-        loss = self.recon_mult*nn.functional.mse_loss(tr['state_true'], tr['state_pred'], reduction='mean')
+        state_pred = tr['state_pred']
+        state_true = tr['state_true']
+
+        # Wrap first angle
+        pred_angle = state_pred[:, 0]
+        true_angle = state_true[:, 0]
+        wrapped = wrapped_angle_error(pred_angle, true_angle)
+
+        # Replace raw difference with wrapped for loss
+        loss_angle = wrapped.pow(2).mean()
+
+        # If you also regress other dimensions
+        loss_rest  = F.mse_loss(state_pred[:, 1:], state_true[:, 1:])
+
+        loss = loss_angle + loss_rest
 
         # Make return dictionary for loss values
         loss_return = {
@@ -112,7 +129,7 @@ class StateRepesentationDataset():
         data = torch.load(dataset_dir / f"{config['train']['dataset']}_state_from_image.pt")
         self.img = data["images"].permute(0, 3, 1, 2)  # Shape: [num_samples, C, H, W]
         self.img_shape = (self.img.shape[1:])
-        self.state = data["states"]
+        self.state = data["states"]#[:, :2]      # TODO: Only joint angles for now
         self.state_size = self.state.shape[1]
 
     def __len__(self):
@@ -208,9 +225,17 @@ class StateRepresentationPretrainer():
                 out = self.model(img)
                 state_pred = out["state_pred"]
 
-                # Aggregate losses
-                mse = F.mse_loss(state_pred, state, reduction="sum")
-                mae = F.l1_loss(state_pred, state, reduction="sum")
+                # Wrap first angle
+
+                angle_diff = wrapped_angle_error(state_pred[:, 0], state[:, 0])
+
+                # Replace first dim with wrapped difference for MSE/MAE calc
+                diff = state_pred - state
+                diff[:, 0] = angle_diff
+
+                # Aggregate losses using wrapped difference
+                mse = (diff ** 2).sum()
+                mae = diff.abs().sum()
 
                 mse_sum += mse.item()
                 mae_sum += mae.item()
@@ -223,15 +248,18 @@ class StateRepresentationPretrainer():
         preds = torch.cat(all_preds, dim=0)
         targets = torch.cat(all_targets, dim=0)
 
+        # Per-dimension MSE
+        per_dim_mse = torch.cat([
+            (wrapped_angle_error(preds[:, 0], targets[:, 0]).unsqueeze(1) ** 2),
+            (preds[:, 1:] - targets[:, 1:]) ** 2
+        ], dim=1).mean(dim=0)
+
         # Mean metrics
         mse_mean = mse_sum / (num_samples * targets.shape[1])
         rmse = mse_mean ** 0.5
         mae_mean = mae_sum / (num_samples * targets.shape[1])
 
-        # Per-dimension MSE
-        per_dim_mse = ((preds - targets) ** 2).mean(dim=0)
-
-        # Explained variance
+        # Explained variance per dimension
         var_targets = targets.var(dim=0, unbiased=False)
         explained_variance = 1.0 - per_dim_mse / (var_targets + 1e-8)
         explained_variance_mean = explained_variance.mean().item()
