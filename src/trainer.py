@@ -185,6 +185,7 @@ class WorldModelPretrainer(BaseTrainer):
                 x, x_next, u = x.to(self.device), x_next.to(self.device), u.to(self.device)
                 x = x.reshape(x.shape[0], -1, *self.out_image_shape[1:])    # Stack obs history in channel dim
                 x_next = torch.hstack([x_next for i in range(self.model.past_length)]).to(self.device)
+                breakpoint()
 
                 # Forward pass
                 train_return = self.model(x, x_next, u)

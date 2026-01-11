@@ -12,8 +12,8 @@ vae:
 loss:
   loss_type: uncertainty         # Loss type to use: default | uncertainty
   recon_mult: !!float 0.0           # MSE Reconstruction loss multiplier
-  beta: !!float 1e-4                # Standard Gaussian KL multiplier
-  lambda: !!float 1e-4              # Transition KL multiplier
+  beta: !!float 1e-5                # Standard Gaussian KL multiplier
+  lambda: !!float 1e-5              # Transition KL multiplier
   kld_anneal_mode: linear           # Beta annealing mode: const | linear
 # Transition model hyperparams
 trans:
@@ -21,13 +21,13 @@ trans:
   deterministic_size: 4             # Deterministic state model latent dim
   past_length: 3                    # Length of image history passed into encoder
   pred_length: 1                    # Length of image prediction horizon
-  alpha: !!float 1e-4               # Learning rate
+  alpha: !!float 1e-5               # Learning rate
   weight_decay: !!float 1e-4        # Adam optimizer weight decay
 # Training settings
 train:
   dataset: reacher_500k      # Which dataset to use for training (in data/)
   batch_size: 32
-  num_epochs: 20
+  num_epochs: 30
   device: cuda:2             # cpu | cuda:0 | cuda:1 | cuda:2
   render: False              # Whether to render live interactive training plot, or simply save after training is finished
   save: True                 # Whether to save final trained model and training plot

@@ -100,20 +100,11 @@ class RSSME2C(nn.Module):
         z_next = self.reparameterize(mu, log_var)
 
         return h_next, z_next, mu, log_var
-    
-    def transition(self, z, mu, log_var, u, h=None):
-        """
-        Perform a single state transition using the RSSM
-        """
-        if h is None:
-            h = torch.zeros(z.size(0), self.deterministic_size, device=z.device)
-        h_next, z_next, mu_next, log_var_next = self.rssm_step(h, z, u)
-        return mu_next, log_var_next, z_next, h_next
 
     def forward(self, x, x_next, u):
         batch_size = x.size(0)
 
-        # Initialize deterministic state h to zeros
+        # Initialize current deterministic state h to zeros
         h = torch.zeros(batch_size, self.deterministic_size, device=self.device)
 
         # Encode current and next observations
@@ -124,7 +115,7 @@ class RSSME2C(nn.Module):
         post_in = torch.cat([enc, h], dim=-1)            # [batch, enc_latent + deterministic]
         post_stats = self.post(post_in)                  # [batch, 2*stochastic]
         mu, log_var = post_stats.chunk(2, dim=-1)
-        z = self.reparameterize(mu, log_var)
+        z = self.reparameterize(mu, log_var)        # Current stochastic latent state
 
         # RSSM prior rollout (predict next latent)
         h_next, z_pred, mu_pred, log_var_pred = self.rssm_step(h, z, u)
@@ -133,7 +124,7 @@ class RSSME2C(nn.Module):
         post_next_in = torch.cat([enc_next, h_next], dim=-1)
         post_next_stats = self.post(post_next_in)
         mu_next, log_var_next = post_next_stats.chunk(2, dim=-1)
-        z_next = self.reparameterize(mu_next, log_var_next)
+        z_next = self.reparameterize(mu_next, log_var_next)     # Next stochastic latent state
 
         # Decode reconstructions and predictions
         if self.output_uncertainty:

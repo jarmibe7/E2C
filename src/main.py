@@ -36,7 +36,7 @@ def main():
     print('*** STARTING ***\n')
     # Load config, make run path, and choose torch device
     # ---------- CONFIG HERE ----------
-    config_name = 'rssm_reacher_v0'
+    config_name = 'e2c_reacher_v4'
     # ---------- CONFIG HERE ----------
     with open(CONFIG_PATH / f'{config_name}.yaml', "r") as f:
         config = yaml.safe_load(f)

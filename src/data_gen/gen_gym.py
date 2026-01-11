@@ -24,7 +24,7 @@ from src.utils import set_seed, format_time
 
 # Parameters for dataset
 env_name = 'reacher'                                       # Gym environment name
-dataset_size = int(5e3)                                     # Number of samples: (img, next_img, control) tuple
+dataset_size = int(1e4)                                     # Number of samples: (img, next_img, control) tuple
 OUTPUT_NAME = env_name + f'_{dataset_size // 1000}k'        # Output name of dataset
 image_shape = (64, 64, 3)                                   # Downsampled image shape
 past_length = 3                                             # Number of previous observations to use for training
