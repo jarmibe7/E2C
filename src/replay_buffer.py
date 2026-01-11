@@ -8,7 +8,7 @@ class ReplayBuffer:
     Simple ring buffer ReplayBuffer class, with random sampling.
 
     Args:
-        obs_shape: Shape of image obs is (past_length*C, H, W)
+        img_shape: Shape of image obs is (past_length*C, H, W)
         control_dim: Dimension of control vector
         capacity: How many samples to hold at once
         config: Config dictionary

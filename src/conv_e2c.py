@@ -43,7 +43,7 @@ class ConvE2C(nn.Module):
         self.dummy_u = torch.zeros((1, self.control_size)).to(self.device)
 
         # Encoder and decoder
-        in_channels = conv_params['out_image_shape'][0]
+        in_channels = conv_params['in_image_shape'][0]
         self.encoder = ConvEncoder(enc_latent_size, in_channels, conv_params)
         if self.output_uncertainty:
             self.decoder = ChannelUncertaintyConvDecoder(latent_size, conv_params, self.encoder.out_dim_flat, self.encoder.out_shape)
@@ -238,7 +238,7 @@ class ConvE2C(nn.Module):
                 x_recon = self.decoder(z)
                 x_pred = self.decoder(z_pred)
 
-            if return_all and self.output_uncertainty:
+            if return_all:
                 return x_recon.squeeze(0), x_pred.squeeze(0), sample_return
             else:
                 return x_recon.squeeze(0), x_pred.squeeze(0)

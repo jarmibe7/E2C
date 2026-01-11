@@ -156,7 +156,7 @@ class Evaluator():
                 break
             x, x_next, u = x.to(self.device), x_next.to(self.device), u.to(self.device)
             x = x.reshape(x.shape[0], -1, x.shape[-2], x.shape[-1])
-            x_next = torch.hstack([x_next for i in range(self.model.past_length)]).to(self.device)
+            # x_next = torch.hstack([x_next for i in range(self.model.past_length)]).to(self.device)
             x_recon, x_pred, sample_return = self.model.sample(x, u, return_all=True)
             x_list.append(x[0]); x_next_list.append(x_next[0])
             x_recon_list.append(x_recon); x_pred_list.append(x_pred)
@@ -176,12 +176,12 @@ class Evaluator():
         def update_plot(frame):
             x, x_next = x_list[frame], x_next_list[frame]
             x_recon, x_pred = x_recon_list[frame], x_pred_list[frame]
-            x_pred_uncertainty = x_pred_uncertainty_list[frame]
             ims[0].set_data(x_recon[:3].permute(1, 2, 0).detach().cpu().numpy())
             ims[1].set_data(x[:3].permute(1, 2, 0).detach().cpu().numpy())
             ims[2].set_data(x_pred[:3].permute(1, 2, 0).detach().cpu().numpy())
             ims[3].set_data(x_next[:3].permute(1, 2, 0).detach().cpu().numpy())
             if self.model.output_uncertainty: 
+                x_pred_uncertainty = x_pred_uncertainty_list[frame]
                 ax[0, 1].set_title(f"Pred: Uncertainty={x_pred_uncertainty:.4f}")
 
             # plt.show()
@@ -465,7 +465,7 @@ if __name__ == "__main__":
     train_size = int(len(dataset) * config['train']['train_ratio'])
     test_size = len(dataset) - train_size
     train_dataset, test_dataset = torch.utils.data.random_split(dataset, [train_size, test_size])
-    config['vae']['out_image_shape'] = dataset.img_shape
+    config['vae']['in_image_shape'] = dataset.img_shape
     config['trans']['control_size'] = dataset.U.shape[-1]
     model = ConvE2C(
         enc_latent_size=config['vae']['enc_latent_size'],

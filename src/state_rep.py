@@ -43,7 +43,7 @@ class StateRepresentationModel(nn.Module):
         self.state_size = state_size    # Output size
         
         # CNN parameters
-        in_channels = conv_params['out_image_shape'][0]
+        in_channels = conv_params['in_image_shape'][0]
         k = conv_params['kernel_size']
         s = conv_params['stride']
         p = conv_params['pad']
@@ -61,7 +61,7 @@ class StateRepresentationModel(nn.Module):
         )
 
         with torch.no_grad():
-            x = torch.zeros(1, in_channels, conv_params['out_image_shape'][1], conv_params['out_image_shape'][2])
+            x = torch.zeros(1, in_channels, conv_params['in_image_shape'][1], conv_params['in_image_shape'][2])
             enc_out = self.cnn(x)
             self.out_dim_flat = enc_out.view(enc_out.size(0), -1).shape[1] # Keep batch dim, determine number of elements
             self.out_shape = enc_out.shape
@@ -356,7 +356,7 @@ if __name__ == "__main__":
     # Make E2CDataset object
     print(f"Loading dataset: {config['train']['dataset']}\n")
     dataset = StateRepesentationDataset(config)
-    config['conv']['out_image_shape'] = dataset.img_shape
+    config['conv']['in_image_shape'] = dataset.img_shape
     config['train']['state_size'] = dataset.state_size
 
     # Create or load model

@@ -44,6 +44,7 @@ class BaseTrainer():
         # Save training params
         self.num_epochs = config['train']['num_epochs']
         self.batch_size = config['train']['batch_size']
+        self.in_image_shape = config['vae']['in_image_shape']
         self.out_image_shape = config['vae']['out_image_shape']
         self.device = device
         self.config = config
@@ -183,13 +184,12 @@ class WorldModelPretrainer(BaseTrainer):
             for x, x_next, u in train_loader:
                 # Send training data to GPU
                 x, x_next, u = x.to(self.device), x_next.to(self.device), u.to(self.device)
-                x = x.reshape(x.shape[0], -1, *self.out_image_shape[1:])    # Stack obs history in channel dim
-                x_next = torch.hstack([x_next for i in range(self.model.past_length)]).to(self.device)
-                breakpoint()
+                x = x.reshape(x.shape[0], -1, *self.in_image_shape[1:])    # Stack obs history in channel dim
+                x_next_enc = torch.hstack([x_next for i in range(self.model.past_length)]).to(self.device)  # Need to stack for encoding
 
                 # Forward pass
-                train_return = self.model(x, x_next, u)
-                train_return['x'] = x
+                train_return = self.model(x, x_next_enc, u)
+                train_return['x'] = x[:, -self.out_image_shape[0]:] # Only compute loss with current frame, not history
                 train_return['x_next'] = x_next
 
                 # Compute loss and backprop
@@ -241,7 +241,7 @@ class ClosedLoopRandomTrainer(BaseTrainer):
 
         # Initialize replay buffer
         self.replay_buffer = ReplayBuffer(
-            self.out_image_shape, 
+            self.in_image_shape, 
             model.control_size, 
             config['closed_loop']['buffer_capacity'],
             device,
@@ -305,7 +305,7 @@ class ClosedLoopRandomTrainer(BaseTrainer):
             # Unload batch
             x, u, r, x_next, done  = self.replay_buffer.sample(self.batch_size)
             x, x_next, u = x.to(self.device), x_next.to(self.device), u.to(self.device)
-            x = x.reshape(x.shape[0], -1, *self.out_image_shape[1:])    # Stack obs history in channel dim
+            x = x.reshape(x.shape[0], -1, *self.in_image_shape[1:])    # Stack obs history in channel dim
             x_next = torch.hstack([x_next for i in range(self.model.past_length)]).to(self.device)
 
             # Forward pass
@@ -383,7 +383,7 @@ class ClosedLoopPolicyTrainer(BaseTrainer):
 
         # Initialize replay buffer
         self.replay_buffer = ReplayBuffer(
-            self.out_image_shape, 
+            self.in_image_shape, 
             model.control_size, 
             config['closed_loop']['buffer_capacity'],
             device,
@@ -455,7 +455,7 @@ class ClosedLoopPolicyTrainer(BaseTrainer):
             # Unload batch
             x, u, r, x_next, done  = batch
             x, x_next, u = x.to(self.device), x_next.to(self.device), u.to(self.device)
-            x = x.reshape(x.shape[0], -1, *self.out_image_shape[1:])    # Stack obs history in channel dim
+            x = x.reshape(x.shape[0], -1, *self.in_image_shape[1:])    # Stack obs history in channel dim
             x_next = torch.hstack([x_next for i in range(self.model.past_length)]).to(self.device)
 
             # Forward pass
@@ -478,7 +478,7 @@ class ClosedLoopPolicyTrainer(BaseTrainer):
             total_model_loss += model_loss.item() * x.size(0)   # Aggregate total epoch loss
 
             # Forward pass through policy
-            C = self.out_image_shape[0] // self.past_length
+            C = self.out_image_shape[0]
             current_frame = x[:, -C:, :, :]  # Take only current frame
             pred_action = self.policy(current_frame)
 
@@ -502,7 +502,7 @@ class ClosedLoopPolicyTrainer(BaseTrainer):
         # total_policy_loss = 0.0
         # for i, batch in enumerate(batches):
         #     x, u, r, x_next, done = batch
-        #     x = x.to(self.device).reshape(x.shape[0], -1, *self.out_image_shape[1:])
+        #     x = x.to(self.device).reshape(x.shape[0], -1, *self.in_image_shape[1:])
 
         #     # Forward pass through policy
         #     pred_action = self.policy(x)  
@@ -569,7 +569,7 @@ class ClosedLoopUncertaintyTrainer(BaseTrainer):
 
         # Initialize replay buffer
         self.replay_buffer = ReplayBuffer(
-            self.out_image_shape, 
+            self.in_image_shape, 
             model.control_size, 
             config['closed_loop']['buffer_capacity'],
             device,
@@ -634,7 +634,7 @@ class ClosedLoopUncertaintyTrainer(BaseTrainer):
             # Unload batch
             x, u, r, x_next, done  = self.replay_buffer.sample(self.batch_size)
             x, x_next, u = x.to(self.device), x_next.to(self.device), u.to(self.device)
-            x = x.reshape(x.shape[0], -1, *self.out_image_shape[1:])    # Stack obs history in channel dim
+            x = x.reshape(x.shape[0], -1, *self.in_image_shape[1:])    # Stack obs history in channel dim
             x_next = torch.hstack([x_next for i in range(self.model.past_length)]).to(self.device)
 
             # Forward pass

@@ -36,7 +36,7 @@ def main():
     print('*** STARTING ***\n')
     # Load config, make run path, and choose torch device
     # ---------- CONFIG HERE ----------
-    config_name = 'e2c_reacher_v4'
+    config_name = 'e2c_reacher_v0'
     # ---------- CONFIG HERE ----------
     with open(CONFIG_PATH / f'{config_name}.yaml', "r") as f:
         config = yaml.safe_load(f)
@@ -52,7 +52,9 @@ def main():
     # Make E2CDataset object
     print(f"Loading dataset: {config['train']['dataset']}\n")
     dataset = E2CDataset(config)
-    config['vae']['out_image_shape'] = dataset.img_shape
+    config['vae']['in_image_shape'] = dataset.img_shape
+    num_out_channels = config['vae']['in_image_shape'][0] // config['trans']['past_length']    # Output only single frame
+    config['vae']['out_image_shape'] = (num_out_channels, *config['vae']['in_image_shape'][1:])     
     config['trans']['control_size'] = dataset.U.shape[-1]
 
     # Create or load model
@@ -99,7 +101,7 @@ def main():
         policy_type = config['closed_loop'].get('policy', None)
         if policy_type == 'conv':
             policy = ConvPolicy(config['trans']['control_size'], 
-                                config['vae']['out_image_shape'][0] // config['trans']['past_length'],
+                                config['vae']['in_image_shape'][0] // config['trans']['past_length'],
                                 config['vae'])
             trainer = ClosedLoopPolicyTrainer(dataset, model, config, device, policy)
         elif policy_type == 'random':
