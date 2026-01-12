@@ -1,5 +1,5 @@
 #
-# Config file reacher WorldModelPretrainer
+# Config file reacher E2CPretrainer
 #
 # Encoder/Decoder
 vae:

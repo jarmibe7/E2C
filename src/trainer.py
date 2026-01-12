@@ -152,9 +152,9 @@ class BaseTrainer():
             with open(yaml_name, 'w') as f:
                 yaml.dump(config_save, f, default_flow_style=False)
 
-class WorldModelPretrainer(BaseTrainer):
+class E2CPretrainer(BaseTrainer):
     """
-    Trainer for pretraining world model without active learning
+    Trainer for pretraining E2C without active learning
 
     Args:
         dataset: Torch dataset object that can be split into train/test sets
@@ -185,10 +185,72 @@ class WorldModelPretrainer(BaseTrainer):
                 # Send training data to GPU
                 x, x_next, u = x.to(self.device), x_next.to(self.device), u.to(self.device)
                 x = x.reshape(x.shape[0], -1, *self.in_image_shape[1:])    # Stack obs history in channel dim
+                x_next = x_next[:, 0]       # pred_length == 1 only for E2C
+                u = u[:, 0]
                 x_next_enc = torch.hstack([x_next for i in range(self.model.past_length)]).to(self.device)  # Need to stack for encoding
 
                 # Forward pass
                 train_return = self.model(x, x_next_enc, u)
+                train_return['x'] = x[:, -self.out_image_shape[0]:] # Only compute loss with current frame, not history
+                train_return['x_next'] = x_next
+
+                # Compute loss and backprop
+                loss, loss_return = self.model_criterion(train_return, epoch)
+                self.plotter.log(loss_return)
+                self.model_optimizer.zero_grad()
+                loss.backward()
+                self.model_optimizer.step()
+
+                if torch.isnan(loss):
+                    print("NaN loss encountered, stopping training.")
+                    break
+
+                total_loss += loss.item() * x.size(0)   # Aggregate total epoch loss
+
+            # Display average loss for the epoch
+            epoch_loss = total_loss / len(train_loader.dataset)
+            pbar.set_postfix({
+                'Epoch': epoch+1,
+                'Epoch Loss': f"{epoch_loss:.4f}"})
+
+        pbar.close()
+
+    def learn(self):
+        self.train()
+
+class RSSMPretrainer(BaseTrainer):
+    """
+    Trainer for pretraining world model with RSSM without active learning
+
+    Args:
+        dataset: Torch dataset object that can be split into train/test sets
+        model: A world model class instance for training
+        config: Config dictionary with required params
+        device: Torch device object
+    """
+    def __init__(self, dataset, model, config, device):
+        super().__init__(dataset, model, config, device)
+
+    def train(self):
+        # Create Dataset and DataLoader to handle batching of training data
+        train_loader = torch.utils.data.DataLoader(
+            self.dataset, batch_size=self.batch_size, shuffle=True
+        )
+
+        # Training loop
+        print('\nBeginning Training:')
+        epoch_loss = 0.0
+        pbar = tqdm(range(self.num_epochs), desc="Training")
+        for epoch in pbar:
+            total_loss = 0.0
+
+            for x, x_next, u in train_loader:
+                # Send training data to GPU
+                x, x_next, u = x.to(self.device), x_next.to(self.device), u.to(self.device)
+                x = x.reshape(x.shape[0], -1, *self.in_image_shape[1:])    # Stack obs history in channel dim
+
+                # Forward pass
+                train_return = self.model(x, x_next, u)
                 train_return['x'] = x[:, -self.out_image_shape[0]:] # Only compute loss with current frame, not history
                 train_return['x_next'] = x_next
 

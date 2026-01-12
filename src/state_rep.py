@@ -356,7 +356,7 @@ if __name__ == "__main__":
     # Make E2CDataset object
     print(f"Loading dataset: {config['train']['dataset']}\n")
     dataset = StateRepesentationDataset(config)
-    config['conv']['in_image_shape'] = dataset.img_shape
+    config['conv']['in_image_shape'] = dataset.in_img_shape
     config['train']['state_size'] = dataset.state_size
 
     # Create or load model

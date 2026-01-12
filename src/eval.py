@@ -157,6 +157,8 @@ class Evaluator():
             x, x_next, u = x.to(self.device), x_next.to(self.device), u.to(self.device)
             x = x.reshape(x.shape[0], -1, x.shape[-2], x.shape[-1])
             # x_next = torch.hstack([x_next for i in range(self.model.past_length)]).to(self.device)
+            x_next = x_next[:, 0]       # TODO: Only eval on first transition?
+            u = u[:, 0]
             x_recon, x_pred, sample_return = self.model.sample(x, u, return_all=True)
             x_list.append(x[0]); x_next_list.append(x_next[0])
             x_recon_list.append(x_recon); x_pred_list.append(x_pred)
@@ -223,7 +225,9 @@ class Evaluator():
                     break
             x, x_next, u = x.to(self.device), x_next.to(self.device), u.to(self.device)
             x = x.reshape(x.shape[0], -1, x.shape[-2], x.shape[-1])
-            x_next = torch.hstack([x_next for _ in range(self.model.past_length)]).to(self.device)
+            # x_next = torch.hstack([x_next for _ in range(self.model.past_length)]).to(self.device)
+            x_next = x_next[:, 0]       # TODO: Only eval on first transition?
+            u = u[:, 0]
 
             x_recon, x_pred, sample_return = self.model.sample(x, u, return_all=True)
             mu_pred = sample_return['mu_pred']
@@ -308,13 +312,15 @@ class Evaluator():
         for x, x_next, u in tqdm(test_loader):
             x, x_next, u = x.to(self.device), x_next.to(self.device), u.to(self.device)
             x = x.reshape(x.shape[0], -1, x.shape[-2], x.shape[-1])
-            x_next = torch.hstack([x_next for i in range(self.model.past_length)]).to(self.device)
+            # x_next = torch.hstack([x_next for i in range(self.model.past_length)]).to(self.device)
             # # Encode current and next state
             # enc_out = self.model.encoder(x)
 
             # # Get record latent space
             # mu = self.model.mu(enc_out)
             # log_var = self.model.log_var(enc_out)
+            x_next = x_next[:, 0]       # TODO: Only eval on first transition?
+            u = u[:, 0]
             x_recon, x_pred, sample_return = self.model.sample(x, u, return_all=True)
             mu, log_var = sample_return['mu'], sample_return['log_var']
 
@@ -465,7 +471,7 @@ if __name__ == "__main__":
     train_size = int(len(dataset) * config['train']['train_ratio'])
     test_size = len(dataset) - train_size
     train_dataset, test_dataset = torch.utils.data.random_split(dataset, [train_size, test_size])
-    config['vae']['in_image_shape'] = dataset.img_shape
+    config['vae']['in_image_shape'] = dataset.in_img_shape
     config['trans']['control_size'] = dataset.U.shape[-1]
     model = ConvE2C(
         enc_latent_size=config['vae']['enc_latent_size'],

@@ -38,6 +38,7 @@ class ConvE2C(nn.Module):
         self.control_size = control_size
         self.past_length = past_length
         self.pred_length = pred_length
+        assert self.pred_length == 1, 'pred_length > 1 not supported for regular E2C'
 
         # Dummy zero control vector
         self.dummy_u = torch.zeros((1, self.control_size)).to(self.device)

@@ -1,5 +1,5 @@
 #
-# Config file reacher WorldModelPretrainer with uncertainty loss and RSSM transition model
+# Config file reacher E2CPretrainer with uncertainty loss and RSSM transition model
 #
 # Encoder/Decoder
 vae:
@@ -20,12 +20,12 @@ trans:
   stochastic_size: 4                # Stochastic state model latent dim
   deterministic_size: 4             # Deterministic state model latent dim
   past_length: 3                    # Length of image history passed into encoder
-  pred_length: 1                    # Length of image prediction horizon
+  pred_length: 3                    # Length of image prediction horizon
   alpha: !!float 1e-5               # Learning rate
   weight_decay: !!float 1e-4        # Adam optimizer weight decay
 # Training settings
 train:
-  dataset: reacher_500k      # Which dataset to use for training (in data/)
+  dataset: reacher_1k      # Which dataset to use for training (in data/)
   batch_size: 32
   num_epochs: 30
   device: cuda:2             # cpu | cuda:0 | cuda:1 | cuda:2

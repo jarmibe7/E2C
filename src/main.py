@@ -20,7 +20,7 @@ from src.rssm_e2c import RSSME2C
 from src.dataset import E2CDataset
 from src.utils import set_seed, anim_frames, format_time
 from src.policy import ConvPolicy
-from src.trainer import WorldModelPretrainer, ClosedLoopPolicyTrainer, ClosedLoopUncertaintyTrainer, ClosedLoopRandomTrainer
+from src.trainer import E2CPretrainer, RSSMPretrainer, ClosedLoopPolicyTrainer, ClosedLoopUncertaintyTrainer, ClosedLoopRandomTrainer
 
 # Set random seed globally
 set_seed(42)
@@ -36,7 +36,7 @@ def main():
     print('*** STARTING ***\n')
     # Load config, make run path, and choose torch device
     # ---------- CONFIG HERE ----------
-    config_name = 'e2c_reacher_v0'
+    config_name = 'rssm_reacher_v0'
     # ---------- CONFIG HERE ----------
     with open(CONFIG_PATH / f'{config_name}.yaml', "r") as f:
         config = yaml.safe_load(f)
@@ -52,7 +52,7 @@ def main():
     # Make E2CDataset object
     print(f"Loading dataset: {config['train']['dataset']}\n")
     dataset = E2CDataset(config)
-    config['vae']['in_image_shape'] = dataset.img_shape
+    config['vae']['in_image_shape'] = dataset.in_img_shape
     num_out_channels = config['vae']['in_image_shape'][0] // config['trans']['past_length']    # Output only single frame
     config['vae']['out_image_shape'] = (num_out_channels, *config['vae']['in_image_shape'][1:])     
     config['trans']['control_size'] = dataset.U.shape[-1]
@@ -111,7 +111,10 @@ def main():
         else: 
             raise NotImplementedError(f'Policy type "{policy_type}" not supported!')
     else:
-        trainer = WorldModelPretrainer(dataset, model, config, device)
+        if 'rssm' in config_name:
+            trainer = RSSMPretrainer(dataset, model, config, device)
+        else:
+            trainer = E2CPretrainer(dataset, model, config, device)
 
     # Train, save, and evaluate
     try:
