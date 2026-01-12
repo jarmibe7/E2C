@@ -8,7 +8,7 @@ conv:
   pad: 1
 # Loss hyperparams
 loss:
-  loss_type: MSE                    # Loss type to use: MSE
+  loss_type: mse                    # Loss type to use: mse
   recon_mult: !!float 1.0           # MSE Reconstruction loss multiplier
 # Training hyperparams
 train:

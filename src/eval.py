@@ -148,7 +148,7 @@ class Evaluator():
         )
 
         # Precompute frames
-        assert self.model.pred_length == 1, 'Pred length >1 not supported for eval video'
+        # assert self.model.pred_length == 1, 'Pred length >1 not supported for eval video'
         x_list, x_next_list, x_recon_list, x_pred_list = [], [], [], []
         if self.model.output_uncertainty: x_pred_uncertainty_list = []
         for i, (x, x_next, u) in enumerate(test_loader):

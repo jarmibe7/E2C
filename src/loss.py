@@ -196,3 +196,58 @@ class UncertaintyE2CLoss(E2CLoss):
             "Transition KLD": kld_trans.detach().cpu().item()
         }
         return loss, loss_return
+    
+
+class RSSMLoss(nn.Module):
+    """
+    RSSM loss, made with PyTorch.
+    """
+    def __init__(self, num_epochs, loss_params):
+        super().__init__()
+        self.num_epochs = num_epochs
+        self.recon_mult = loss_params['recon_mult']
+        self.beta = loss_params['beta']
+        self.lam = loss_params['lambda']
+        self.anneal_mode = loss_params['kld_anneal_mode']
+
+    def kld_anneal(self, epoch):
+        if self.anneal_mode == 'const':
+            mult = self.beta
+        elif self.anneal_mode == 'linear':
+            mult = self.beta*((epoch + 1)/self.num_epochs)
+        else:
+            raise NotImplementedError(f"Annealing mode {self.anneal_mode} not supported!")
+
+        return mult
+    
+    def kl_divergence(self, mu_q, logvar_q, mu_p, logvar_p):
+        return 0.5 * (
+            logvar_p - logvar_q
+            + (torch.exp(logvar_q) + (mu_q - mu_p) ** 2) / torch.exp(logvar_p)
+            - 1
+        ).sum(dim=-1)
+
+    def forward(self, tr, epoch):
+        # Reconstruction loss
+        recon = self.recon_mult*nn.functional.mse_loss(tr['x_next'], tr['x_pred'], reduction='mean')
+
+        # Encoding KL Divergence
+        # KL loss (posterior vs prior)
+        kld = self.kl_divergence(
+            tr["mu_posts"],
+            tr["log_var_posts"],
+            tr["mu_priors"],
+            tr["log_var_priors"]
+        ).mean()
+        kld = self.kld_anneal(epoch)*kld
+
+        loss = recon + kld
+        if torch.isnan(loss):
+            breakpoint()
+
+        # Make return dictionary for loss values
+        loss_return = {
+            r"$x$ Reconstruction Loss": recon.detach().cpu().item(),
+            "KLD": kld.detach().cpu().item(),
+        }
+        return loss, loss_return

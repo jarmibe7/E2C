@@ -158,7 +158,7 @@ class StateRepresentationPretrainer():
 
         # Create loss criterion
         loss_type = config['loss'].get('loss_type', None)
-        if loss_type == 'MSE':
+        if loss_type == 'mse':
             self.model_criterion = StateRepresentationLoss(config['loss'])
         else:
             raise NotImplementedError(f'Loss type "{loss_type}" not supported!')

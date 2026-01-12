@@ -13,7 +13,7 @@ from pathlib import Path
 from tqdm import tqdm
 from pyvirtualdisplay import Display
 
-from src.loss import E2CLoss, UncertaintyE2CLoss
+from src.loss import E2CLoss, UncertaintyE2CLoss, RSSMLoss
 from src.eval import Plotter, Evaluator
 from src.replay_buffer import ReplayBuffer
 from src.data_gen.gen_gym import name_to_env, env_to_aspace, process_image
@@ -77,7 +77,9 @@ class BaseTrainer():
         loss_type = config['loss'].get('loss_type', None)
         if loss_type == 'uncertainty':
             self.model_criterion = UncertaintyE2CLoss(config['train']['num_epochs'], config['loss'])
-        elif loss_type == 'default':
+        elif loss_type == 'rssm':
+            self.model_criterion = RSSMLoss(config['train']['num_epochs'], config['loss'])
+        elif loss_type == 'mse':
             self.model_criterion = E2CLoss(config['train']['num_epochs'], config['loss'])
         else:
             raise NotImplementedError(f'Loss type "{loss_type}" not supported!')

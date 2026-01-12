@@ -10,22 +10,22 @@ vae:
   pad: 1
 # Loss hyperparams
 loss:
-  loss_type: uncertainty         # Loss type to use: default | uncertainty
-  recon_mult: !!float 0.0           # MSE Reconstruction loss multiplier
-  beta: !!float 1e-5                # Standard Gaussian KL multiplier
-  lambda: !!float 1e-5              # Transition KL multiplier
+  loss_type: rssm         # Loss type to use: mse | uncertainty  # TODO: Change this setup for rssm
+  recon_mult: !!float 1e4           # MSE Reconstruction loss multiplier
+  beta: !!float 1e-4                # Standard Gaussian KL multiplier
+  lambda: !!float 1e-4              # Transition KL multiplier
   kld_anneal_mode: linear           # Beta annealing mode: const | linear
 # Transition model hyperparams
 trans:
   stochastic_size: 4                # Stochastic state model latent dim
-  deterministic_size: 4             # Deterministic state model latent dim
+  deterministic_size: 32             # Deterministic state model latent dim
   past_length: 3                    # Length of image history passed into encoder
   pred_length: 3                    # Length of image prediction horizon
-  alpha: !!float 1e-5               # Learning rate
+  alpha: !!float 1e-4               # Learning rate
   weight_decay: !!float 1e-4        # Adam optimizer weight decay
 # Training settings
 train:
-  dataset: reacher_1k      # Which dataset to use for training (in data/)
+  dataset: reacher_510k      # Which dataset to use for training (in data/)
   batch_size: 32
   num_epochs: 30
   device: cuda:2             # cpu | cuda:0 | cuda:1 | cuda:2
@@ -38,5 +38,5 @@ train:
 # Policy settings for training closed loop
 closed_loop: 
   closed_loop: False                 # Whether to use closed loop training
-  policy: uncertainty               # What type of policy to use: conv | random | uncertainty
+  policy: random               # What type of policy to use: conv | random | uncertainty
     
