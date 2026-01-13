@@ -766,6 +766,7 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
         else:
             self.init_control = torch.zeros(self.plan_horizon, len(self.env.action_space.sample()), device=self.device)
         self.sigma_init = self.closed_cfg.get('sigma_init', 0.5)
+        self.sigma_min = self.closed_cfg.get('sigma_min', 0.05)
         self.sigma = torch.ones_like(self.init_control, device=self.device) * self.sigma_init
 
     @staticmethod
@@ -801,6 +802,7 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
         return mu, log_var, z
 
     def _encode_posterior_rssm(self, obs_tensor, h):
+        print("cem", obs_tensor.shape, h.shape)
         enc = self.model.encoder(obs_tensor)
         post_in = torch.cat([enc, h], dim=-1)
         post_stats = self.model.post(post_in)
@@ -898,13 +900,13 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
         return mu[0].clone()
     
     def _select_information_action(self, frame_buffer):
-        if len(frame_buffer) < self.past_length:
-            print("SOMETHING IS WRONG: not enough frames in buffer! Defaulting to random action.")
-            a_np = self.env.action_space.sample()
-            return torch.as_tensor(a_np, device=self.device, dtype=torch.float32).flatten()
+        # if len(frame_buffer) < self.past_length:
+        #     print("SOMETHING IS WRONG: not enough frames in buffer! Defaulting to random action.")
+        #     a_np = self.env.action_space.sample()
+        #     return torch.as_tensor(a_np, device=self.device, dtype=torch.float32).flatten()
         return self._sample_cem(frame_buffer)
 
-    def collect_rollouts(self):
+    def collect_rollouts(self, epoch):
         """
         Collect observations using an information-gain MPC objective and save them to replay buffer.
         """
@@ -913,13 +915,21 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
         frame_buffer = []
         act_buffer = []
         idx = 0
+        
         while idx < self.num_rollout_steps:
             self._init_cem_mu_sig()
             curr_img = process_image(self.env.render()).squeeze(0).permute(2, 0, 1)
             if len(frame_buffer) == 0:
                 frame_buffer.append(curr_img)
 
-            act = self._select_information_action(frame_buffer) # only difference between collect_rollouts in random trainer
+            if epoch < 3:
+                if epoch == 0 and idx == 0: 
+                    print(f'Initializing data from random actions. \n')
+                act = torch.from_numpy(self.env.action_space.sample()).to(self.device)
+            else:
+                if epoch == 3 and idx == 0:
+                    print(f'Switching to informative action selection using CEM over {self.num_action_samples} samples and {self.cem_iters} iterations. \n')
+                act = self._select_information_action(frame_buffer)
             env_act = act.cpu().detach().numpy()
             if not self.env_continuous:
                 env_act = int(env_act.item())
@@ -952,6 +962,20 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
                     idx += 1
         self.model.train()
 
+    def learn(self):
+        model_loss = 0.0
+        pbar = tqdm(range(self.num_epochs), desc="Training")
+        for epoch in range(self.num_epochs):
+            self.collect_rollouts(epoch)
+            model_loss = self.train(epoch)
+
+            pbar.set_postfix({
+                'Epoch': epoch+1,
+                'Model Loss': f"{model_loss:.4f}"})
+            pbar.update(1)
+            
+        pbar.close()
+    
     # def train(self, epoch): 
-    #   right now, inheriting train and learn from ClosedLoopRandomTrainer, 
+    #   right now, inheriting train from ClosedLoopRandomTrainer, 
     #   but can make modifications, since we want to re-use the KLD from loss?

@@ -20,12 +20,12 @@ trans:
   stochastic_size: 4                # Stochastic state model latent dim
   deterministic_size: 32             # Deterministic state model latent dim
   past_length: 3                    # Length of image history passed into encoder
-  pred_length: 3                    # Length of image prediction horizon
+  pred_length: 1                    # Length of image prediction horizon
   alpha: !!float 1e-4               # Learning rate
   weight_decay: !!float 1e-4        # Adam optimizer weight decay
 # Training settings
 train:
-  dataset: reacher_500k      # Which dataset to use for training (in data/)
+  dataset: reacher_1k      # Which dataset to use for training (in data/)
   batch_size: 64
   num_epochs: 30
   device: cuda:2             # cpu | cuda:0 | cuda:1 | cuda:2
@@ -39,6 +39,9 @@ train:
 closed_loop: 
   closed_loop: True                 # Whether to use closed loop training
   policy: informative               # What type of policy to use: conv | random | uncertainty | informative
+  num_rollout_steps: 100            # Number of timesteps to collect in a rollout - keeping it small just to debug
+  num_batches: 10                   # Number of batches to train on per gradient update
+  buffer_capacity: 100              # Replay buffer capacity - keeping it small just to debug
   samples: 100                      # Number of action sequences to sample for MPC
   elite_frac: 0.1                   # Fraction of action sequences to use as elites for CEM
   iters: 3                          # Number of CEM iterations
