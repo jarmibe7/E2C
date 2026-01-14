@@ -21,14 +21,19 @@ class ReplayBuffer:
         self.device = device
 
         # Image and control buffers
-        assert config['trans']['pred_length'] == 1, 'Replay buffer requires pred_length=1'
         C_tot, H, W = img_shape
         C = C_tot // config['trans']['past_length']
         self.X = torch.zeros((capacity, config['trans']['past_length'], C, H, W), device=device)
-        self.U = torch.zeros((capacity, control_size), device=device)
         self.rewards = torch.zeros((capacity, 1), device=device)
-        self.X_next = torch.zeros((capacity, C, H, W), device=device)
         self.dones = torch.zeros((capacity, 1), device=device)
+
+        pred_length = config['trans']['pred_length']
+        if pred_length > 1:
+            self.U = torch.zeros((capacity, pred_length, control_size), device=device)
+            self.X_next = torch.zeros((capacity, pred_length, C, H, W), device=device)
+        else:
+            self.U = torch.zeros((capacity, control_size), device=device)
+            self.X_next = torch.zeros((capacity, C, H, W), device=device)
 
     def __len__(self):
         return self.size

@@ -166,3 +166,45 @@ def test_sample_shape():
     assert next_imgs.shape == (batch_size, 3, 64, 64)
     assert dones.shape == (batch_size, 1)
 
+def test_pred_length():
+    # Reacher past_length=3 setup
+    config, device = load_config()
+    config['trans']['pred_length'] = 3
+    buffer = ReplayBuffer(
+        img_shape=(9, 64, 64),
+        control_size=2,
+        capacity=100,
+        device=device,
+        config=config
+    )
+
+    img = torch.zeros(1, 3, 3, 64, 64)
+    action = torch.zeros(1, 3, 2)
+    next_img = torch.zeros(1, 3, 3, 64, 64)
+    done = 0
+    
+    assert len(buffer) == 0
+    assert buffer.capacity == 100
+
+    for i in range(buffer.capacity):
+        buffer.add(
+            img,
+            action,
+            i,
+            next_img,
+            done
+        )
+
+    # Test sample shapes
+    batch_size = 32
+    sample = buffer.sample(batch_size)
+    for item in sample:
+        assert item.shape[0] == 32
+
+    imgs, actions, rewards, next_imgs, dones = sample
+    assert imgs.shape == (batch_size, 3, 3, 64, 64)
+    assert actions.shape == (batch_size, 3, 2)
+    assert rewards.shape == (batch_size, 1)
+    assert next_imgs.shape == (batch_size, 3, 3, 64, 64)
+    assert dones.shape == (batch_size, 1)
+
