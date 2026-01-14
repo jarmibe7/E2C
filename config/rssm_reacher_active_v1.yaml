@@ -10,8 +10,8 @@ vae:
   pad: 1
 # Loss hyperparams
 loss:
-  loss_type: rssm_unc         # Loss type to use: mse | uncertainty  | rssm_mse | rssm_unc # TODO: Change this setup for rssm
-  recon_mult: !!float 0.0           # MSE Reconstruction loss multiplier
+  loss_type: rssm_mse         # Loss type to use: mse | uncertainty  | rssm_mse | rssm_unc # TODO: Change this setup for rssm
+  recon_mult: !!float 1e3           # MSE Reconstruction loss multiplier
   beta: !!float 1e-4                # Standard Gaussian KL multiplier
   lambda: !!float 1e-4              # Transition KL multiplier
   kld_anneal_mode: linear           # Beta annealing mode: const | linear
