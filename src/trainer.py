@@ -51,18 +51,18 @@ class BaseTrainer():
         self.config = config
         if config['closed_loop']['closed_loop']:
             # Compute training stats
-            num_updates = self.num_epochs * config['closed_loop']['num_batches']
-            num_train_inters = self.batch_size * num_updates
-            num_env_inters = self.num_epochs * config['closed_loop']['num_rollout_steps']
+            self.num_updates = self.num_epochs * config['closed_loop']['num_batches']
+            self.num_train_inters = self.batch_size * self.num_updates
+            self.num_env_inters = self.num_epochs * config['closed_loop']['num_rollout_steps']
             # num_batches * num_epochs * batch_size - # interactions agents trained on
             # num_rollout_steps * num_epochs - # interactions collected
             # num_rollout_steps * num_epochs * cem_iters * num_action_samples - # iteractions collected and imagined
 
             print(
                 f"Closed-loop training: \n"
-                f"- Total final training interactions: {num_train_inters}\n"
-                f"- Total environment interactions collected: {num_env_inters}\n"
-                f"- Gradient updates (training iters / batch size): {num_updates}\n"
+                f"- Total final training interactions: {self.num_train_inters}\n"
+                f"- Total environment interactions collected: {self.num_env_inters}\n"
+                f"- Gradient updates (training iters / batch size): {self.num_updates}\n"
                 f"- Replay buffer capacity: {config['closed_loop']['buffer_capacity']}\n"
                 f"- Rollout steps per epoch: {config['closed_loop']['num_rollout_steps']}\n"
             )
@@ -153,12 +153,12 @@ class BaseTrainer():
             yaml_path = run_path / yaml_name
             print(f'Saved config to {yaml_path}')
             with open(yaml_path, 'w') as f:
-                yaml.dump(config_save, f, default_flow_style=False) # Save original config so model can be loaded later
+                yaml.dump(config_save, f, sort_keys=False, default_flow_style=False) # Save original config so model can be loaded later
         except Exception as e:
             print(e)
             print('Exception occurred, saved config to current directory')
             with open(yaml_name, 'w') as f:
-                yaml.dump(config_save, f, default_flow_style=False)
+                yaml.dump(config_save, f, sort_keys=False, default_flow_style=False)
 
 class E2CPretrainer(BaseTrainer):
     """
