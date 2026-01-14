@@ -3,18 +3,30 @@ Classes for evaluating E2C model performance during and after training.
 
 Authors: Jared Berry, Ayush Gaggar
 """
+import json
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation, FFMpegWriter
 import torch
 import numpy as np
 import itertools
 from tqdm import tqdm
+<<<<<<< HEAD
 
 from src.e2c import E2CDataset, E2CLoss, E2C
 from src.utils import set_seed, anim_frames
 from torchmetrics import PeakSignalNoiseRatio as psnr
 from torchmetrics import StructuralSimilarityIndexMeasure as ssim
 import lpips
+=======
+from torchmetrics import PeakSignalNoiseRatio as psnr
+from torchmetrics import StructuralSimilarityIndexMeasure as ssim
+import lpips
+
+from src.model.e2c import ConvE2C
+from src.model.rssm import RSSME2C
+from src.dataset import E2CDataset
+from src.utils import set_seed, anim_frames, shoulder_mass, excess_kurtosis, central_mass_ratio
+>>>>>>> 380c2273549611aeb108326d43719736edcdfb05
 
 class Plotter():
     """
@@ -27,36 +39,24 @@ class Plotter():
         self.num_steps = 0
         self.render = render
         self.plot_freq = plot_freq
-        self.plot_history = {"recon": [], "recon_next": [], "kld": [], "kld_trans": []}
-        self.fig, self.axs = plt.subplots(4, 1, figsize=(8, 10))
-        self.titles = [
-            r"$x$ Reconstruction Loss",
-            r"$x_{next}$ Reconstruction Loss",
-            "KLD",
-            "Transition KLD"
-        ]
-        self.colors = ['blue', 'orange', 'green', 'red']
-        for ax, title in zip(self.axs, self.titles):
-            ax.set_title(title)
-            ax.set_xlabel("Step")
-            ax.grid(True)
-        plt.tight_layout()
-        if self.render: 
-            plt.ion()
-            plt.show()
-        else:
-            plt.ioff()
+        self.plot_history = None
+        self.fig = None
+        self.colors = ['blue', 'orange', 'green', 'red', 'purple', 'black']
 
-    def log(self, recon_loss, recon_next_loss, kld_loss, kld_trans_loss):
+    def log(self, lr):
         """
         Update live training plot logs, and plot at frequency self.plot_freq
         """
-        # Update plot history arrays
+        # Create plot history dictionary if none exists
         self.num_steps += 1
-        self.plot_history["recon"].append(recon_loss.detach().cpu().item())
-        self.plot_history["recon_next"].append(recon_next_loss.detach().cpu().item())
-        self.plot_history["kld"].append(kld_loss.detach().cpu().item())
-        self.plot_history["kld_trans"].append(kld_trans_loss.detach().cpu().item())
+        if self.plot_history is None:
+            self.plot_history = {}
+            for key in lr.keys():
+                self.plot_history[key] = []
+
+        # Update plot history arrays
+        for key in lr.keys():
+            self.plot_history[key].append(lr[key])
 
         # Replot
         if self.num_steps % self.plot_freq == 0: self.plot()
@@ -65,9 +65,28 @@ class Plotter():
         """
         Update live plot
         """
+        # Initialize figure if first plot
+        if self.fig is None:
+            self.fig, self.axs = plt.subplots(len(self.plot_history), 1, figsize=(8, len(self.plot_history)*3))
+
+            # Ensure self.axs is a list
+            if len(self.plot_history) == 1:
+                self.axs = [self.axs]
+
+            for ax, key in zip(self.axs, self.plot_history.keys()):
+                ax.set_title(key)
+                ax.set_xlabel("Step")
+                ax.grid(True)
+            plt.tight_layout()
+            if self.render: 
+                plt.ion()
+                plt.show()
+            else:
+                plt.ioff()
+
         for i, key in enumerate(self.plot_history.keys()):
             self.axs[i].cla() 
-            self.axs[i].plot(self.plot_history[key], label=self.titles[i], color=self.colors[i])
+            self.axs[i].plot(self.plot_history[key], label=key, color=self.colors[i])
             self.axs[i].legend()
             self.axs[i].grid(True)
 
@@ -103,13 +122,13 @@ class Evaluator():
     def __init__(self, model, test_dataset, batch_size, device, dataset_name):
         # Set model to eval mode
         self.model = model
-        self.model.eval()
         self.test_dataset = test_dataset
 
         # Params
         self.batch_size = batch_size
         self.device = device
 
+<<<<<<< HEAD
         if dataset_name == 'particle_grav': self.dataset_latent_func = self.eval_four_var_latent
         elif dataset_name == 'cartpole': self.dataset_latent_func = self.eval_four_var_latent
         elif dataset_name == 'reacher': self.dataset_latent_func = self.eval_four_var_latent
@@ -120,6 +139,21 @@ class Evaluator():
         print("generating latent space figure...")
         self.dataset_latent_func(run_path)
         print("generating trajectory video...")
+=======
+        if 'particle_grav' in dataset_name: self.dataset_latent_func = self.eval_four_var_latent
+        elif 'cartpole' in dataset_name: self.dataset_latent_func = self.eval_four_var_latent
+        elif 'reacher' in dataset_name: self.dataset_latent_func = self.eval_four_var_latent
+            
+        self.dataset_name = dataset_name
+
+    def eval(self, run_path, vid_max_frames=50):
+        self.model.eval()
+        print("\Calculating eval metrics...")
+        self.eval_metrics(run_path=run_path)
+        print("Generating latent space figure...")
+        self.dataset_latent_func(run_path)
+        print("\nGenerating trajectory video...")
+>>>>>>> 380c2273549611aeb108326d43719736edcdfb05
         self.eval_traj(run_path, max_frames=vid_max_frames)
         # self.eval_latent(run_path)
         
@@ -136,17 +170,26 @@ class Evaluator():
         )
 
         # Precompute frames
-        assert self.model.pred_length == 1, 'Pred length >1 not supported for eval video'
+        # assert self.model.pred_length == 1, 'Pred length >1 not supported for eval video'
         x_list, x_next_list, x_recon_list, x_pred_list = [], [], [], []
+        if self.model.output_uncertainty: x_pred_uncertainty_list = []
         for i, (x, x_next, u) in enumerate(test_loader):
             if i >= max_frames:
                 break
             x, x_next, u = x.to(self.device), x_next.to(self.device), u.to(self.device)
             x = x.reshape(x.shape[0], -1, x.shape[-2], x.shape[-1])
+<<<<<<< HEAD
             x_next = torch.hstack([x_next for i in range(self.model.past_length)]).to(self.device)
             x_recon, x_pred = self.model.sample(x, u)
+=======
+            # x_next = torch.hstack([x_next for i in range(self.model.past_length)]).to(self.device)
+            x_next = x_next[:, 0]       # TODO: Only eval on first transition?
+            u = u[:, 0]
+            x_recon, x_pred, sample_return = self.model.sample(x, u, return_all=True)
+>>>>>>> 380c2273549611aeb108326d43719736edcdfb05
             x_list.append(x[0]); x_next_list.append(x_next[0])
             x_recon_list.append(x_recon); x_pred_list.append(x_pred)
+            if self.model.output_uncertainty: x_pred_uncertainty_list.append(sample_return['x_pred_recon_uncertainty'].mean().item())
 
         # Initialize axes
         ims = []
@@ -164,8 +207,16 @@ class Evaluator():
             x_recon, x_pred = x_recon_list[frame], x_pred_list[frame]
             ims[0].set_data(x_recon[:3].permute(1, 2, 0).detach().cpu().numpy())
             ims[1].set_data(x[:3].permute(1, 2, 0).detach().cpu().numpy())
+<<<<<<< HEAD
             ims[2].set_data(x_pred[:3].permute(2, 1, 0).detach().cpu().numpy()) # for some reason, need to transpose these differently?
             ims[3].set_data(x_next[:3].permute(2, 1, 0).detach().cpu().numpy()) # for some reason, need to transpose these differently?
+=======
+            ims[2].set_data(x_pred[:3].permute(1, 2, 0).detach().cpu().numpy())
+            ims[3].set_data(x_next[:3].permute(1, 2, 0).detach().cpu().numpy())
+            if self.model.output_uncertainty: 
+                x_pred_uncertainty = x_pred_uncertainty_list[frame]
+                ax[0, 1].set_title(f"Pred: Uncertainty={x_pred_uncertainty:.4f}")
+>>>>>>> 380c2273549611aeb108326d43719736edcdfb05
 
             # plt.show()
 
@@ -184,14 +235,29 @@ class Evaluator():
         plt.close(fig)
         return
     
+<<<<<<< HEAD
     def eval_metrics(self, max_samples=None):
         psnr_fn = psnr(data_range=1.0).to(self.device)
         ssim_fn = ssim(data_range=1.0).to(self.device)
         # have to double check this is correct for lpips - check nerfstudio code
+=======
+    def eval_metrics(self, max_samples=None, run_path=None):
+        """
+        Calculate metrics for test set
+        """
+        # Image metrics
+        psnr_fn = psnr(data_range=1.0).to(self.device)
+        ssim_fn = ssim(data_range=1.0).to(self.device)
+        # TODO: have to double check this is correct for lpips - check nerfstudio code
+>>>>>>> 380c2273549611aeb108326d43719736edcdfb05
         lpips_fn = lpips.LPIPS(net='alex').to(self.device)
 
         recon_psnr, recon_ssim, recon_lpips, recon_mse = [], [], [], []
         pred_psnr, pred_ssim, pred_lpips, pred_mse = [], [], [], []
+<<<<<<< HEAD
+=======
+        pred_cmr, pred_kurt, pred_shoulder = [], [], []
+>>>>>>> 380c2273549611aeb108326d43719736edcdfb05
 
         test_loader = torch.utils.data.DataLoader(self.test_dataset, batch_size=128, shuffle=False)
 
@@ -201,9 +267,18 @@ class Evaluator():
                     break
             x, x_next, u = x.to(self.device), x_next.to(self.device), u.to(self.device)
             x = x.reshape(x.shape[0], -1, x.shape[-2], x.shape[-1])
+<<<<<<< HEAD
             x_next = torch.hstack([x_next for _ in range(self.model.past_length)]).to(self.device)
 
             x_recon, x_pred = self.model.sample(x, u)
+=======
+            # x_next = torch.hstack([x_next for _ in range(self.model.past_length)]).to(self.device)
+            x_next = x_next[:, 0]       # TODO: Only eval on first transition?
+            u = u[:, 0]
+
+            x_recon, x_pred, sample_return = self.model.sample(x, u, return_all=True)
+            mu_pred = sample_return['mu_pred']
+>>>>>>> 380c2273549611aeb108326d43719736edcdfb05
 
             img_true = x[0][:3].unsqueeze(0)
             img_true_next = x_next[0][:3].unsqueeze(0)
@@ -224,6 +299,14 @@ class Evaluator():
             # recon_lpips.append(lpips_fn(img_recon*2-1, img_true*2-1).item())
             pred_lpips.append(lpips_fn(img_pred*2-1, img_true_next*2-1).item())
 
+<<<<<<< HEAD
+=======
+            # CMR, Kurtosis, Shoulder Mass
+            pred_cmr.append(central_mass_ratio(mu_pred).mean().item())
+            pred_kurt.append(excess_kurtosis(mu_pred).mean().item())
+            pred_shoulder.append(shoulder_mass(mu_pred).mean().item())
+
+>>>>>>> 380c2273549611aeb108326d43719736edcdfb05
         results = {
             # "recon_psnr": np.mean(recon_psnr),
             # "recon_ssim": np.mean(recon_ssim),
@@ -233,7 +316,25 @@ class Evaluator():
             "pred_ssim": np.mean(pred_ssim),
             "pred_lpips": np.mean(pred_lpips),
             # "pred_mse": np.mean(pred_mse),
+<<<<<<< HEAD
         }
+=======
+            "pred_cmr": np.mean(pred_cmr),
+            "pred_kurt": np.mean(pred_kurt),
+            "pred_shoulder": np.mean(pred_shoulder)
+        }
+
+        # Save metrics as JSON
+        if run_path is not None:
+            metrics_path = run_path / "metrics.json"
+            try:
+                with open(metrics_path, "w") as f:
+                    json.dump(results, f, indent=4)
+                print(f"Saved evaluation metrics to {metrics_path}")
+            except Exception as e:
+                print(f"Failed to save metrics.json: {e}")
+
+>>>>>>> 380c2273549611aeb108326d43719736edcdfb05
         return results
     
     def eval_four_var_latent(self, run_path, lv=4):
@@ -248,10 +349,17 @@ class Evaluator():
         # Initialize axes
         combo_array = pairs = [(i, j) for i in range(lv-1) for j in range(i + 1)]
         lv_array = list(itertools.combinations([0, 1, 2, 3], r=2))
+<<<<<<< HEAD
         for combo, lv_arr in zip(combo_array, lv_array):
             ax = axes[combo]
             ax.set_aspect('equal')
             ax.set_title(f'Latent Space from Test Dataset (Vars {lv_arr[0]+1} and {lv_arr[1]+1})')
+=======
+        for combo, lv in zip(combo_array, lv_array):
+            ax = axes[combo]
+            ax.set_aspect('equal')
+            ax.set_title(f'Latent Space from Test Dataset (Vars {lv[0]+1} and {lv[1]+1})')
+>>>>>>> 380c2273549611aeb108326d43719736edcdfb05
 
         latent_mean = []
         latent_var = []
@@ -266,13 +374,24 @@ class Evaluator():
         for x, x_next, u in tqdm(test_loader):
             x, x_next, u = x.to(self.device), x_next.to(self.device), u.to(self.device)
             x = x.reshape(x.shape[0], -1, x.shape[-2], x.shape[-1])
+<<<<<<< HEAD
             x_next = torch.hstack([x_next for i in range(self.model.past_length)]).to(self.device)
             # Encode current and next state
             enc_out = self.model.encoder(x)
+=======
+            # x_next = torch.hstack([x_next for i in range(self.model.past_length)]).to(self.device)
+            # # Encode current and next state
+            # enc_out = self.model.encoder(x)
 
-            # Get record latent space
-            mu = self.model.mu(enc_out)
-            log_var = self.model.log_var(enc_out)
+            # # Get record latent space
+            # mu = self.model.mu(enc_out)
+            # log_var = self.model.log_var(enc_out)
+            x_next = x_next[:, 0]       # TODO: Only eval on first transition?
+            u = u[:, 0]
+            x_recon, x_pred, sample_return = self.model.sample(x, u, return_all=True)
+            mu, log_var = sample_return['mu'], sample_return['log_var']
+>>>>>>> 380c2273549611aeb108326d43719736edcdfb05
+
             latent_mean.append(mu)
             latent_var.append(torch.exp(log_var))
 
@@ -282,12 +401,20 @@ class Evaluator():
             max_val = max(max_val, z_mean_np.max())
 
             # Represent uncertainty by point size
+<<<<<<< HEAD
             point_sizes = np.mean(z_var_np, axis=1) * 5000  # Adjust scaling as needed
+=======
+            point_sizes = np.mean(z_var_np, axis=1) * 1000  # Adjust scaling as needed
+>>>>>>> 380c2273549611aeb108326d43719736edcdfb05
 
             # Choose colors based on configuration
-            if self.dataset_name in ['particle_grav', 'cartpole']: 
+            if 'cartpole' in self.dataset_name or 'particle_grav' in self.dataset_name: 
                 color = colors[round(u.cpu().detach().numpy().flatten()[0])]
+<<<<<<< HEAD
             else: # dataset is reacher
+=======
+            elif 'reacher' in self.dataset_name:
+>>>>>>> 380c2273549611aeb108326d43719736edcdfb05
                 u = u.cpu().detach().numpy().flatten()
                 if u[0] > 0.0 and u[1] > 0.0: color = 'blue'
                 elif u[0] > 0.0 and u[1] < 0.0: color = 'green'
@@ -295,9 +422,14 @@ class Evaluator():
                 else: color = 'red'
 
             # Plotting all variable combos
+<<<<<<< HEAD
 
             for combo, lv_arr in zip(combo_array, lv_array):
                 sc = axes[combo].scatter(z_mean_np[:, lv_arr[0]], z_mean_np[:, lv_arr[1]], s=point_sizes, alpha=0.1, label=None, color=color)
+=======
+            for combo, lv in zip(combo_array, lv_array):
+                sc = axes[combo].scatter(z_mean_np[:, lv[0]], z_mean_np[:, lv[1]], s=point_sizes, alpha=0.1, label=None, color=color)
+>>>>>>> 380c2273549611aeb108326d43719736edcdfb05
 
         # Combine all latent means and variances
         latent_mean = torch.cat(latent_mean).cpu().detach().numpy()
@@ -315,19 +447,24 @@ class Evaluator():
             # ax.set_xlim(-max_val, max_val)
             # ax.set_ylim(-max_val, max_val)
         
+<<<<<<< HEAD
         for row in range(lv-1):
             for col in range(lv-1):
+=======
+        for row in range(3):
+            for col in range(3):
+>>>>>>> 380c2273549611aeb108326d43719736edcdfb05
                 if row < col:
                     axes[row, col].set_visible(False)
 
         fig_name = f'latent_fig.png'
         try:
             filepath = run_path / fig_name
-            print(f'\nSaved all variable latent space figure to {filepath}')
+            print(f'Saved all variable latent space figure to {filepath}')
             fig.savefig(filepath)
         except Exception as e:
             print(e)
-            print('\nException occured, saved all variable latent space figure to current directory')
+            print('Exception occured, saved all variable latent space figure to current directory')
             fig.savefig(fig_name)
         plt.close(fig)
         return
@@ -410,8 +547,12 @@ if __name__ == "__main__":
     CONFIG_PATH = PROJECT_ROOT / "config"
     RUNS_PATH = PROJECT_ROOT / "runs"
 
+<<<<<<< HEAD
     print('*** Loading config and dataset ***\n')
     config_name = 'e2c_reacher_dt_7dot5ms'
+=======
+    config_name = 'e2c_reacher_500k'
+>>>>>>> 380c2273549611aeb108326d43719736edcdfb05
     with open(CONFIG_PATH / f'{config_name}.yaml', "r") as f:
         config = yaml.safe_load(f)
     device = torch.device(config['train']['device'])
@@ -422,9 +563,15 @@ if __name__ == "__main__":
     train_size = int(len(dataset) * config['train']['train_ratio'])
     test_size = len(dataset) - train_size
     train_dataset, test_dataset = torch.utils.data.random_split(dataset, [train_size, test_size])
+<<<<<<< HEAD
     config['vae']['out_image_shape'] = dataset.img_shape
     config['trans']['control_size'] = dataset.U.shape[-1]
     model = E2C(
+=======
+    config['vae']['in_image_shape'] = dataset.in_img_shape
+    config['trans']['control_size'] = dataset.U.shape[-1]
+    model = ConvE2C(
+>>>>>>> 380c2273549611aeb108326d43719736edcdfb05
         enc_latent_size=config['vae']['enc_latent_size'],
         latent_size=config['trans']['latent_size'],
         control_size=config['trans']['control_size'],

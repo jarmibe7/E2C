@@ -6,65 +6,118 @@ scp jarmibe7@dingo.mech.northwestern.edu:~/E2C/videos/e2c_cartpole.mp4 C:\\Users
 
 Author: Jared Berry, Ayush Gaggar
 """
+import os
+import re
 import numpy as np
 import torch
+import time
 import gymnasium as gym
 import torchvision
 import matplotlib.pyplot as plt
 from pathlib import Path
 from pyvirtualdisplay import Display
 from tqdm import tqdm
+import yaml
+from datetime import datetime
 
-from src.utils import set_seed
+from src.utils import set_seed, format_time
 
 # Parameters for dataset
-env_name = 'reacher'
-OUTPUT_NAME = env_name + '_500k'
-dataset_size = int(5e5)
-image_shape = (64, 64, 3)
+env_name = 'reacher'                                        # Gym environment name
+dataset_size = int(5.1e5)                                   # Number of samples: (img, next_img, control) tuple
+OUTPUT_NAME = env_name + f'_{dataset_size // 1000}k'        # Output name of dataset
+image_shape = (64, 64, 3)                                   # Downsampled image shape
+past_length = 3                                             # Number of previous observations to use for training
+pred_length = 3                                             # Number of timesteps to predict in the future
+new_dt = None                                               # Desired new timestep in seconds
 # ---------------------------------
+# Only modify XML if new_dt is set
+if new_dt is not None:
+    mj_path = Path(os.path.dirname(gym.__file__)) / "envs" / "mujoco" / "assets"
+    xml_file = mj_path / f"{env_name}.xml"
+    xml_text = xml_file.read_text()
+    xml_text = re.sub(r'timestep="[^"]+"', f'timestep="{new_dt:.4f}"', xml_text)
+
+    # Save new XML
+    new_xml_filename = f"{env_name}_timestep_{int(new_dt*1000)}_ms.xml"
+    new_xml_path = mj_path / new_xml_filename
+    new_xml_path.write_text(xml_text)
+else:
+    new_xml_filename = None
 
 # Get data directory
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 DATA_PATH = PROJECT_ROOT / "data"
 
-set_seed(42)
+seed = 42
+set_seed(seed)
 name_to_env = {'reacher': 'Reacher-v5', 'cartpole': 'CartPole-v1'}
 env_to_aspace = {'reacher': 'continuous', 'cartpole': 'discrete'}
 
-def process_image(image, dataset_name=env_name):
+def update_dataset_metadata(dataset_dir, dataset_name, params):
+    """
+    Update or create metadata YAML in dataset_dir.
+    Overwrites fields for dataset_name, preserves others.
+    """
+    metadata_path = dataset_dir / "metadata.yaml"
+
+    # Load existing metadata if present
+    if metadata_path.exists():
+        with open(metadata_path, "r") as f:
+            metadata = yaml.safe_load(f) or {}
+    else:
+        metadata = {}
+
+    if dataset_name in metadata:
+        print(f"Overwriting metadata for dataset '{dataset_name}'")
+
+    # Update this dataset's entry
+    metadata[dataset_name] = {
+        **params,
+        "created_at": datetime.now().strftime("%Y-%m-%d_%H-%M-%S"),
+    }
+
+    # Write back to file
+    with open(metadata_path, "w") as f:
+        yaml.safe_dump(metadata, f, sort_keys=False)
+
+def process_image(image, dataset_name=env_name, image_shape=image_shape):
     """
     Image processing
     """
-    if dataset_name == 'cartpole': image = image[50:350, 100:400]  # Zoom on cartpole
-    if dataset_name == 'reacher': image = image[100:-50, 100:-100]  # Zoom on reacher
+    if 'cartpole' in dataset_name: image = image[50:350, 100:400]  # Zoom on cartpole
+    if 'reacher' in dataset_name: image = image[100:-50, 100:-100]  # Zoom on reacher
     image = torch.from_numpy(image.copy()).permute(2, 0, 1)  # Get image tensor into (C, H, W)
 
     # Image processing
     normalized = image.unsqueeze(0).float() / 255.0 # Normalize to [0,1]
     image_resized = torchvision.transforms.functional.resize(normalized, image_shape[0:2], interpolation=torchvision.transforms.functional.InterpolationMode.NEAREST)   # Downscaling
-      
+    
     return image_resized.permute(0, 2, 3, 1) # Permute back to raw shape
 
 
 def main():
+    start_time = time.perf_counter()
     # Create virtual display for running on server
     disp = Display(visible=0, size=(480, 480))
     disp.start()
     
-    # buffers
-    num_prev = 3
+    # Buffers
     frame_buffer = []
     act_buffer = []
 
     # Create env
-    env = gym.make(name_to_env[env_name], render_mode="rgb_array")
+    if not env_name == 'cartpole' and new_xml_filename is not None:
+        env = gym.make(name_to_env[env_name], render_mode="rgb_array",
+                    xml_file=new_xml_filename if new_xml_filename else None)
+    else:
+        env = gym.make(name_to_env[env_name], render_mode="rgb_array")
     obs, _ = env.reset()
     continuous = (env_to_aspace[env_name] == 'continuous')
-    prev_img = torch.zeros((dataset_size, num_prev, *image_shape))
-    next_img = torch.zeros((dataset_size, *image_shape))
-    if continuous: control = torch.zeros((dataset_size, env.action_space.shape[0]))
-    else: control = torch.zeros((dataset_size, 1))     # Discrete action space
+    prev_img = torch.zeros((dataset_size, past_length, *image_shape))
+    next_img = torch.zeros((dataset_size, pred_length, *image_shape))
+    if continuous: control = torch.zeros((dataset_size, pred_length, env.action_space.shape[0]))
+    else: control = torch.zeros((dataset_size, pred_length, 1))     # Discrete action space
     done = False
     
     # Collect n_samples trajectories
@@ -74,10 +127,12 @@ def main():
         if len(frame_buffer) == 0:
             frame_buffer.append(process_image(env.render()))
 
+        # Sample and take action
         act = env.action_space.sample()
         act_buffer.append(act)
         next_obs, rew, done, _, _ = env.step(act)
 
+        # If done reset env, otherwise add sample to dataset
         if done:
             obs, _ = env.reset()
             done = False
@@ -85,24 +140,33 @@ def main():
             act_buffer = []
             continue
         else:
-            if len(frame_buffer) == num_prev + 1:
+            # Slide frame obs history frame buffer to next image
+            if len(frame_buffer) == past_length + pred_length:
                 frame_buffer.pop(0)
                 act_buffer.pop(0)
             next_image = process_image(env.render())
             frame_buffer.append(next_image)
-            if len(frame_buffer) == num_prev + 1:
-                prev_img[idx] = torch.cat(frame_buffer[0:num_prev], dim=0)
-                next_img[idx] = frame_buffer[num_prev]
+
+            # Add obs history buffer to dataset
+            if len(frame_buffer) == past_length + pred_length:
+                prev_img[idx] = torch.cat(frame_buffer[0:past_length], dim=0)
+                next_img[idx] = torch.cat(frame_buffer[past_length:(past_length+pred_length)], dim=0)
+
+                # Get controls for entire pred_length
                 if continuous:
-                    control[idx] = torch.from_numpy(act_buffer[-1])
+                    control[idx] = torch.stack(
+                        [torch.from_numpy(a) for a in act_buffer[past_length-1:past_length-1+pred_length]]
+                    )
                 else:
-                    control[idx] = act_buffer[-1]
+                    control[idx] = torch.tensor(
+                        act_buffer[past_length-1:past_length-1+pred_length]
+                    ).unsqueeze(-1)
                 idx += 1
                 pbar.update(1)
 
     pbar.close()
 
-    # Saving dataset
+    # Saving dataset as dictionary
     dataset_dir = DATA_PATH / env_name
     dataset_dir.mkdir(parents=True, exist_ok=True)
     torch.save({
@@ -111,6 +175,22 @@ def main():
         "next_images": next_img,
     }, f"{dataset_dir / OUTPUT_NAME}.pt")
     print(f'\nSaved dataset to {dataset_dir / OUTPUT_NAME}.pt')
+
+    # Update metadata file
+    update_dataset_metadata(
+        dataset_dir=dataset_dir,
+        dataset_name=OUTPUT_NAME,
+        params={
+            "env_name": env_name,
+            "runtime": format_time(time.perf_counter() - start_time),
+            "dataset_size": dataset_size,
+            "image_shape": list(image_shape),
+            "past_length": past_length,
+            "pred_length": pred_length,
+            "seed": seed,
+            "dt": None if env_name =='cartpole' else env.unwrapped.dt
+        },
+    )
     print('\n*** DONE ***')
     return
 

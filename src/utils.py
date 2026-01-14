@@ -8,7 +8,7 @@ import matplotlib.animation as animation
 import random
 import numpy as np
 import torch
-
+import math
 
 def anim_frames(frames):
     """
@@ -63,5 +63,38 @@ def rk4_sim(f, x0, tspan, dt):
       xtraj[i,:] = rk4_int(x, dt)
       x = np.copy(xtraj[i,:])
   return xtraj
+
+def format_time(seconds):
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = int(seconds % 60)
+    return f'{h:02d}:{m:02d}:{s:02d}'
+
+def wrapped_angle_error(pred, true):
+    diff = pred - true
+    wrapped = (diff + math.pi) % (2*math.pi) - math.pi
+    return wrapped
+
+
+#
+# ----- Metrics -----
+#
+def central_mass_ratio(mu_vec, r=1.0, dim=0):
+    mu = mu_vec.mean(dim=dim, keepdim=True)
+    std = mu_vec.std(dim=dim, keepdim=True)
+    return (torch.abs(mu_vec - mu) <= r * std).float().mean(dim=dim)
+
+def excess_kurtosis(mu_vec, dim=0, eps=1e-8):
+    mean = mu_vec.mean(dim=dim, keepdim=True)
+    var = ((mu_vec - mean)**2).mean(dim=dim, keepdim=True)
+    fourth = ((mu_vec - mean)**4).mean(dim=dim, keepdim=True)
+    kurt = fourth / (var**2 + eps)
+    return kurt - 3.0
+
+def shoulder_mass(mu_vec, r1=0.5, r2=2.0, dim=0):
+    mean = mu_vec.mean(dim=dim, keepdim=True)
+    std = mu_vec.std(dim=dim, keepdim=True)
+    d = torch.abs(mu_vec - mean)
+    return ((d > r1 * std) & (d <= r2 * std)).float().mean(dim=dim)
 
     

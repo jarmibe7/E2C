@@ -1,5 +1,5 @@
 ## E2C: Embed to Control
-**Author: Jared Berry**
+**Authors: Jared Berry, Ayush Gaggar**
 
 #### Objective
 The goal of this project was to implement the architecture of Embed to Control: A Locally Linear Latent Dynamics Model for Control from Raw Images.
@@ -29,6 +29,17 @@ To run `embed_to_control_V6.ipynb`, make sure to first collect data using `rl_co
 - Embed_to_Control.ipynb<br>
 Main E2C architecture.
 
+#### Running training
+1. Specify dataset params in src/data_gen/gen_gym and run the following command:
+```
+python -m src.data_gen.gen_gym
+```
+2. Create a training config file in config/
+3. Run the following command:
+```
+python -m src.main
+```
+
 #### Running on server
 ```ssh -v jarmibe7@dingo.mech.northwestern.edu```
 
@@ -40,7 +51,7 @@ Check ```nvtop``` to see GPU resources
 
 To run overnight and prevent from closing:
 
-```screen -S my_session_name```
+```screen -S e2c```
 
 And run the training script. Then to detach:
 
@@ -48,7 +59,7 @@ And run the training script. Then to detach:
 
 To resume:
 
-```screen -r my_session_name```
+```screen -r e2c```
 
 #### Citations
 > M. Watter, J. T. Springenberg, J. Boedecker, and M. Riedmiller, “Embed to Control: A Locally Linear Latent Dynamics Model for Control from Raw Images,” in *Advances in Neural Information Processing Systems 28 (NIPS 2015)*, Montréal, Canada, Dec. 2015, pp. 2746–2754. [Online]. Available: [https://arxiv.org/abs/1506.07365](https://arxiv.org/abs/1506.07365)
