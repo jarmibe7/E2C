@@ -299,12 +299,13 @@ class ClosedLoopRandomTrainer(BaseTrainer):
         super().__init__(dataset, model, config, device)
         self.num_rollout_steps = config['closed_loop']['num_rollout_steps']
         self.num_batches = config['closed_loop']['num_batches']
+        self.plan_horizon = config['trans'].get('pred_length', 3)   # How long to imagine rollouts
         assert self.num_rollout_steps > self.batch_size, 'Steps per rollout must be > batch_size!'
         assert self.batch_size < config['closed_loop']['buffer_capacity'], 'Batch size must be < buffer capacity!'
         if self.num_rollout_steps <= self.num_batches * self.batch_size:
             print(
                 f"Warning: num_rollout_steps ({self.num_rollout_steps}) > "
-                f"num_batches * batch_size ({self.num_batches * self .batch_size}).\n"
+                f"num_batches * batch_size ({self.num_batches * self.batch_size}).\n"
                 f"This may lead to inefficient training, as the probability of "
                 f"'double counting' samples in a single epoch is high."
             )
@@ -332,10 +333,12 @@ class ClosedLoopRandomTrainer(BaseTrainer):
         Collect observations and save them to replay buffer
         """
         # Initialize env and buffers
+        self.model.eval()
         obs, _ = self.env.reset()
         frame_buffer = []
         act_buffer = []
         idx = 0
+        
         while idx < self.num_rollout_steps:
             # Render current frame
             curr_img = process_image(self.env.render()).squeeze(0).permute(2, 0, 1)
@@ -344,8 +347,11 @@ class ClosedLoopRandomTrainer(BaseTrainer):
 
             # Sample and take action
             act = torch.from_numpy(self.env.action_space.sample()).to(self.device)
+            env_act = act.cpu().detach().numpy()
+            if not self.env_continuous:
+                env_act = int(env_act.item())
             act_buffer.append(act)
-            next_obs, rew, done, _, _ = self.env.step(act.cpu().detach().numpy())
+            next_obs, rew, done, _, _ = self.env.step(env_act)
 
             # If done reset env, otherwise add sample to dataset
             if done:
@@ -356,19 +362,27 @@ class ClosedLoopRandomTrainer(BaseTrainer):
                 continue
             else:
                 # Slide frame obs history frame buffer to next image
-                if len(frame_buffer) == self.past_length + 1:
+                if len(frame_buffer) == self.past_length + self.plan_horizon:
                     frame_buffer.pop(0)
                     act_buffer.pop(0)
                 next_image = process_image(self.env.render()).squeeze(0).permute(2, 0, 1)
                 frame_buffer.append(next_image)
 
                 # Add sample to replay buffer
-                if len(frame_buffer) == self.past_length + 1:
+                if len(frame_buffer) == self.past_length + self.plan_horizon:
+                    # Compute action and img windows
+                    if self.env_continuous:
+                        act_add = torch.stack(
+                            [a for a in act_buffer[self.past_length-1:self.past_length-1+self.plan_horizon]]
+                        )
+                    else:
+                        act_add = act_buffer[self.past_length-1:self.past_length-1+self.plan_horizon].unsqueeze(-1)
+
                     self.replay_buffer.add(
                         img = torch.stack(frame_buffer[0:self.past_length], dim=0),
-                        action = act_buffer[-1],
+                        action = act_add,
                         reward = rew,
-                        next_img = frame_buffer[self.past_length],
+                        next_img = torch.stack(frame_buffer[self.past_length:(self.past_length+self.plan_horizon)], dim=0),
                         done = done
                     )
                     idx += 1
@@ -384,7 +398,6 @@ class ClosedLoopRandomTrainer(BaseTrainer):
             x, u, r, x_next, done  = self.replay_buffer.sample(self.batch_size)
             x, x_next, u = x.to(self.device), x_next.to(self.device), u.to(self.device)
             x = x.reshape(x.shape[0], -1, *self.in_image_shape[1:])    # Stack obs history in channel dim
-            x_next = torch.hstack([x_next for i in range(self.model.past_length)]).to(self.device)
 
             # Forward pass
             train_return = self.model(x, x_next, u)
@@ -761,7 +774,6 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
     def __init__(self, dataset, model, config, device):
         super().__init__(dataset, model, config, device)
         self.closed_cfg = config.get('closed_loop', {})
-        self.plan_horizon = config['trans'].get('pred_length', 3)   # How long to imagine rollouts
         self.uses_rssm = hasattr(self.model, 'rssm_step') and hasattr(self.model, 'post')
         self.epochs_warmup = config['closed_loop'].get('epochs_warmup', 3)
 
