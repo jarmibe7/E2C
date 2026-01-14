@@ -15,11 +15,11 @@ from pathlib import Path
 import copy
 import traceback
 
-from src.conv_e2c import ConvE2C
-from src.rssm_e2c import RSSME2C
+from src.model.e2c import ConvE2C
+from src.model.rssm import RSSME2C
 from src.dataset import E2CDataset
 from src.utils import set_seed, anim_frames, format_time
-from src.policy import ConvPolicy
+from src.model.policy import ConvPolicy
 from src.trainer import E2CPretrainer, RSSMPretrainer, ClosedLoopPolicyTrainer, ClosedLoopUncertaintyTrainer, ClosedLoopRandomTrainer
 
 # Set random seed globally
@@ -68,7 +68,7 @@ def main():
             pred_length=config['trans']['pred_length'],
             conv_params=config['vae'],
             device=device,
-            output_uncertainty=(config['loss']['loss_type'] == 'uncertainty')
+            output_uncertainty=(config['loss']['loss_type'] == 'uncertainty' or 'rssm' in config['loss']['loss_type'])
         )
     else:
         model = ConvE2C(
@@ -79,7 +79,7 @@ def main():
         pred_length=config['trans']['pred_length'],
         conv_params=config['vae'],
         device=device,
-        output_uncertainty=(config['loss']['loss_type'] == 'uncertainty')
+        output_uncertainty=(config['loss']['loss_type'] == 'uncertainty' or 'rssm' in config['loss']['loss_type'])
     )
     load_path = config['train'].get('load_path', None)
     if load_path is None:

@@ -14,8 +14,8 @@ from torchmetrics import PeakSignalNoiseRatio as psnr
 from torchmetrics import StructuralSimilarityIndexMeasure as ssim
 import lpips
 
-from src.conv_e2c import ConvE2C
-from src.rssm_e2c import RSSME2C
+from src.model.e2c import ConvE2C
+from src.model.rssm import RSSME2C
 from src.dataset import E2CDataset
 from src.utils import set_seed, anim_frames, shoulder_mass, excess_kurtosis, central_mass_ratio
 

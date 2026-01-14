@@ -9,8 +9,8 @@ import torch
 from torch import nn
 import numpy as np
 
-from src.encoder import ConvEncoder
-from src.decoder import ConvDecoder, ChannelUncertaintyConvDecoder, ScalarUncertaintyConvDecoder
+from src.model.encoder import ConvEncoder
+from src.model.decoder import ConvDecoder, ChannelUncertaintyConvDecoder, ScalarUncertaintyConvDecoder
 
 
 
@@ -50,7 +50,7 @@ class RSSME2C(nn.Module):
         in_channels = conv_params['in_image_shape'][0]
         self.encoder = ConvEncoder(enc_latent_size, in_channels, conv_params)
         if self.output_uncertainty:
-            self.decoder = ChannelUncertaintyConvDecoder(stochastic_size, conv_params, self.encoder.out_dim_flat, self.encoder.out_shape)
+            self.decoder = ScalarUncertaintyConvDecoder(stochastic_size, conv_params, self.encoder.out_dim_flat, self.encoder.out_shape)
         else:
             self.decoder = ConvDecoder(stochastic_size, conv_params, self.encoder.out_dim_flat, self.encoder.out_shape)
         self.out_image_shape = self.decoder.out_image_shape
@@ -124,6 +124,7 @@ class RSSME2C(nn.Module):
         z_preds, mu_priors, log_var_priors = [], [], []
         mu_posts, log_var_posts = [mu], [log_var]
         x_preds = []
+        if self.output_uncertainty: x_pred_uncerts = []
 
         # Initialize training encoding window
         window = x
@@ -137,7 +138,8 @@ class RSSME2C(nn.Module):
             
             # Decode predicted latent
             if self.output_uncertainty:
-                x_pred, _ = self.decoder(z_pred)
+                x_pred, x_pred_uncertainty = self.decoder(z_pred)
+                x_pred_uncerts.append(x_pred_uncertainty)
             else:
                 x_pred = self.decoder(z_pred)
             x_preds.append(x_pred)
@@ -174,7 +176,8 @@ class RSSME2C(nn.Module):
                 "log_var_posts": torch.stack(log_var_posts[:-1], dim=1),
                 "mu_priors": torch.stack(mu_priors, dim=1),
                 "log_var_priors": torch.stack(log_var_priors, dim=1),
-                "x_recon_uncertainty": x_recon_uncertainty
+                "x_recon_uncertainty": x_recon_uncertainty,
+                "x_pred_uncertainty": torch.stack(x_pred_uncerts, dim=1)
             }
         else:
             return {

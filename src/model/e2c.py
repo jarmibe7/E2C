@@ -9,8 +9,8 @@ import torch
 from torch import nn
 import numpy as np
 
-from src.encoder import ConvEncoder
-from src.decoder import ConvDecoder, ChannelUncertaintyConvDecoder, ScalarUncertaintyConvDecoder
+from src.model.encoder import ConvEncoder
+from src.model.decoder import ConvDecoder, ChannelUncertaintyConvDecoder, ScalarUncertaintyConvDecoder
 
 
 class ConvE2C(nn.Module):
@@ -47,7 +47,7 @@ class ConvE2C(nn.Module):
         in_channels = conv_params['in_image_shape'][0]
         self.encoder = ConvEncoder(enc_latent_size, in_channels, conv_params)
         if self.output_uncertainty:
-            self.decoder = ChannelUncertaintyConvDecoder(latent_size, conv_params, self.encoder.out_dim_flat, self.encoder.out_shape)
+            self.decoder = ScalarUncertaintyConvDecoder(latent_size, conv_params, self.encoder.out_dim_flat, self.encoder.out_shape)
         else:
             self.decoder = ConvDecoder(latent_size, conv_params, self.encoder.out_dim_flat, self.encoder.out_shape)
 

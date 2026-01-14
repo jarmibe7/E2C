@@ -13,7 +13,7 @@ from pathlib import Path
 from tqdm import tqdm
 from pyvirtualdisplay import Display
 
-from src.loss import E2CLoss, UncertaintyE2CLoss, RSSMLoss
+from src.model.loss import E2CLoss, UncertaintyE2CLoss, RSSMLoss
 from src.eval import Plotter, Evaluator
 from src.replay_buffer import ReplayBuffer
 from src.data_gen.gen_gym import name_to_env, env_to_aspace, process_image

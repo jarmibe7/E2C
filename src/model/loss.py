@@ -226,10 +226,52 @@ class RSSMLoss(nn.Module):
             + (torch.exp(logvar_q) + (mu_q - mu_p) ** 2) / torch.exp(logvar_p)
             - 1
         ).sum(dim=-1)
+    
+    def expand_uncertainty(self, logvar, target):
+        """
+        Ensure uncertainty (log variance) output from decoder is of correct shape to be used by 
+        gaussian_nll loss function in PyTorch API.
+
+        Args:
+            logvar: uncertainty tensor (any of:
+                    [B], [B,1], [B,1,1,1], [B,K,H,W], [B,C,H,W])
+                    where C % k == 0
+            target: image tensor [B,C,H,W]
+        """
+        B, T, C, H, W = target.shape
+
+        # Ensure 5D
+        while logvar.dim() < 5:
+            logvar = logvar.unsqueeze(-1)
+
+        # [B,T,1,1,1] -> [B,T,C,H,W]
+        if logvar.shape[2] == 1:
+            logvar = logvar.expand(B, T, C, H, W)
+
+        # [B,T,K,H,W] where K != C
+        elif logvar.shape[2] != C:
+            if C % logvar.shape[3] != 0:
+                raise ValueError(
+                    f"Cannot expand uncertainty with {logvar.shape[2]} channels "
+                    f"to match image with {C} channels"
+                )
+            
+            # Tile uncertainty to be shape compatible
+            repeat_factor = C // logvar.shape[2]
+            logvar = logvar.repeat(1, 1, repeat_factor, 1, 1)
+
+        return logvar
 
     def forward(self, tr, epoch):
         # Reconstruction loss
-        recon = self.recon_mult*nn.functional.mse_loss(tr['x_next'], tr['x_pred'], reduction='mean')
+        # recon = self.recon_mult*nn.functional.mse_loss(tr['x_next'], tr['x_pred'], reduction='mean')
+        x_pred_uncertainty = self.expand_uncertainty(tr['x_pred_uncertainty'], tr['x_pred'])
+        recon = nn.functional.gaussian_nll_loss(
+            tr['x_next'],
+            tr['x_pred'], 
+            torch.exp(x_pred_uncertainty) + 1e-6,
+            reduction='mean'
+        )
 
         # Encoding KL Divergence
         # KL loss (posterior vs prior)
