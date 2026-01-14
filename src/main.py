@@ -36,7 +36,7 @@ def main():
     print('*** STARTING ***\n')
     # Load config, make run path, and choose torch device
     # ---------- CONFIG HERE ----------
-    config_name = 'rssm_reacher_active_random_v0'   # <--- CHANGE CONFIG HERE
+    config_name = 'rssm_push_active_v0'   # <--- CHANGE CONFIG HERE
     with open(CONFIG_PATH / f'{config_name}.yaml', "r") as f:
         config = yaml.safe_load(f)
     config['config_name'] = config_name
