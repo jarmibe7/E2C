@@ -12,6 +12,7 @@ import gymnasium as gym
 from pathlib import Path
 from tqdm import tqdm
 from pyvirtualdisplay import Display
+import time
 
 from src.model.loss import E2CLoss, UncertaintyE2CLoss, RSSMLoss
 from src.eval import Plotter, Evaluator
@@ -51,12 +52,17 @@ class BaseTrainer():
         if config['closed_loop']['closed_loop']:
             # Compute training stats
             num_updates = self.num_epochs * config['closed_loop']['num_batches']
-            total_draws = self.batch_size * num_updates
+            num_train_inters = self.batch_size * num_updates
+            num_env_inters = self.num_epochs * config['closed_loop']['num_rollout_steps']
+            # num_batches * num_epochs * batch_size - # interactions agents trained on
+            # num_rollout_steps * num_epochs - # interactions collected
+            # num_rollout_steps * num_epochs * cem_iters * num_action_samples - # iteractions collected and imagined
 
             print(
-                f"Closed-loop training enabled\n"
-                f"- Gradient updates: {num_updates}\n"
-                f"- Samples drawn (with replay): {total_draws}\n"
+                f"Closed-loop training: \n"
+                f"- Total final training interactions: {num_train_inters}\n"
+                f"- Total environment interactions collected: {num_env_inters}\n"
+                f"- Gradient updates (training iters / batch size): {num_updates}\n"
                 f"- Replay buffer capacity: {config['closed_loop']['buffer_capacity']}\n"
                 f"- Rollout steps per epoch: {config['closed_loop']['num_rollout_steps']}\n"
             )
@@ -294,6 +300,14 @@ class ClosedLoopRandomTrainer(BaseTrainer):
         self.num_rollout_steps = config['closed_loop']['num_rollout_steps']
         self.num_batches = config['closed_loop']['num_batches']
         assert self.num_rollout_steps > self.batch_size, 'Steps per rollout must be > batch_size!'
+        assert self.batch_size < config['closed_loop']['buffer_capacity'], 'Batch size must be < buffer capacity!'
+        if self.num_rollout_steps <= self.num_batches * self.batch_size:
+            print(
+                f"Warning: num_rollout_steps ({self.num_rollout_steps}) > "
+                f"num_batches * batch_size ({self.num_batches * self .batch_size}).\n"
+                f"This may lead to inefficient training, as the probability of "
+                f"'double counting' samples in a single epoch is high."
+            )
 
         # Initialize environment
         disp = Display(visible=0, size=(480, 480))
@@ -851,14 +865,16 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
                 mu_q, log_var_q, z_q = self._encode_posterior_rssm(window, h)
                 for act in action_seq:
                     act_batch = act.view(1, -1).to(self.device)
+                    h, z_q, mu_p, log_var_p = self.model.rssm_step(h, z_q, act_batch)
+
+                    """ old way
+                    act_batch = act.view(1, -1).to(self.device)
                     h, z_prior, mu_p, log_var_p = self.model.rssm_step(h, z_q, act_batch)
                     x_pred = self._decode_latent(z_prior)
-                    # TODO: Ayush: Is there a way we can get around decoding to re-encode?
-                    # Jared: Don't we want to compare posterior of old window with prior/posterior of new window?
-                    #        Rather than comparing prior of new window with posterior of new window
                     frames = self._update_window(frames, x_pred)
                     window = self._frames_to_tensor(frames)
                     mu_q, log_var_q, z_q = self._encode_posterior_rssm(window, h) 
+                    """
                     total_kl += self._kl_diag_gaussian(mu_q, log_var_q, mu_p, log_var_p).mean().item()
             else:
                 mu_q, log_var_q, z_q = self._encode_posterior_e2c(window)
@@ -914,10 +930,10 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
         # Prepare final action sequences to return
         # TODO: Ayush: should we even be updating init_control and sigma like this? or just reinitialize to 0 every time?
         #       Jared: The optimal ontrol would be dependent on time and state, so there may be no point in updating?
-        last_val = self.init_control[-1].clone()
-        self.init_control[:-1] = mu[1:].clone()
-        self.init_control[-1] = last_val
-        self.sigma[:-1] = sigma[1:].clone()
+        # last_val = self.init_control[-1].clone()
+        # self.init_control[:-1] = mu[1:].clone()
+        # self.init_control[-1] = last_val
+        # self.sigma[:-1] = sigma[1:].clone()
         # self.sigma[-1] = sigma[-1].clone()
         return mu[0].clone()
     
@@ -946,9 +962,13 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
 
             # Select action using random or informative policy based on epoch and buffer length
             if epoch >= self.epochs_warmup and len(frame_buffer) >= self.past_length:
-                if epoch == 3 and len(frame_buffer) == self.past_length:
+                if epoch == self.epochs_warmup and len(frame_buffer) == self.past_length:
                     print(f'Switching to informative action selection using CEM over {self.num_action_samples} samples and {self.cem_iters} iterations. \n')
+                tic = time.time()
                 act = self._select_information_action(frame_buffer)
+                toc = time.time()
+                if idx == 0 and epoch == self.epochs_warmup:
+                    print(f"CEM planning will take ~{((toc - tic)*self.num_rollout_steps/60):.3f} minutes.")
             else:
                 if epoch == 0 and len(frame_buffer) == 1: 
                     print(f'Initializing data from random actions. \n')
