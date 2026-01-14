@@ -252,6 +252,7 @@ class RSSMPretrainer(BaseTrainer):
                 x = x.reshape(x.shape[0], -1, *self.in_image_shape[1:])    # Stack obs history in channel dim
 
                 # Forward pass
+                breakpoint()
                 train_return = self.model(x, x_next, u)
                 train_return['x'] = x[:, -self.out_image_shape[0]:] # Only compute loss with current frame, not history
                 train_return['x_next'] = x_next
@@ -747,8 +748,10 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
     def __init__(self, dataset, model, config, device):
         super().__init__(dataset, model, config, device)
         self.closed_cfg = config.get('closed_loop', {})
-        self.plan_horizon = config['trans'].get('pred_length', 3)
+        self.plan_horizon = config['trans'].get('pred_length', 3)   # How long to imagine rollouts
         self.uses_rssm = hasattr(self.model, 'rssm_step') and hasattr(self.model, 'post')
+        self.epochs_warmup = config['closed_loop'].get('epochs_warmup', 3)
+
         # CEM params
         self.num_action_samples = self.closed_cfg.get('samples', 100)
         self.elite_frac = self.closed_cfg.get('elite_frac', 0.1)
@@ -757,6 +760,10 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
         self.alpha = self.closed_cfg.get('alpha', 0.7)
 
     def _init_cem_mu_sig(self):
+        """
+        Initialize a Gaussian distribution over action sequences
+        """
+        # Initialize mean
         cfg_val = self.closed_cfg.get('init_control', 'zero')
         if cfg_val == 'from_txt':
             print("Only 'zero' and 'random' init_control methods are currently supported. Defaulting to 'random'.")
@@ -765,13 +772,15 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
             self.init_control = torch.stack([torch.from_numpy(self.env.action_space.sample()).to(self.device) for _ in range(self.plan_horizon)], dim=0)
         else:
             self.init_control = torch.zeros(self.plan_horizon, len(self.env.action_space.sample()), device=self.device)
-        self.sigma_init = self.closed_cfg.get('sigma_init', 0.5)
-        self.sigma_min = self.closed_cfg.get('sigma_min', 0.05)
+
+        # Initialize variance
+        self.sigma_init = self.closed_cfg.get('sigma_init', 0.5)    
+        self.sigma_min = self.closed_cfg.get('sigma_min', 0.05)     # Min value for clamping variance
         self.sigma = torch.ones_like(self.init_control, device=self.device) * self.sigma_init
 
     @staticmethod
     def _kl_diag_gaussian(mu_q, log_var_q, mu_p, log_var_p):
-        # same exact function as RSSMLoss.kl_divergence
+        # Same exact function as RSSMLoss.kl_divergence
         return 0.5 * (
             log_var_p - log_var_q
             + (torch.exp(log_var_q) + (mu_q - mu_p) ** 2) / torch.exp(log_var_p)
@@ -779,11 +788,17 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
         ).sum(dim=-1)
 
     def _frames_to_tensor(self, frames):
+        """
+        Stack a window of observation frames to tensor of shape [1, past_length*C, H, W]
+        """
         stacked = torch.stack(frames[-self.past_length:], dim=0).unsqueeze(0)
         _, _, C, H, W = stacked.shape
         return stacked.view(1, -1, H, W)
 
     def _update_window(self, frames, new_frame):
+        """
+        Shift a frame to include a new frame and remove the oldest
+        """
         window = list(frames[-self.past_length+1:]) if len(frames) >= self.past_length else list(frames)
         window.append(new_frame)
         return window
@@ -802,7 +817,6 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
         return mu, log_var, z
 
     def _encode_posterior_rssm(self, obs_tensor, h):
-        print("cem", obs_tensor.shape, h.shape)
         enc = self.model.encoder(obs_tensor)
         post_in = torch.cat([enc, h], dim=-1)
         post_stats = self.model.post(post_in)
@@ -840,10 +854,12 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
                     act_batch = act.view(1, -1).to(self.device)
                     h, z_prior, mu_p, log_var_p = self.model.rssm_step(h, z_q, act_batch)
                     x_pred = self._decode_latent(z_prior)
-                    # is there a way we can get around decoding to re-encode?
+                    # TODO: Ayush: Is there a way we can get around decoding to re-encode?
+                    # Jared: Don't we want to compare posterior of old window with prior/posterior of new window?
+                    #        Rather than comparing prior of new window with posterior of new window
                     frames = self._update_window(frames, x_pred)
                     window = self._frames_to_tensor(frames)
-                    mu_q, log_var_q, z_q = self._encode_posterior_rssm(window, h)
+                    mu_q, log_var_q, z_q = self._encode_posterior_rssm(window, h) 
                     total_kl += self._kl_diag_gaussian(mu_q, log_var_q, mu_p, log_var_p).mean().item()
             else:
                 mu_q, log_var_q, z_q = self._encode_posterior_e2c(window)
@@ -862,16 +878,22 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
     def _sample_cem(self, frame_buffer):
         # Initialize CEM distribution
         mu = self.init_control.clone()  # (plan_horizon, action_size)
-        sigma = self.sigma.clone()  # (plan_horizon, action_size)
+        sigma = self.sigma.clone()      # (plan_horizon, action_size)
         for _ in range(self.cem_iters):
             costs = torch.zeros(self.num_action_samples, device=self.device)
             action_samples = torch.zeros((self.num_action_samples, self.plan_horizon, mu.shape[1]), device=self.device)
             trajs = []
+
             # Sample action sequences from current distribution
             for k in range(self.num_action_samples):
                 a_t = torch.normal(mu, sigma)
+
                 # Clip to action space bounds
-                action_samples[k] = torch.clamp(a_t, torch.as_tensor(self.env.action_space.low, device=self.device, dtype=torch.float32), torch.as_tensor(self.env.action_space.high, device=self.device, dtype=torch.float32))
+                action_samples[k] = torch.clamp(
+                    a_t, 
+                    torch.as_tensor(self.env.action_space.low, device=self.device, dtype=torch.float32), 
+                    torch.as_tensor(self.env.action_space.high, device=self.device, dtype=torch.float32)
+                )
             
             # Evaluate information gain for each sequence
             for k, action_seq in enumerate(action_samples):
@@ -879,10 +901,10 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
             
             # Select elite sequences
             num_elites = max(1, int(self.elite_frac * self.num_action_samples))
-            elite_idxs = costs.argsort()[-num_elites:]
+            elite_idxs = costs.argsort()[-num_elites:]      # TODO: Is sorting afterwards the most optimal way?
             elite_seqs = action_samples[elite_idxs]
             
-            # Update distribution parameters
+            # Update CEM distribution parameters
             # take mean and stddev across elite sequences at each time step
             new_mu = torch.stack([torch.mean(torch.stack([seq[t] for seq in elite_seqs], dim=0), dim=0) for t in range(self.plan_horizon)], dim=0)
             new_sigma = torch.stack([torch.std(torch.stack([seq[t] for seq in elite_seqs], dim=0), dim=0) for t in range(self.plan_horizon)], dim=0)
@@ -891,7 +913,8 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
             sigma = torch.clamp(sigma, min=self.sigma_min)
             
         # Prepare final action sequences to return
-        # should we even be updating init_control and sigma like this? or just reinitialize to 0 every time?
+        # TODO: Ayush: should we even be updating init_control and sigma like this? or just reinitialize to 0 every time?
+        #       Jared: The optimal ontrol would be dependent on time and state, so there may be no point in updating?
         last_val = self.init_control[-1].clone()
         self.init_control[:-1] = mu[1:].clone()
         self.init_control[-1] = last_val
@@ -922,14 +945,15 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
             if len(frame_buffer) == 0:
                 frame_buffer.append(curr_img)
 
-            if epoch < 3:
-                if epoch == 0 and idx == 0: 
-                    print(f'Initializing data from random actions. \n')
-                act = torch.from_numpy(self.env.action_space.sample()).to(self.device)
-            else:
-                if epoch == 3 and idx == 0:
+            # Select action using random or informative policy based on epoch and buffer length
+            if epoch >= self.epochs_warmup and len(frame_buffer) >= self.past_length:
+                if epoch == 3 and len(frame_buffer) == self.past_length:
                     print(f'Switching to informative action selection using CEM over {self.num_action_samples} samples and {self.cem_iters} iterations. \n')
                 act = self._select_information_action(frame_buffer)
+            else:
+                if epoch == 0 and len(frame_buffer) == 1: 
+                    print(f'Initializing data from random actions. \n')
+                act = torch.from_numpy(self.env.action_space.sample()).to(self.device)
             env_act = act.cpu().detach().numpy()
             if not self.env_continuous:
                 env_act = int(env_act.item())
@@ -944,19 +968,27 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
                 continue
             else:
                 # Slide frame obs history frame buffer to next image
-                if len(frame_buffer) == self.past_length + 1:
+                if len(frame_buffer) == self.past_length + self.plan_horizon:
                     frame_buffer.pop(0)
                     act_buffer.pop(0)
                 next_image = process_image(self.env.render()).squeeze(0).permute(2, 0, 1)
                 frame_buffer.append(next_image)
 
                 # Add sample to replay buffer
-                if len(frame_buffer) == self.past_length + 1:
+                if len(frame_buffer) == self.past_length + self.plan_horizon:
+                    # Compute action and img windows
+                    if self.env_continuous:
+                        act_add = torch.stack(
+                            [a for a in act_buffer[self.past_length-1:self.past_length-1+self.plan_horizon]]
+                        )
+                    else:
+                        act_add = act_buffer[self.past_length-1:self.past_length-1+self.plan_horizon].unsqueeze(-1)
+
                     self.replay_buffer.add(
                         img = torch.stack(frame_buffer[0:self.past_length], dim=0),
-                        action = act_buffer[-1],
+                        action = act_add,
                         reward = rew,
-                        next_img = frame_buffer[self.past_length],
+                        next_img = torch.stack(frame_buffer[self.past_length:(self.past_length+self.plan_horizon)], dim=0),
                         done = done
                     )
                     idx += 1
@@ -976,6 +1008,36 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
             
         pbar.close()
     
-    # def train(self, epoch): 
-    #   right now, inheriting train from ClosedLoopRandomTrainer, 
-    #   but can make modifications, since we want to re-use the KLD from loss?
+    # TODO: re-use the KLD from loss
+    def train(self, epoch): 
+        # World model gradient update
+        total_model_loss, total_policy_loss = 0.0, 0.0
+        for i in range(self.num_batches):
+            # Unload batch
+            x, u, r, x_next, done  = self.replay_buffer.sample(self.batch_size)
+            x, x_next, u = x.to(self.device), x_next.to(self.device), u.to(self.device)
+            x = x.reshape(x.shape[0], -1, *self.in_image_shape[1:])    # Stack obs history in channel dim
+
+            # Forward pass
+            train_return = self.model(x, x_next, u)
+            train_return['x'] = x
+            train_return['x_next'] = x_next
+
+            # Model loss and backprop
+            model_loss, loss_return = self.model_criterion(train_return, epoch)
+            self.plotter.log(loss_return)
+            self.model_optimizer.zero_grad()
+            model_loss.backward()
+            self.model_optimizer.step()
+
+            # TODO: Raise exception
+            if torch.isnan(model_loss):
+                print("NaN loss encountered, stopping training.")
+                break
+
+            total_model_loss += model_loss.item() * x.size(0)   # Aggregate total epoch loss
+
+        # Compute average model loss
+        avg_model_loss = total_model_loss / (self.batch_size*self.num_batches)
+
+        return avg_model_loss
