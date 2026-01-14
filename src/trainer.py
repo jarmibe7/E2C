@@ -9,6 +9,8 @@ import numpy as np
 import torch
 import yaml
 import gymnasium as gym
+import gymnasium_robotics
+gym.register_envs(gymnasium_robotics)
 from pathlib import Path
 from tqdm import tqdm
 from pyvirtualdisplay import Display
@@ -17,7 +19,7 @@ import time
 from src.model.loss import E2CLoss, UncertaintyE2CLoss, RSSMLoss
 from src.eval import Plotter, Evaluator
 from src.replay_buffer import ReplayBuffer
-from src.data_gen.gen_gym import name_to_env, env_to_aspace, process_image
+from src.data_gen.gen_fetch import name_to_env, env_to_aspace, process_image
 
 # Paths
 PROJECT_ROOT = Path(__file__).parent.parent
