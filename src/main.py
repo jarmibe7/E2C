@@ -36,7 +36,7 @@ def main():
     print('*** STARTING ***\n')
     # Load config, make run path, and choose torch device
     # ---------- CONFIG HERE ----------
-    config_name = 'rssm_reacher_active_v0'   # <--- CHANGE CONFIG HERE
+    config_name = 'rssm_reacher_active_random_v0'   # <--- CHANGE CONFIG HERE
     with open(CONFIG_PATH / f'{config_name}.yaml', "r") as f:
         config = yaml.safe_load(f)
     config['config_name'] = config_name
@@ -111,6 +111,8 @@ def main():
             trainer = ClosedLoopInformativeTrainer(dataset, model, config, device)
         else: 
             raise NotImplementedError(f'Policy type "{policy_type}" not supported!')
+        config_save['env_interactions'] = trainer.num_env_inters
+        config_save['train_interactions'] = trainer.num_train_inters
     else:
         if 'rssm' in config_name:
             trainer = RSSMPretrainer(dataset, model, config, device)
