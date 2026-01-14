@@ -252,7 +252,6 @@ class RSSMPretrainer(BaseTrainer):
                 x = x.reshape(x.shape[0], -1, *self.in_image_shape[1:])    # Stack obs history in channel dim
 
                 # Forward pass
-                breakpoint()
                 train_return = self.model(x, x_next, u)
                 train_return['x'] = x[:, -self.out_image_shape[0]:] # Only compute loss with current frame, not history
                 train_return['x_next'] = x_next

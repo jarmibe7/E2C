@@ -158,7 +158,6 @@ def main():
                         [torch.from_numpy(a) for a in act_buffer[past_length-1:past_length-1+pred_length]]
                     )
                 else:
-                    breakpoint()
                     control[idx] = torch.tensor(
                         act_buffer[past_length-1:past_length-1+pred_length]
                     ).unsqueeze(-1)

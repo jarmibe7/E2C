@@ -2,6 +2,7 @@
 Replay buffers for online policy training
 """
 import torch
+import random
 
 class ReplayBuffer:
     """
@@ -52,7 +53,8 @@ class ReplayBuffer:
 
     def sample(self, batch_size):
         # Generate batch_size random samples from the replay buffer
-        idx = torch.randint(0, self.size, (batch_size,), device=self.device)
+        # idx = torch.randint(0, self.size, (batch_size,), device=self.device)  # Samples with replacement
+        idx = random.sample(range(self.size), batch_size)
 
         return (
             self.X[idx],
