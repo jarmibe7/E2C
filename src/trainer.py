@@ -738,3 +738,244 @@ class ClosedLoopUncertaintyTrainer(BaseTrainer):
             pbar.update(1)
             
         pbar.close()
+
+class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
+    """
+    Closed-loop trainer that selects actions by maximizing expected information gain
+    (posterior vs prior KL) over candidate action sequences.
+    """
+    def __init__(self, dataset, model, config, device):
+        super().__init__(dataset, model, config, device)
+        self.closed_cfg = config.get('closed_loop', {})
+        self.plan_horizon = config['trans'].get('pred_length', 3)
+        self.uses_rssm = hasattr(self.model, 'rssm_step') and hasattr(self.model, 'post')
+        # CEM params
+        self.num_action_samples = self.closed_cfg.get('samples', 100)
+        self.elite_frac = self.closed_cfg.get('elite_frac', 0.1)
+        self.cem_iters = self.closed_cfg.get('iters', 3)
+        self._init_cem_mu_sig()
+        self.alpha = self.closed_cfg.get('alpha', 0.7)
+
+    def _init_cem_mu_sig(self):
+        cfg_val = self.closed_cfg.get('init_control', 'zero')
+        if cfg_val == 'from_txt':
+            print("Only 'zero' and 'random' init_control methods are currently supported. Defaulting to 'random'.")
+            self.init_control = torch.stack([torch.from_numpy(self.env.action_space.sample()).to(self.device) for _ in range(self.plan_horizon)], dim=0)
+        elif cfg_val == 'random':
+            self.init_control = torch.stack([torch.from_numpy(self.env.action_space.sample()).to(self.device) for _ in range(self.plan_horizon)], dim=0)
+        else:
+            self.init_control = torch.zeros(self.plan_horizon, len(self.env.action_space.sample()), device=self.device)
+        self.sigma_init = self.closed_cfg.get('sigma_init', 0.5)
+        self.sigma_min = self.closed_cfg.get('sigma_min', 0.05)
+        self.sigma = torch.ones_like(self.init_control, device=self.device) * self.sigma_init
+
+    @staticmethod
+    def _kl_diag_gaussian(mu_q, log_var_q, mu_p, log_var_p):
+        # same exact function as RSSMLoss.kl_divergence
+        return 0.5 * (
+            log_var_p - log_var_q
+            + (torch.exp(log_var_q) + (mu_q - mu_p) ** 2) / torch.exp(log_var_p)
+            - 1
+        ).sum(dim=-1)
+
+    def _frames_to_tensor(self, frames):
+        stacked = torch.stack(frames[-self.past_length:], dim=0).unsqueeze(0)
+        _, _, C, H, W = stacked.shape
+        return stacked.view(1, -1, H, W)
+
+    def _update_window(self, frames, new_frame):
+        window = list(frames[-self.past_length+1:]) if len(frames) >= self.past_length else list(frames)
+        window.append(new_frame)
+        return window
+
+    def _decode_latent(self, z):
+        decoded = self.model.decoder(z)
+        if isinstance(decoded, tuple):
+            decoded = decoded[0]
+        return decoded.detach().squeeze(0)
+
+    def _encode_posterior_e2c(self, obs_tensor):
+        enc = self.model.encoder(obs_tensor)
+        mu = self.model.mu(enc)
+        log_var = self.model.log_var(enc)
+        z = self.model.reparameterize(mu, log_var)
+        return mu, log_var, z
+
+    def _encode_posterior_rssm(self, obs_tensor, h):
+        print("cem", obs_tensor.shape, h.shape)
+        enc = self.model.encoder(obs_tensor)
+        post_in = torch.cat([enc, h], dim=-1)
+        post_stats = self.model.post(post_in)
+        mu, log_var = post_stats.chunk(2, dim=-1)
+        z = self.model.reparameterize(mu, log_var)
+        return mu, log_var, z
+    
+    def _sample_random_action_sequences(self):
+        seqs = []
+        for _ in range(self.num_action_samples):
+            acts = []
+            for _ in range(self.plan_horizon):
+                a_np = self.env.action_space.sample()
+                a_t = torch.as_tensor(a_np, device=self.device, dtype=torch.float32)
+                if a_t.dim() == 0:
+                    a_t = a_t.unsqueeze(0)
+                acts.append(a_t)
+            seqs.append(torch.stack(acts, dim=0))
+        return seqs
+
+    def _rollout_info_gain(self, frame_buffer, action_seq):
+        with torch.no_grad():
+            frames = [f.to(self.device) for f in frame_buffer[-self.past_length:]]
+            window = self._frames_to_tensor(frames)
+            total_kl = 0.0
+
+            if self.uses_rssm:
+                # TODO:
+                # this is a function-alized version of the RSSM rollout from the RSSME2C class
+                # useful for debugging
+                # this isn't super efficient since we re-encode at each step, but it's fine for now
+                h = torch.zeros(1, self.model.deterministic_size, device=self.device)
+                mu_q, log_var_q, z_q = self._encode_posterior_rssm(window, h)
+                for act in action_seq:
+                    act_batch = act.view(1, -1).to(self.device)
+                    h, z_prior, mu_p, log_var_p = self.model.rssm_step(h, z_q, act_batch)
+                    x_pred = self._decode_latent(z_prior)
+                    # is there a way we can get around decoding to re-encode?
+                    frames = self._update_window(frames, x_pred)
+                    window = self._frames_to_tensor(frames)
+                    mu_q, log_var_q, z_q = self._encode_posterior_rssm(window, h)
+                    total_kl += self._kl_diag_gaussian(mu_q, log_var_q, mu_p, log_var_p).mean().item()
+            else:
+                mu_q, log_var_q, z_q = self._encode_posterior_e2c(window)
+                for act in action_seq:
+                    act_batch = act.view(1, -1).to(self.device)
+                    mu_p, log_var_p, z_prior = self.model.transition(z_q, mu_q, log_var_q, act_batch)
+                    x_pred = self._decode_latent(z_prior)
+                    frames = self._update_window(frames, x_pred)
+                    window = self._frames_to_tensor(frames)
+                    mu_q, log_var_q, z_q = self._encode_posterior_e2c(window)
+                    total_kl += self._kl_diag_gaussian(mu_q, log_var_q, mu_p, log_var_p).mean().item()
+
+            return total_kl
+
+    
+    def _sample_cem(self, frame_buffer):
+        # Initialize CEM distribution
+        mu = self.init_control.clone()  # (plan_horizon, action_size)
+        sigma = self.sigma.clone()  # (plan_horizon, action_size)
+        for _ in range(self.cem_iters):
+            costs = torch.zeros(self.num_action_samples, device=self.device)
+            action_samples = torch.zeros((self.num_action_samples, self.plan_horizon, mu.shape[1]), device=self.device)
+            trajs = []
+            # Sample action sequences from current distribution
+            for k in range(self.num_action_samples):
+                a_t = torch.normal(mu, sigma)
+                # Clip to action space bounds
+                action_samples[k] = torch.clamp(a_t, torch.as_tensor(self.env.action_space.low, device=self.device, dtype=torch.float32), torch.as_tensor(self.env.action_space.high, device=self.device, dtype=torch.float32))
+            
+            # Evaluate information gain for each sequence
+            for k, action_seq in enumerate(action_samples):
+                costs[k] = self._rollout_info_gain(frame_buffer, action_seq)
+            
+            # Select elite sequences
+            num_elites = max(1, int(self.elite_frac * self.num_action_samples))
+            elite_idxs = costs.argsort()[-num_elites:]
+            elite_seqs = action_samples[elite_idxs]
+            
+            # Update distribution parameters
+            # take mean and stddev across elite sequences at each time step
+            new_mu = torch.stack([torch.mean(torch.stack([seq[t] for seq in elite_seqs], dim=0), dim=0) for t in range(self.plan_horizon)], dim=0)
+            new_sigma = torch.stack([torch.std(torch.stack([seq[t] for seq in elite_seqs], dim=0), dim=0) for t in range(self.plan_horizon)], dim=0)
+            mu = self.alpha * mu + (1 - self.alpha) * new_mu
+            sigma = self.alpha * sigma + (1 - self.alpha) * new_sigma
+            sigma = torch.clamp(sigma, min=self.sigma_min)
+            
+        # Prepare final action sequences to return
+        # should we even be updating init_control and sigma like this? or just reinitialize to 0 every time?
+        last_val = self.init_control[-1].clone()
+        self.init_control[:-1] = mu[1:].clone()
+        self.init_control[-1] = last_val
+        self.sigma[:-1] = sigma[1:].clone()
+        # self.sigma[-1] = sigma[-1].clone()
+        return mu[0].clone()
+    
+    def _select_information_action(self, frame_buffer):
+        # if len(frame_buffer) < self.past_length:
+        #     print("SOMETHING IS WRONG: not enough frames in buffer! Defaulting to random action.")
+        #     a_np = self.env.action_space.sample()
+        #     return torch.as_tensor(a_np, device=self.device, dtype=torch.float32).flatten()
+        return self._sample_cem(frame_buffer)
+
+    def collect_rollouts(self, epoch):
+        """
+        Collect observations using an information-gain MPC objective and save them to replay buffer.
+        """
+        self.model.eval()
+        obs, _ = self.env.reset()
+        frame_buffer = []
+        act_buffer = []
+        idx = 0
+        
+        while idx < self.num_rollout_steps:
+            self._init_cem_mu_sig()
+            curr_img = process_image(self.env.render()).squeeze(0).permute(2, 0, 1)
+            if len(frame_buffer) == 0:
+                frame_buffer.append(curr_img)
+
+            if epoch < 3:
+                if epoch == 0 and idx == 0: 
+                    print(f'Initializing data from random actions. \n')
+                act = torch.from_numpy(self.env.action_space.sample()).to(self.device)
+            else:
+                if epoch == 3 and idx == 0:
+                    print(f'Switching to informative action selection using CEM over {self.num_action_samples} samples and {self.cem_iters} iterations. \n')
+                act = self._select_information_action(frame_buffer)
+            env_act = act.cpu().detach().numpy()
+            if not self.env_continuous:
+                env_act = int(env_act.item())
+            act_buffer.append(act)
+            next_obs, rew, done, _, _ = self.env.step(env_act)
+
+            if done:
+                obs, _ = self.env.reset()
+                done = False
+                frame_buffer = []
+                act_buffer = []
+                continue
+            else:
+                # Slide frame obs history frame buffer to next image
+                if len(frame_buffer) == self.past_length + 1:
+                    frame_buffer.pop(0)
+                    act_buffer.pop(0)
+                next_image = process_image(self.env.render()).squeeze(0).permute(2, 0, 1)
+                frame_buffer.append(next_image)
+
+                # Add sample to replay buffer
+                if len(frame_buffer) == self.past_length + 1:
+                    self.replay_buffer.add(
+                        img = torch.stack(frame_buffer[0:self.past_length], dim=0),
+                        action = act_buffer[-1],
+                        reward = rew,
+                        next_img = frame_buffer[self.past_length],
+                        done = done
+                    )
+                    idx += 1
+        self.model.train()
+
+    def learn(self):
+        model_loss = 0.0
+        pbar = tqdm(range(self.num_epochs), desc="Training")
+        for epoch in range(self.num_epochs):
+            self.collect_rollouts(epoch)
+            model_loss = self.train(epoch)
+
+            pbar.set_postfix({
+                'Epoch': epoch+1,
+                'Model Loss': f"{model_loss:.4f}"})
+            pbar.update(1)
+            
+        pbar.close()
+    
+    # def train(self, epoch): 
+    #   right now, inheriting train from ClosedLoopRandomTrainer, 
+    #   but can make modifications, since we want to re-use the KLD from loss?

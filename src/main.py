@@ -20,7 +20,7 @@ from src.model.rssm import RSSME2C
 from src.dataset import E2CDataset
 from src.utils import set_seed, anim_frames, format_time
 from src.model.policy import ConvPolicy
-from src.trainer import E2CPretrainer, RSSMPretrainer, ClosedLoopPolicyTrainer, ClosedLoopUncertaintyTrainer, ClosedLoopRandomTrainer
+from src.trainer import E2CPretrainer, RSSMPretrainer, ClosedLoopPolicyTrainer, ClosedLoopUncertaintyTrainer, ClosedLoopRandomTrainer, ClosedLoopInformativeTrainer
 
 # Set random seed globally
 set_seed(42)
@@ -36,7 +36,7 @@ def main():
     print('*** STARTING ***\n')
     # Load config, make run path, and choose torch device
     # ---------- CONFIG HERE ----------
-    config_name = 'rssm_reacher_v0'
+    config_name = 'rssm_reacher_active_v0'   # <--- CHANGE CONFIG HERE
     # ---------- CONFIG HERE ----------
     with open(CONFIG_PATH / f'{config_name}.yaml', "r") as f:
         config = yaml.safe_load(f)
@@ -108,6 +108,8 @@ def main():
             trainer = ClosedLoopRandomTrainer(dataset, model, config, device)
         elif policy_type == 'uncertainty':
             trainer = ClosedLoopUncertaintyTrainer(dataset, model, config, device)
+        elif policy_type == 'informative':
+            trainer = ClosedLoopInformativeTrainer(dataset, model, config, device)
         else: 
             raise NotImplementedError(f'Policy type "{policy_type}" not supported!')
     else:
