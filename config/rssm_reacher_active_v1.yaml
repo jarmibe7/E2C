@@ -11,7 +11,7 @@ vae:
 # Loss hyperparams
 loss:
   loss_type: rssm_mse         # Loss type to use: mse | uncertainty  | rssm_mse | rssm_unc # TODO: Change this setup for rssm
-  recon_mult: !!float 1e3           # MSE Reconstruction loss multiplier
+  recon_mult: !!float 1e4           # MSE Reconstruction loss multiplier
   beta: !!float 1e-4                # Standard Gaussian KL multiplier
   lambda: !!float 1e-4              # Transition KL multiplier
   kld_anneal_mode: linear           # Beta annealing mode: const | linear
@@ -41,7 +41,7 @@ closed_loop:
   policy: informative               # What type of policy to use: conv | random | uncertainty | informative
   epochs_warmup: 3                  # Number of epochs to train on random actions before informative training
   num_rollout_steps: 1000           # Number of timesteps to collect in a rollout - keeping it small just to debug
-  num_batches: 100                    # Number of batches to train on per gradient update
+  num_batches: 300                    # Number of batches to train on per gradient update
   buffer_capacity: 2000             # Replay buffer capacity - keeping it small just to debug
   samples:  25                      # Number of action sequences to sample for MPC
   elite_frac: 0.1                   # Fraction of action sequences to use as elites for CEM

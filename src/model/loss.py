@@ -209,6 +209,7 @@ class RSSMLoss(nn.Module):
         self.beta = loss_params['beta']
         self.lam = loss_params['lambda']
         self.anneal_mode = loss_params['kld_anneal_mode']
+        self.loss_type = loss_params['loss_type']
 
     def kld_anneal(self, epoch):
         if self.anneal_mode == 'const':
@@ -264,14 +265,16 @@ class RSSMLoss(nn.Module):
 
     def forward(self, tr, epoch):
         # Reconstruction loss
-        # recon = self.recon_mult*nn.functional.mse_loss(tr['x_next'], tr['x_pred'], reduction='mean')
-        x_pred_uncertainty = self.expand_uncertainty(tr['x_pred_uncertainty'], tr['x_pred'])
-        recon = nn.functional.gaussian_nll_loss(
-            tr['x_next'],
-            tr['x_pred'], 
-            torch.exp(x_pred_uncertainty) + 1e-6,
-            reduction='mean'
-        )
+        if 'mse' in self.loss_type: 
+            recon = self.recon_mult*nn.functional.mse_loss(tr['x_next'], tr['x_pred'], reduction='mean')
+        else:
+            x_pred_uncertainty = self.expand_uncertainty(tr['x_pred_uncertainty'], tr['x_pred'])
+            recon = nn.functional.gaussian_nll_loss(
+                tr['x_next'],
+                tr['x_pred'], 
+                torch.exp(x_pred_uncertainty) + 1e-6,
+                reduction='mean'
+            )
 
         # Encoding KL Divergence
         # KL loss (posterior vs prior)
