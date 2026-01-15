@@ -18,6 +18,7 @@ from src.model.e2c import ConvE2C
 from src.model.rssm import RSSME2C
 from src.dataset import E2CDataset
 from src.utils import set_seed, anim_frames, shoulder_mass, excess_kurtosis, central_mass_ratio
+from src.data_gen.gen_fetch import process_image
 
 class Plotter():
     """
@@ -135,6 +136,159 @@ class Evaluator():
         print("\nGenerating trajectory video...")
         self.eval_traj(run_path, max_frames=vid_max_frames)
         # self.eval_latent(run_path)
+
+    def visualize_planner(self, trainer, run_path, max_steps=25, closed_loop=True):
+        """
+        Visualize trajectories using the trainer's planner/rollout logic.
+
+        Args:
+            trainer: Trainer instance (must expose env, model, device, past_length, pred_length/config).
+            run_path: Path to save the resulting video.
+            max_steps: Number of environment steps to visualize.
+            closed_loop: If True, feed ground-truth observations back into the model window.
+                         If False, feed the model's predicted next frame (open-loop rollout).
+        """
+        model = trainer.model
+        device = trainer.device
+        env = trainer.env
+        past_len = model.past_length if hasattr(model, 'past_length') else 3
+        pred_len = model.pred_length if hasattr(model, 'pred_length') else 3
+        try:
+            closed_loop_policy = trainer.config['closed_loop']['policy']
+        except:
+            print('No closed loop policy found in trainer config, defaulting to random')
+            closed_loop_policy = 'random'
+
+        model.eval()
+        obs, _ = env.reset()
+        frame_buffer = []   # frames used as model input window
+        true_frames = []    # ground-truth frames for visualization
+        recon_frames = []   # model reconstructions
+        pred_sequences = [] # list of predicted sequences per step
+
+        # Prime buffer with the first observation
+        first_img = process_image(env.render()).squeeze(0).permute(2, 0, 1)
+        for _ in range(past_len):
+            frame_buffer.append(first_img)
+
+        step_idx = 0
+        for step_idx in tqdm(range(max_steps), desc="Visualizing Planner timesteps"):
+            # Current frame (ground truth)
+            curr_img = process_image(env.render()).squeeze(0).permute(2, 0, 1)
+
+            # Action: reuse trainer.collect_rollouts logic (random sample)
+            if closed_loop_policy == 'informative':
+                trainer._init_cem_mu_sig()
+                action_seq = trainer._sample_cem(frame_buffer[-past_len:]) # pred_len, act_size
+            else:
+                # repeat pred len number of times for action horizon
+                act = [env.action_space.sample() for _ in range(pred_len)]
+                action_seq = torch.from_numpy(np.array(act)).to(device)
+            env_act = action_seq.cpu().detach().numpy()[0]
+            # if not getattr(trainer, 'env_continuous', True):
+            #     env_act = int(env_act.item())
+
+            # Step env
+            _, _, done, _, _ = env.step(env_act)
+            next_img_true = process_image(env.render()).squeeze(0).permute(2, 0, 1)
+
+            # Model inputs
+            with torch.no_grad():
+                frames = [f.to(trainer.device) for f in frame_buffer[-past_len:]]
+                window = trainer._frames_to_tensor(frames)
+                h = torch.zeros(1, model.deterministic_size, device=trainer.device)
+                mu_q, log_var_q, z_q = trainer._encode_posterior_rssm(window, h)
+                x_recon = trainer._decode_latent(z_q)
+                x_recon_next = []
+                for act in action_seq:
+                    act_batch = act.view(1, -1).to(trainer.device)
+                    h, z_q, mu_p, log_var_p = trainer.model.rssm_step(h, z_q, act_batch)
+                    # z_q = torch.normal(0.5*torch.ones_like(mu_q), 0.1*torch.ones_like(log_var_q))
+                    x_recon_next.append(trainer._decode_latent(z_q).detach().cpu())
+
+            if step_idx == 0:
+                print("Reconstruction shape:", x_recon.shape, "Next Reconstruction shape:", len(x_recon_next), x_recon_next[0].shape)
+            """# Normalize to [pred_len, C, H, W]
+            if x_pred.dim() == 3:
+                x_pred_seq = x_pred.unsqueeze(0)
+            elif x_pred.dim() == 4:
+                # If shape is [B, C, H, W], treat as single-step
+                if x_pred.shape[0] == x_pred.shape[0]:
+                    x_pred_seq = x_pred
+                else:
+                    x_pred_seq = x_pred
+            elif x_pred.dim() == 5:
+                # [B, T, C, H, W]
+                x_pred_seq = x_pred.squeeze(0)
+            else:
+                raise ValueError(f"Unexpected prediction shape: {tuple(x_pred.shape)}")"""
+
+            # Feed next frame based on loop type
+            next_for_buffer = next_img_true if closed_loop else x_recon_next.detach().cpu()
+
+            # Update buffers/logs
+            frame_buffer.append(next_for_buffer)
+            # if len(frame_buffer) > past_len:
+            #     frame_buffer = frame_buffer[-past_len:]
+
+            true_frames.append(curr_img)
+            recon_frames.append(x_recon.detach().cpu())
+            pred_sequences.append(x_recon_next)
+
+            if done:
+                env.reset()
+                done = False
+                frame_buffer = [process_image(env.render()).squeeze(0).permute(2, 0, 1) for _ in range(past_len)]
+
+        # Build visualization grid: 2 rows, (pred_len + 1) columns
+        cols = pred_len + 1
+        fig, ax = plt.subplots(2, cols, figsize=(3 * cols, 10))
+        ax = np.atleast_2d(ax)
+        ax[0, 0].set_title("Pred Current")
+        ax[1, 0].set_title("True Current")
+        for j in range(1, cols):
+            ax[0, j].set_title(f"Pred t={j}")
+            ax[1, j].set_title(f"True t={j}")
+
+        ims = []
+        # Initialize cells
+        ims.clear()
+        for j in range(cols):
+            ims.append(ax[0, j].imshow(np.zeros_like(true_frames[0].permute(1, 2, 0))))
+            ims.append(ax[1, j].imshow(np.zeros_like(true_frames[0].permute(1, 2, 0))))
+        for a in ax.flatten():
+            a.axis('off')
+
+        def update(frame_idx):
+            true_curr = true_frames[frame_idx]
+            true_next = true_frames[frame_idx + 1] if frame_idx + 1 < len(true_frames) else true_curr
+            recon = recon_frames[frame_idx]
+
+            # Pred current recon
+            ims[0].set_data(recon[:3].permute(1, 2, 0).detach().cpu().numpy())
+            ims[1].set_data(true_curr[:3].permute(1, 2, 0).detach().cpu().numpy())
+
+            # Predictions across horizon
+            for j in range(1, cols):
+                pred_frame = pred_sequences[frame_idx][j-1]
+                ims[2 * j].set_data(pred_frame.permute(1, 2, 0).detach().cpu().numpy())
+                if j == 1:
+                    true_frame = true_next  # reuse true_next for all future slots
+                    ims[2 * j + 1].set_data(true_frame[:3].permute(1, 2, 0).detach().cpu().numpy())
+
+        ani = FuncAnimation(fig, update, frames=len(true_frames), interval=5.)
+        writer = FFMpegWriter(fps=2)
+        vid_name = 'planner_vis_CL_' + closed_loop_policy + '.mp4' if closed_loop else 'planner_vis_OL_' + closed_loop_policy + '.mp4'
+        try:
+            filepath = run_path / vid_name
+            print(f'Saved planner visualization to {filepath}')
+            ani.save(filepath, writer=writer)
+        except Exception as e:
+            print(e)
+            print('Exception occurred, saved planner visualization to current directory')
+            ani.save(vid_name, writer=writer)
+        plt.close(fig)
+        return
         
     def eval_traj(self, run_path, max_frames=50):
         # Create figure

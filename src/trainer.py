@@ -119,6 +119,7 @@ class BaseTrainer():
         print('\n*** EVAL ***\n')
         self.model.eval()
         self.evaluator.eval(run_path)
+        self.evaluator.visualize_planner(self, run_path, max_steps=50, closed_loop=True)
 
     def save(self, config_save, run_path):
         """
@@ -329,6 +330,43 @@ class ClosedLoopRandomTrainer(BaseTrainer):
             config
         )
         assert self.num_rollout_steps <= self.replay_buffer.capacity, 'Steps per rollout should be <= buffer_capacity!'
+
+    def _frames_to_tensor(self, frames):
+        """
+        Stack a window of observation frames to tensor of shape [1, past_length*C, H, W]
+        """
+        stacked = torch.stack(frames[-self.past_length:], dim=0).unsqueeze(0)
+        _, _, C, H, W = stacked.shape
+        return stacked.view(1, -1, H, W)
+
+    def _update_window(self, frames, new_frame):
+        """
+        Shift a frame to include a new frame and remove the oldest
+        """
+        window = list(frames[-self.past_length+1:]) if len(frames) >= self.past_length else list(frames)
+        window.append(new_frame)
+        return window
+
+    def _decode_latent(self, z):
+        decoded = self.model.decoder(z)
+        if isinstance(decoded, tuple):
+            decoded = decoded[0]
+        return decoded.detach().squeeze(0)
+
+    def _encode_posterior_e2c(self, obs_tensor):
+        enc = self.model.encoder(obs_tensor)
+        mu = self.model.mu(enc)
+        log_var = self.model.log_var(enc)
+        z = self.model.reparameterize(mu, log_var)
+        return mu, log_var, z
+
+    def _encode_posterior_rssm(self, obs_tensor, h):
+        enc = self.model.encoder(obs_tensor)
+        post_in = torch.cat([enc, h], dim=-1)
+        post_stats = self.model.post(post_in)
+        mu, log_var = post_stats.chunk(2, dim=-1)
+        z = self.model.reparameterize(mu, log_var)
+        return mu, log_var, z
 
     def collect_rollouts(self):
         """
@@ -813,43 +851,6 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
             + (torch.exp(log_var_q) + (mu_q - mu_p) ** 2) / torch.exp(log_var_p)
             - 1
         ).sum(dim=-1)
-
-    def _frames_to_tensor(self, frames):
-        """
-        Stack a window of observation frames to tensor of shape [1, past_length*C, H, W]
-        """
-        stacked = torch.stack(frames[-self.past_length:], dim=0).unsqueeze(0)
-        _, _, C, H, W = stacked.shape
-        return stacked.view(1, -1, H, W)
-
-    def _update_window(self, frames, new_frame):
-        """
-        Shift a frame to include a new frame and remove the oldest
-        """
-        window = list(frames[-self.past_length+1:]) if len(frames) >= self.past_length else list(frames)
-        window.append(new_frame)
-        return window
-
-    def _decode_latent(self, z):
-        decoded = self.model.decoder(z)
-        if isinstance(decoded, tuple):
-            decoded = decoded[0]
-        return decoded.detach().squeeze(0)
-
-    def _encode_posterior_e2c(self, obs_tensor):
-        enc = self.model.encoder(obs_tensor)
-        mu = self.model.mu(enc)
-        log_var = self.model.log_var(enc)
-        z = self.model.reparameterize(mu, log_var)
-        return mu, log_var, z
-
-    def _encode_posterior_rssm(self, obs_tensor, h):
-        enc = self.model.encoder(obs_tensor)
-        post_in = torch.cat([enc, h], dim=-1)
-        post_stats = self.model.post(post_in)
-        mu, log_var = post_stats.chunk(2, dim=-1)
-        z = self.model.reparameterize(mu, log_var)
-        return mu, log_var, z
     
     def _sample_random_action_sequences(self):
         seqs = []
@@ -949,14 +950,14 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
         # self.init_control[-1] = last_val
         # self.sigma[:-1] = sigma[1:].clone()
         # self.sigma[-1] = sigma[-1].clone()
-        return mu[0].clone()
+        return mu
     
     def _select_information_action(self, frame_buffer):
         # if len(frame_buffer) < self.past_length:
         #     print("SOMETHING IS WRONG: not enough frames in buffer! Defaulting to random action.")
         #     a_np = self.env.action_space.sample()
         #     return torch.as_tensor(a_np, device=self.device, dtype=torch.float32).flatten()
-        return self._sample_cem(frame_buffer)
+        return self._sample_cem(frame_buffer)[0].clone()
 
     def collect_rollouts(self, epoch):
         """
