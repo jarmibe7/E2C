@@ -21,6 +21,7 @@ from src.dataset import E2CDataset
 from src.utils import set_seed, anim_frames, format_time
 from src.model.policy import ConvPolicy
 from src.trainer import E2CPretrainer, RSSMPretrainer, ClosedLoopPolicyTrainer, ClosedLoopUncertaintyTrainer, ClosedLoopRandomTrainer, ClosedLoopInformativeTrainer
+import argparse
 
 # Set random seed globally
 set_seed(42)
@@ -36,7 +37,16 @@ def main():
     print('*** STARTING ***\n')
     # Load config, make run path, and choose torch device
     # ---------- CONFIG HERE ----------
-    config_name = 'rssm_push_active_v0'   # <--- CHANGE CONFIG HERE
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(description='E2C Training Script')
+    parser.add_argument(
+        '--config', 
+        type=str, 
+        default='rssm_push_active_v0',
+        help='Name of the config file (without .yaml extension)'
+    )
+    args = parser.parse_args()
+    config_name = args.config
     with open(CONFIG_PATH / f'{config_name}.yaml', "r") as f:
         config = yaml.safe_load(f)
     config['config_name'] = config_name
@@ -57,7 +67,18 @@ def main():
     config['trans']['control_size'] = dataset.U.shape[-1]
 
     # Create or load model
-    if 'rssm' in config_name:
+    if 'e2c' in config_name:
+        model = ConvE2C(
+            enc_latent_size=config['vae']['enc_latent_size'],
+            latent_size=config['trans']['latent_size'],
+            control_size=config['trans']['control_size'],
+            past_length=config['trans']['past_length'],
+            pred_length=config['trans']['pred_length'],
+            conv_params=config['vae'],
+            device=device,
+            output_uncertainty=(config['loss']['loss_type'] == 'uncertainty' or 'rssm' in config['loss']['loss_type'])
+        )
+    else:
         model = RSSME2C(
             enc_latent_size=config['vae']['enc_latent_size'],
             stochastic_size=config['trans']['stochastic_size'],
@@ -69,22 +90,11 @@ def main():
             device=device,
             output_uncertainty=(config['loss']['loss_type'] == 'uncertainty' or 'rssm' in config['loss']['loss_type'])
         )
-    else:
-        model = ConvE2C(
-        enc_latent_size=config['vae']['enc_latent_size'],
-        latent_size=config['trans']['latent_size'],
-        control_size=config['trans']['control_size'],
-        past_length=config['trans']['past_length'],
-        pred_length=config['trans']['pred_length'],
-        conv_params=config['vae'],
-        device=device,
-        output_uncertainty=(config['loss']['loss_type'] == 'uncertainty' or 'rssm' in config['loss']['loss_type'])
-    )
     load_path = config['train'].get('load_path', None)
     if load_path is None:
         print(f'Training model from scratch\n')
         config['run_path'].mkdir(parents=True, exist_ok=True)
-        
+        config_save['load_path'] = config['run_path']
     else:
         # Load existing model to train from checkpoint
         print(f'Loading model from checkpoint\n')
@@ -119,6 +129,14 @@ def main():
         else:
             trainer = E2CPretrainer(dataset, model, config, device)
 
+    if config['train'].get('eval_only', False):
+            print('*** EVAL ONLY ***')
+            # trainer.evaluate(config['run_path'])
+            # trainer.evaluator.eval_traj(config['run_path'], max_frames=25)
+            trainer.evaluator.visualize_planner(trainer, config['run_path'], max_steps=50, closed_loop=True)
+            print('\n*** DONE ***')
+            return
+    
     # Train, save, and evaluate
     try:
         trainer.learn()
