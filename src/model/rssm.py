@@ -47,7 +47,7 @@ class RSSME2C(nn.Module):
         self.dummy_u = torch.zeros((1, self.control_size)).to(self.device)
 
         # Encoder and decoder
-        in_channels = conv_params['in_image_shape'][0]
+        in_channels = conv_params['in_image_shape'][0] // 3 # hacky, assuming RGB, and input has already stacked frames
         self.encoder = ConvEncoder(enc_latent_size, in_channels, conv_params)
         if self.output_uncertainty:
             self.decoder = ScalarUncertaintyConvDecoder(stochastic_size, conv_params, self.encoder.out_dim_flat, self.encoder.out_shape)
@@ -56,10 +56,18 @@ class RSSME2C(nn.Module):
         self.out_image_shape = self.decoder.out_image_shape
 
         # Dreamer dynamics model definition
-        self.rnn = nn.GRUCell(                          # Recurrent model
+        # TODO: Try with nn.GRU and 2 layers, batch_first=True
+        self.num_layers = 2
+        self.rnn = nn.GRU(
             self.stochastic_size + self.control_size,
-            self.deterministic_size
+            self.deterministic_size,
+            num_layers=self.num_layers,
+            batch_first=True
         )
+        # self.rnn = nn.GRUCell(                          # Recurrent model
+        #     self.stochastic_size + self.control_size,
+        #     self.deterministic_size
+        # )
         self.prior = nn.Sequential(                     # Transition model
             nn.Linear(self.deterministic_size, 200),
             nn.ReLU(),
@@ -67,9 +75,11 @@ class RSSME2C(nn.Module):
         )
 
         self.post = nn.Sequential(                      # Representation model
-            nn.Linear(self.enc_latent_size + self.deterministic_size, 200),
+            nn.Linear(self.enc_latent_size * self.past_length, 256),
             nn.ReLU(),
-            nn.Linear(200, 2 * self.stochastic_size)
+            nn.Linear(256, 64),
+            nn.ReLU(),
+            nn.Linear(64, 2 * self.stochastic_size)
         )
 
     def reparameterize(self, mu, log_var):
@@ -94,27 +104,41 @@ class RSSME2C(nn.Module):
         Returns: h_next, z_next, mu, log_var
         """
         rnn_input = torch.cat([z, u], dim=-1)
-        h_next = self.rnn(rnn_input, h)
+        # h_next = self.rnn(rnn_input, h)
+        _, h_next = self.rnn(rnn_input.unsqueeze(1), h)  # h_next: [B, 1, deterministic]
 
-        stats = self.prior(h_next)
+        stats = self.prior(h_next[-1])
         mu, log_var = stats.chunk(2, dim=-1)
         z_next = self.reparameterize(mu, log_var)
 
         return h_next, z_next, mu, log_var
+    
+    def encode_posterior(self, obs_tensor):
+        post_in = torch.zeros((obs_tensor.size(0), self.enc_latent_size * self.past_length), device=self.device)
+        for i in range(self.past_length):
+            x_frame = obs_tensor[:, i]
+            post_in[:, (i * self.enc_latent_size):((i+1) * self.enc_latent_size)] = self.encoder(x_frame)
+        post_stats = self.post(post_in)
+        mu, log_var = post_stats.chunk(2, dim=-1)
+        z = self.reparameterize(mu, log_var)
+        return mu, log_var, z
 
     def forward(self, x, x_next, u):
         batch_size = x.size(0)
         # Initialize current deterministic state h to zeros
-        h = torch.zeros(batch_size, self.deterministic_size, device=self.device)
+        h = torch.zeros(self.num_layers, batch_size, self.deterministic_size, device=self.device)
 
         # Encode current and next observations
-        enc = self.encoder(x)
+        # enc = self.encoder(x)
 
         # Posterior for current observations
-        post_in = torch.cat([enc, h], dim=-1)            # [batch, enc_latent + deterministic]
-        post_stats = self.post(post_in)                  # [batch, 2*stochastic]
-        mu, log_var = post_stats.chunk(2, dim=-1)
-        z = self.reparameterize(mu, log_var)        # Current stochastic latent state
+        # post_in = torch.cat([enc, h.squeeze(0)], dim=-1)            # [batch, enc_latent + deterministic]
+        # post_stats = self.post(enc)                  # [batch, 2*stochastic]
+        # mu, log_var = post_stats.chunk(2, dim=-1)
+        # z = self.reparameterize(mu, log_var)        # Current stochastic latent state
+        
+        # new gru way
+        mu, log_var, z = self.encode_posterior(x)
         if self.output_uncertainty:
             x_recon, x_recon_uncertainty = self.decoder(z)
         else:
@@ -151,15 +175,19 @@ class RSSME2C(nn.Module):
             # Build next window for encoder: shift old window and append predicted frame
             # window: [B, past_length*C, H, W] => keep last past_length-1 frames
             if self.past_length > 1:
-                window_frames = window[:, (self.out_image_shape[0] * 1):, :, :]   # drop first frame
-                window = torch.cat([window_frames, x_pred.detach()], dim=1)
+                window_frames = window[:, 1:]   # drop first frame
+                window = torch.cat([window_frames, x_pred.unsqueeze(1).detach()], dim=1)
             else:
                 window = x_pred.detach()  # past_length==1, just use pred image
 
             # Incorporate posterior
-            x_next_enc = self.encoder(window)
-            post_in = torch.cat([x_next_enc, h], dim=-1)            # [batch, enc_latent + deterministic]
-            post_stats = self.post(post_in)                         # [batch, 2*stochastic]
+            post = torch.zeros((batch_size, self.enc_latent_size * self.past_length), device=self.device)
+            for i in range(self.past_length):
+                x_frame = window[:, i]
+                post[:, (i * self.enc_latent_size):((i+1) * self.enc_latent_size)] = self.encoder(x_frame)
+            # x_next_enc = self.encoder(window)
+            # post_in = torch.cat([x_next_enc, h], dim=-1)            # [batch, enc_latent + deterministic]
+            post_stats = self.post(post)                         # [batch, 2*stochastic]
             mu, log_var = post_stats.chunk(2, dim=-1)
             z = self.reparameterize(mu, log_var)        # Current stochastic latent state
 
@@ -270,16 +298,16 @@ class RSSME2C(nn.Module):
             sample_return = {}
 
             # Encode current state
-            enc = self.encoder(x.to(self.device))
+            mu, log_var, z = self.encode_posterior(x)
 
             # Initialize deterministic state h to zeros
-            h = torch.zeros(enc.shape[0], self.deterministic_size, device=self.device)
+            h = torch.zeros(self.num_layers, mu.shape[0], self.deterministic_size, device=self.device)
 
             # Posterior for current observation
-            post_in = torch.cat([enc, h], dim=-1)            # [batch, enc_latent + deterministic]
-            post_stats = self.post(post_in)                      # [batch, 2*stochastic]
-            mu, log_var = post_stats.chunk(2, dim=-1)
-            z = self.reparameterize(mu, log_var)
+            # post_in = torch.cat([enc, h], dim=-1)            # [batch, enc_latent + deterministic]
+            # post_stats = self.post(post_in)                      # [batch, 2*stochastic]
+            # mu, log_var = post_stats.chunk(2, dim=-1)
+            # z = self.reparameterize(mu, log_var)
 
             # RSSM prior rollout (predict next latent)
             h_next, z_pred, mu_pred, log_var_pred = self.rssm_step(h, z, u)
