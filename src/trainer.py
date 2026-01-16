@@ -19,7 +19,7 @@ import time
 from src.model.loss import E2CLoss, UncertaintyE2CLoss, RSSMLoss
 from src.eval import Plotter, Evaluator
 from src.replay_buffer import ReplayBuffer
-from src.data_gen.gen_fetch import name_to_env, env_to_aspace, process_image
+from src.data_gen.gen_gym import name_to_env, env_to_aspace, process_image
 
 # Paths
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -119,7 +119,8 @@ class BaseTrainer():
         print('\n*** EVAL ***\n')
         self.model.eval()
         self.evaluator.eval(run_path)
-        self.evaluator.visualize_planner(self, run_path, max_steps=50, closed_loop=True)
+        if self.config['closed_loop']['closed_loop']: 
+            self.evaluator.visualize_planner(self, run_path, max_steps=50, closed_loop=True)
 
     def save(self, config_save, run_path):
         """

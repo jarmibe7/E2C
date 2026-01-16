@@ -19,7 +19,7 @@ loss:
 trans:
   stochastic_size: 4                # Stochastic state model latent dim
   deterministic_size: 32             # Deterministic state model latent dim
-  past_length: 3                    # Length of image history passed into encoder
+  past_length: 1                    # Length of image history passed into encoder
   pred_length: 3                    # Length of image prediction horizon
   alpha: !!float 1e-4               # Learning rate
   weight_decay: !!float 1e-4        # Adam optimizer weight decay

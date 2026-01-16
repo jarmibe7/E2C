@@ -21,13 +21,15 @@ import yaml
 from datetime import datetime
 
 from src.utils import set_seed, format_time
+import gymnasium_robotics
+gym.register_envs(gymnasium_robotics)
 
 # Parameters for dataset
-env_name = 'reacher'                                        # Gym environment name
-dataset_size = int(5.1e5)                                   # Number of samples: (img, next_img, control) tuple
+env_name = 'push'                                        # Gym environment name
+dataset_size = int(1e3)                                   # Number of samples: (img, next_img, control) tuple
 OUTPUT_NAME = env_name + f'_{dataset_size // 1000}k'        # Output name of dataset
 image_shape = (64, 64, 3)                                   # Downsampled image shape
-past_length = 3                                             # Number of previous observations to use for training
+past_length = 1                                             # Number of previous observations to use for training
 pred_length = 3                                             # Number of timesteps to predict in the future
 new_dt = None                                               # Desired new timestep in seconds
 # ---------------------------------
@@ -51,8 +53,8 @@ DATA_PATH = PROJECT_ROOT / "data"
 
 seed = 42
 set_seed(seed)
-name_to_env = {'reacher': 'Reacher-v5', 'cartpole': 'CartPole-v1'}
-env_to_aspace = {'reacher': 'continuous', 'cartpole': 'discrete'}
+name_to_env = {'reacher': 'Reacher-v5', 'cartpole': 'CartPole-v1', 'push': 'FetchPush-v3'}
+env_to_aspace = {'reacher': 'continuous', 'cartpole': 'discrete', 'push': 'continuous'}
 
 def update_dataset_metadata(dataset_dir, dataset_name, params):
     """
@@ -87,6 +89,7 @@ def process_image(image, dataset_name=env_name, image_shape=image_shape):
     """
     if 'cartpole' in dataset_name: image = image[50:350, 100:400]  # Zoom on cartpole
     if 'reacher' in dataset_name: image = image[100:-50, 100:-100]  # Zoom on reacher
+    if 'push' in dataset_name: image = image[100:-50, :-100, :]     # Zoom on robot # TODO: need to zoom on push?
     image = torch.from_numpy(image.copy()).permute(2, 0, 1)  # Get image tensor into (C, H, W)
 
     # Image processing
