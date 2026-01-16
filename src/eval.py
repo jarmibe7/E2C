@@ -18,7 +18,7 @@ from src.model.e2c import ConvE2C
 from src.model.rssm import RSSME2C
 from src.dataset import E2CDataset
 from src.utils import set_seed, anim_frames, shoulder_mass, excess_kurtosis, central_mass_ratio
-from src.data_gen.gen_fetch import process_image
+from src.data_gen.gen_gym import process_image
 
 class Plotter():
     """
