@@ -1,7 +1,7 @@
 """
-e2c.py
+rssm.py
 
-Embed to Control model architecture made with PyTorch.
+RSSM dynamics prediction model architecture made with PyTorch.
 
 Authors: Jared Berry, Ayush Gaggar
 """
@@ -188,25 +188,6 @@ class RSSME2C(nn.Module):
                 "mu_priors": torch.stack(mu_priors, dim=1),
                 "log_var_priors": torch.stack(log_var_priors, dim=1),
             }
-        
-    def reconstruct(self, x_traj):
-        """
-        Reconstruct an entire trajectory to test encoder/decoder
-        """
-        with torch.no_grad():
-            frames = []
-            for x in x_traj:
-                # Encode current state
-                encoded = self.encoder(x.unsqueeze(0))
-                flattened = encoded.view(encoded.size(0), -1)
-
-                # Get latent variable
-                mu = self.mu(flattened)
-                log_var = self.log_var(flattened)
-                z = self.reparameterize(mu, log_var)
-                frames.append(self.decoder(z))
-
-            return torch.concat(frames, dim=0).squeeze(0).to('cpu').permute(0, 2, 3, 1)
 
     def sample_traj(self, x0, u_seq):
         """

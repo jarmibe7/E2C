@@ -15,6 +15,8 @@ import numpy as np
 from tqdm import tqdm
 from pyvirtualdisplay import Display
 import yaml
+import gymnasium_robotics
+gym.register_envs(gymnasium_robotics)
 
 from src.utils import set_seed, format_time
 from src.data_gen.gen_gym import process_image, name_to_env
