@@ -42,6 +42,9 @@ class RSSME2C(nn.Module):
         self.control_size = control_size
         self.past_length = past_length
         self.pred_length = pred_length
+        # To Ayush: Try this out and see if it makes a difference. I did not see intentional windowing
+        #           in any of the RSSM examples, and this might be why.
+        assert self.past_length == 1, 'past_length=1 for RSSM, deterministic state encodes previous observations'
 
         # Dummy zero control vector
         self.dummy_u = torch.zeros((1, self.control_size)).to(self.device)
@@ -50,9 +53,10 @@ class RSSME2C(nn.Module):
         in_channels = conv_params['in_image_shape'][0]
         self.encoder = ConvEncoder(enc_latent_size, in_channels, conv_params)
         if self.output_uncertainty:
-            self.decoder = ScalarUncertaintyConvDecoder(stochastic_size, conv_params, self.encoder.out_dim_flat, self.encoder.out_shape)
+            self.decoder = ScalarUncertaintyConvDecoder(stochastic_size + deterministic_size, conv_params, self.encoder.out_dim_flat, self.encoder.out_shape)
         else:
-            self.decoder = ConvDecoder(stochastic_size, conv_params, self.encoder.out_dim_flat, self.encoder.out_shape)
+            # Decoder should take z and h
+            self.decoder = ConvDecoder(stochastic_size + deterministic_size, conv_params, self.encoder.out_dim_flat, self.encoder.out_shape)
         self.out_image_shape = self.decoder.out_image_shape
 
         # Dreamer dynamics model definition
@@ -116,9 +120,9 @@ class RSSME2C(nn.Module):
         mu, log_var = post_stats.chunk(2, dim=-1)
         z = self.reparameterize(mu, log_var)        # Current stochastic latent state
         if self.output_uncertainty:
-            x_recon, x_recon_uncertainty = self.decoder(z)
+            x_recon, x_recon_uncertainty = self.decoder(torch.cat([z, h], dim=-1))
         else:
-            x_recon = self.decoder(z)
+            x_recon = self.decoder(torch.cat([z, h], dim=-1))
 
         # Iterate over pred_length
         z_preds, mu_priors, log_var_priors = [], [], []
@@ -138,23 +142,24 @@ class RSSME2C(nn.Module):
             
             # Decode predicted latent
             if self.output_uncertainty:
-                x_pred, x_pred_uncertainty = self.decoder(z_pred)
+                x_pred, x_pred_uncertainty = self.decoder(torch.cat([z_pred, h], dim=-1))
                 x_pred_uncerts.append(x_pred_uncertainty)
             else:
-                x_pred = self.decoder(z_pred)
+                x_pred = self.decoder(torch.cat([z_pred, h], dim=-1))
             x_preds.append(x_pred)
             
-            # # Encode next observation
-            # x_next_frame = x_next[:, t]
-            # x_next_enc = self.encoder(torch.cat([x_next_frame]*self.past_length, dim=1))  # Need to stack for encoding
+            # Encode next observation
+            # TODO: Could we encode all at once before loop?
+            x_next_frame = x_next[:, t]
+            x_next_enc = self.encoder(torch.cat([x_next_frame]*self.past_length, dim=1))  # Need to stack for encoding
 
-            # Build next window for encoder: shift old window and append predicted frame
-            # window: [B, past_length*C, H, W] => keep last past_length-1 frames
-            if self.past_length > 1:
-                window_frames = window[:, (self.out_image_shape[0] * 1):, :, :]   # drop first frame
-                window = torch.cat([window_frames, x_pred.detach()], dim=1)
-            else:
-                window = x_pred.detach()  # past_length==1, just use pred image
+            # # Build next window for encoder: shift old window and append predicted frame
+            # # window: [B, past_length*C, H, W] => keep last past_length-1 frames
+            # if self.past_length > 1:
+            #     window_frames = window[:, (self.out_image_shape[0] * 1):, :, :]   # drop first frame
+            #     window = torch.cat([window_frames, x_pred.detach()], dim=1)
+            # else:
+            #     window = x_pred.detach()  # past_length==1, just use pred image
 
             # Incorporate posterior
             x_next_enc = self.encoder(window)
@@ -218,9 +223,9 @@ class RSSME2C(nn.Module):
 
             # Decode initial state
             if self.output_uncertainty:
-                x_dec, _ = self.decoder(z)
+                x_dec, _ = self.decoder(torch.cat([z, h], dim=-1))
             else:
-                x_dec = self.decoder(z)
+                x_dec = self.decoder(torch.cat([z, h], dim=-1))
             frames.append(x_dec)
 
             # Rollout using prior only
@@ -230,9 +235,9 @@ class RSSME2C(nn.Module):
                 h, z, mu_p, log_var_p = self.rssm_step(h, z, u_t)
 
                 if self.output_uncertainty:
-                    x_dec, _ = self.decoder(z)
+                    x_dec, _ = self.decoder(torch.cat([z, h], dim=-1))
                 else:
-                    x_dec = self.decoder(z)
+                    x_dec = self.decoder(torch.cat([z, h], dim=-1))
 
                 frames.append(x_dec)
 
@@ -267,13 +272,13 @@ class RSSME2C(nn.Module):
 
              # Decode next observation
             if self.output_uncertainty:
-                x_recon, x_recon_uncertainty = self.decoder(z)
-                x_pred, x_pred_recon_uncertainty = self.decoder(z_pred)
+                x_recon, x_recon_uncertainty = self.decoder(torch.cat([z, h], dim=-1))
+                x_pred, x_pred_recon_uncertainty = self.decoder(torch.cat([z_pred, h], dim=-1))
                 sample_return['x_recon_uncertainty'] = x_recon_uncertainty
                 sample_return['x_pred_recon_uncertainty'] = x_pred_recon_uncertainty
             else:
-                x_recon = self.decoder(z)
-                x_pred = self.decoder(z_pred)
+                x_recon = self.decoder(torch.cat([z, h], dim=-1))
+                x_pred = self.decoder(torch.cat([z_pred, h], dim=-1))
 
             # Save results
             sample_return['x_recon'] = x_recon
