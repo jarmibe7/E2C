@@ -1,0 +1,26 @@
+#
+# Config file reacher StateRepresentationModel
+#
+# Encoder/Decoder
+conv:
+  kernel_size: 3
+  stride: 2
+  pad: 1
+# Loss hyperparams
+loss:
+  loss_type: mse                    # Loss type to use: mse
+  recon_mult: !!float 1.0           # MSE Reconstruction loss multiplier
+# Training hyperparams
+train:
+  dataset: reacher_500k      # Which dataset to use for training (in data/)
+  alpha: !!float 1e-4               # Learning rate
+  weight_decay: !!float 1e-4        # Adam optimizer weight decay
+  batch_size: 128
+  num_epochs: 20
+  device: cuda:2             # cpu | cuda:0 | cuda:1 | cuda:2
+  render: False              # Whether to render live interactive training plot, or simply save after training is finished
+  save: True                 # Whether to save final trained model and training plot
+  eval: True                 # Whether to eval model performance immediately after training
+  plot_freq: 10000           # Frequency to update the plot, in timesteps
+  train_ratio: 0.9           # Ratio of dataset to use for training
+  load_path:                 # Path to load model from (for resuming training or eval only)

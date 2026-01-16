@@ -8,7 +8,7 @@ import matplotlib.animation as animation
 import random
 import numpy as np
 import torch
-
+import math
 
 def anim_frames(frames):
     """
@@ -69,6 +69,11 @@ def format_time(seconds):
     m = int((seconds % 3600) // 60)
     s = int(seconds % 60)
     return f'{h:02d}:{m:02d}:{s:02d}'
+
+def wrapped_angle_error(pred, true):
+    diff = pred - true
+    wrapped = (diff + math.pi) % (2*math.pi) - math.pi
+    return wrapped
 
 
 #

@@ -7,3 +7,4 @@ runs/
 .gitignore
 *.mp4
 *__init__.py
+*/test.ipynb

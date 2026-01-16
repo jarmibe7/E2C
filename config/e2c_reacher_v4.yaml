@@ -1,5 +1,5 @@
 #
-# Config file reacher WorldModelPretrainer with uncertainty loss
+# Config file reacher E2CPretrainer with uncertainty loss
 #
 # Encoder/Decoder
 vae:

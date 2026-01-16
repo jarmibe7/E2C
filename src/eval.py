@@ -10,12 +10,14 @@ import torch
 import numpy as np
 import itertools
 from tqdm import tqdm
-
-from src.e2c import E2CDataset, E2CLoss, ConvE2C
-from src.utils import set_seed, anim_frames, shoulder_mass, excess_kurtosis, central_mass_ratio
 from torchmetrics import PeakSignalNoiseRatio as psnr
 from torchmetrics import StructuralSimilarityIndexMeasure as ssim
 import lpips
+
+from src.model.e2c import ConvE2C
+from src.model.rssm import RSSME2C
+from src.dataset import E2CDataset
+from src.utils import set_seed, anim_frames, shoulder_mass, excess_kurtosis, central_mass_ratio
 
 class Plotter():
     """
@@ -57,6 +59,11 @@ class Plotter():
         # Initialize figure if first plot
         if self.fig is None:
             self.fig, self.axs = plt.subplots(len(self.plot_history), 1, figsize=(8, len(self.plot_history)*3))
+
+            # Ensure self.axs is a list
+            if len(self.plot_history) == 1:
+                self.axs = [self.axs]
+
             for ax, key in zip(self.axs, self.plot_history.keys()):
                 ax.set_title(key)
                 ax.set_xlabel("Step")
@@ -141,7 +148,7 @@ class Evaluator():
         )
 
         # Precompute frames
-        assert self.model.pred_length == 1, 'Pred length >1 not supported for eval video'
+        # assert self.model.pred_length == 1, 'Pred length >1 not supported for eval video'
         x_list, x_next_list, x_recon_list, x_pred_list = [], [], [], []
         if self.model.output_uncertainty: x_pred_uncertainty_list = []
         for i, (x, x_next, u) in enumerate(test_loader):
@@ -149,7 +156,9 @@ class Evaluator():
                 break
             x, x_next, u = x.to(self.device), x_next.to(self.device), u.to(self.device)
             x = x.reshape(x.shape[0], -1, x.shape[-2], x.shape[-1])
-            x_next = torch.hstack([x_next for i in range(self.model.past_length)]).to(self.device)
+            # x_next = torch.hstack([x_next for i in range(self.model.past_length)]).to(self.device)
+            x_next = x_next[:, 0]       # TODO: Only eval on first transition?
+            u = u[:, 0]
             x_recon, x_pred, sample_return = self.model.sample(x, u, return_all=True)
             x_list.append(x[0]); x_next_list.append(x_next[0])
             x_recon_list.append(x_recon); x_pred_list.append(x_pred)
@@ -169,12 +178,12 @@ class Evaluator():
         def update_plot(frame):
             x, x_next = x_list[frame], x_next_list[frame]
             x_recon, x_pred = x_recon_list[frame], x_pred_list[frame]
-            x_pred_uncertainty = x_pred_uncertainty_list[frame]
             ims[0].set_data(x_recon[:3].permute(1, 2, 0).detach().cpu().numpy())
             ims[1].set_data(x[:3].permute(1, 2, 0).detach().cpu().numpy())
             ims[2].set_data(x_pred[:3].permute(1, 2, 0).detach().cpu().numpy())
             ims[3].set_data(x_next[:3].permute(1, 2, 0).detach().cpu().numpy())
             if self.model.output_uncertainty: 
+                x_pred_uncertainty = x_pred_uncertainty_list[frame]
                 ax[0, 1].set_title(f"Pred: Uncertainty={x_pred_uncertainty:.4f}")
 
             # plt.show()
@@ -216,7 +225,9 @@ class Evaluator():
                     break
             x, x_next, u = x.to(self.device), x_next.to(self.device), u.to(self.device)
             x = x.reshape(x.shape[0], -1, x.shape[-2], x.shape[-1])
-            x_next = torch.hstack([x_next for _ in range(self.model.past_length)]).to(self.device)
+            # x_next = torch.hstack([x_next for _ in range(self.model.past_length)]).to(self.device)
+            x_next = x_next[:, 0]       # TODO: Only eval on first transition?
+            u = u[:, 0]
 
             x_recon, x_pred, sample_return = self.model.sample(x, u, return_all=True)
             mu_pred = sample_return['mu_pred']
@@ -301,13 +312,18 @@ class Evaluator():
         for x, x_next, u in tqdm(test_loader):
             x, x_next, u = x.to(self.device), x_next.to(self.device), u.to(self.device)
             x = x.reshape(x.shape[0], -1, x.shape[-2], x.shape[-1])
-            x_next = torch.hstack([x_next for i in range(self.model.past_length)]).to(self.device)
-            # Encode current and next state
-            enc_out = self.model.encoder(x)
+            # x_next = torch.hstack([x_next for i in range(self.model.past_length)]).to(self.device)
+            # # Encode current and next state
+            # enc_out = self.model.encoder(x)
 
-            # Get record latent space
-            mu = self.model.mu(enc_out)
-            log_var = self.model.log_var(enc_out)
+            # # Get record latent space
+            # mu = self.model.mu(enc_out)
+            # log_var = self.model.log_var(enc_out)
+            x_next = x_next[:, 0]       # TODO: Only eval on first transition?
+            u = u[:, 0]
+            x_recon, x_pred, sample_return = self.model.sample(x, u, return_all=True)
+            mu, log_var = sample_return['mu'], sample_return['log_var']
+
             latent_mean.append(mu)
             latent_var.append(torch.exp(log_var))
 
@@ -455,7 +471,7 @@ if __name__ == "__main__":
     train_size = int(len(dataset) * config['train']['train_ratio'])
     test_size = len(dataset) - train_size
     train_dataset, test_dataset = torch.utils.data.random_split(dataset, [train_size, test_size])
-    config['vae']['out_image_shape'] = dataset.img_shape
+    config['vae']['in_image_shape'] = dataset.in_img_shape
     config['trans']['control_size'] = dataset.U.shape[-1]
     model = ConvE2C(
         enc_latent_size=config['vae']['enc_latent_size'],

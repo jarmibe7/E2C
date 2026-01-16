@@ -1,5 +1,5 @@
 #
-# Config file cartpole WorldModelPretrainer
+# Config file cartpole E2CPretrainer
 #
 # Encoder/Decoder
 vae:

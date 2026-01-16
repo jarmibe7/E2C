@@ -23,12 +23,13 @@ from datetime import datetime
 from src.utils import set_seed, format_time
 
 # Parameters for dataset
-env_name = 'reacher'                                       # Gym environment name
-dataset_size = int(5e3)                                     # Number of samples: (img, next_img, control) tuple
+env_name = 'reacher'                                        # Gym environment name
+dataset_size = int(5.1e5)                                   # Number of samples: (img, next_img, control) tuple
 OUTPUT_NAME = env_name + f'_{dataset_size // 1000}k'        # Output name of dataset
 image_shape = (64, 64, 3)                                   # Downsampled image shape
 past_length = 3                                             # Number of previous observations to use for training
-new_dt = None                                                # Desired new timestep in seconds
+pred_length = 3                                             # Number of timesteps to predict in the future
+new_dt = None                                               # Desired new timestep in seconds
 # ---------------------------------
 # Only modify XML if new_dt is set
 if new_dt is not None:
@@ -114,9 +115,9 @@ def main():
     obs, _ = env.reset()
     continuous = (env_to_aspace[env_name] == 'continuous')
     prev_img = torch.zeros((dataset_size, past_length, *image_shape))
-    next_img = torch.zeros((dataset_size, *image_shape))
-    if continuous: control = torch.zeros((dataset_size, env.action_space.shape[0]))
-    else: control = torch.zeros((dataset_size, 1))     # Discrete action space
+    next_img = torch.zeros((dataset_size, pred_length, *image_shape))
+    if continuous: control = torch.zeros((dataset_size, pred_length, env.action_space.shape[0]))
+    else: control = torch.zeros((dataset_size, pred_length, 1))     # Discrete action space
     done = False
     
     # Collect n_samples trajectories
@@ -140,20 +141,26 @@ def main():
             continue
         else:
             # Slide frame obs history frame buffer to next image
-            if len(frame_buffer) == past_length + 1:
+            if len(frame_buffer) == past_length + pred_length:
                 frame_buffer.pop(0)
                 act_buffer.pop(0)
             next_image = process_image(env.render())
             frame_buffer.append(next_image)
 
             # Add obs history buffer to dataset
-            if len(frame_buffer) == past_length + 1:
+            if len(frame_buffer) == past_length + pred_length:
                 prev_img[idx] = torch.cat(frame_buffer[0:past_length], dim=0)
-                next_img[idx] = frame_buffer[past_length]
+                next_img[idx] = torch.cat(frame_buffer[past_length:(past_length+pred_length)], dim=0)
+
+                # Get controls for entire pred_length
                 if continuous:
-                    control[idx] = torch.from_numpy(act_buffer[-1])
+                    control[idx] = torch.stack(
+                        [torch.from_numpy(a) for a in act_buffer[past_length-1:past_length-1+pred_length]]
+                    )
                 else:
-                    control[idx] = act_buffer[-1]
+                    control[idx] = torch.tensor(
+                        act_buffer[past_length-1:past_length-1+pred_length]
+                    ).unsqueeze(-1)
                 idx += 1
                 pbar.update(1)
 
@@ -179,6 +186,7 @@ def main():
             "dataset_size": dataset_size,
             "image_shape": list(image_shape),
             "past_length": past_length,
+            "pred_length": pred_length,
             "seed": seed,
             "dt": None if env_name =='cartpole' else env.unwrapped.dt
         },

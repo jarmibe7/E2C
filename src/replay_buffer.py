@@ -2,13 +2,14 @@
 Replay buffers for online policy training
 """
 import torch
+import random
 
 class ReplayBuffer:
     """
     Simple ring buffer ReplayBuffer class, with random sampling.
 
     Args:
-        obs_shape: Shape of image obs is (past_length*C, H, W)
+        img_shape: Shape of image obs is (past_length*C, H, W)
         control_dim: Dimension of control vector
         capacity: How many samples to hold at once
         config: Config dictionary
@@ -21,14 +22,19 @@ class ReplayBuffer:
         self.device = device
 
         # Image and control buffers
-        assert config['trans']['pred_length'] == 1, 'Replay buffer requires pred_length=1'
         C_tot, H, W = img_shape
         C = C_tot // config['trans']['past_length']
         self.X = torch.zeros((capacity, config['trans']['past_length'], C, H, W), device=device)
-        self.U = torch.zeros((capacity, control_size), device=device)
         self.rewards = torch.zeros((capacity, 1), device=device)
-        self.X_next = torch.zeros((capacity, C, H, W), device=device)
         self.dones = torch.zeros((capacity, 1), device=device)
+
+        pred_length = config['trans']['pred_length']
+        if pred_length > 1:
+            self.U = torch.zeros((capacity, pred_length, control_size), device=device)
+            self.X_next = torch.zeros((capacity, pred_length, C, H, W), device=device)
+        else:
+            self.U = torch.zeros((capacity, control_size), device=device)
+            self.X_next = torch.zeros((capacity, C, H, W), device=device)
 
     def __len__(self):
         return self.size
@@ -47,7 +53,8 @@ class ReplayBuffer:
 
     def sample(self, batch_size):
         # Generate batch_size random samples from the replay buffer
-        idx = torch.randint(0, self.size, (batch_size,), device=self.device)
+        # idx = torch.randint(0, self.size, (batch_size,), device=self.device)  # Samples with replacement
+        idx = random.sample(range(self.size), batch_size)
 
         return (
             self.X[idx],
