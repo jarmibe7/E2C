@@ -56,7 +56,6 @@ class RSSME2C(nn.Module):
         self.out_image_shape = self.decoder.out_image_shape
 
         # Dreamer dynamics model definition
-        # TODO: Try with nn.GRU and 2 layers, batch_first=True
         self.num_layers = 2
         self.rnn = nn.GRU(
             self.stochastic_size + self.control_size,

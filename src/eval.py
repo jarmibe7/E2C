@@ -207,23 +207,6 @@ class Evaluator():
                     # z_q = torch.normal(0.5*torch.ones_like(mu_q), 0.1*torch.ones_like(log_var_q))
                     x_recon_next.append(trainer._decode_latent(z_q).detach().cpu())
 
-            if step_idx == 0:
-                print("Reconstruction shape:", x_recon.shape, "Next Reconstruction shape:", len(x_recon_next), x_recon_next[0].shape)
-            """# Normalize to [pred_len, C, H, W]
-            if x_pred.dim() == 3:
-                x_pred_seq = x_pred.unsqueeze(0)
-            elif x_pred.dim() == 4:
-                # If shape is [B, C, H, W], treat as single-step
-                if x_pred.shape[0] == x_pred.shape[0]:
-                    x_pred_seq = x_pred
-                else:
-                    x_pred_seq = x_pred
-            elif x_pred.dim() == 5:
-                # [B, T, C, H, W]
-                x_pred_seq = x_pred.squeeze(0)
-            else:
-                raise ValueError(f"Unexpected prediction shape: {tuple(x_pred.shape)}")"""
-
             # Feed next frame based on loop type
             next_for_buffer = next_img_true if closed_loop else x_recon_next.detach().cpu()
 

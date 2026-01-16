@@ -302,7 +302,8 @@ class ClosedLoopRandomTrainer(BaseTrainer):
         super().__init__(dataset, model, config, device)
         self.num_rollout_steps = config['closed_loop']['num_rollout_steps']
         self.num_batches = config['closed_loop']['num_batches']
-        self.plan_horizon = config['trans'].get('pred_length', 3)   # How long to imagine rollouts
+        self.pred_length = config['trans'].get('pred_length', 3)   # How long to predict ahead in network
+        self.plan_horizon = config['closed_loop'].get('plan_horizon', self.pred_length)   # How long to imagine rollouts
         assert self.num_rollout_steps > self.batch_size, 'Steps per rollout must be > batch_size!'
         assert self.batch_size < config['closed_loop']['buffer_capacity'], 'Batch size must be < buffer capacity!'
         if self.num_rollout_steps <= self.num_batches * self.batch_size:
@@ -402,27 +403,27 @@ class ClosedLoopRandomTrainer(BaseTrainer):
                 continue
             else:
                 # Slide frame obs history frame buffer to next image
-                if len(frame_buffer) == self.past_length + self.plan_horizon:
+                if len(frame_buffer) == self.past_length + self.pred_length:
                     frame_buffer.pop(0)
                     act_buffer.pop(0)
                 next_image = process_image(self.env.render()).squeeze(0).permute(2, 0, 1)
                 frame_buffer.append(next_image)
 
                 # Add sample to replay buffer
-                if len(frame_buffer) == self.past_length + self.plan_horizon:
+                if len(frame_buffer) == self.past_length + self.pred_length:
                     # Compute action and img windows
                     if self.env_continuous:
                         act_add = torch.stack(
-                            [a for a in act_buffer[self.past_length-1:self.past_length-1+self.plan_horizon]]
+                            [a for a in act_buffer[self.past_length-1:self.past_length-1+self.pred_length]]
                         )
                     else:
-                        act_add = act_buffer[self.past_length-1:self.past_length-1+self.plan_horizon].unsqueeze(-1)
+                        act_add = act_buffer[self.past_length-1:self.past_length-1+self.pred_length].unsqueeze(-1)
 
                     self.replay_buffer.add(
                         img = torch.stack(frame_buffer[0:self.past_length], dim=0),
                         action = act_add,
                         reward = rew,
-                        next_img = torch.stack(frame_buffer[self.past_length:(self.past_length+self.plan_horizon)], dim=0),
+                        next_img = torch.stack(frame_buffer[self.past_length:(self.past_length+self.pred_length)], dim=0),
                         done = done
                     )
                     idx += 1
@@ -824,6 +825,7 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
         self.cem_iters = self.closed_cfg.get('iters', 3)
         self._init_cem_mu_sig()
         self.alpha = self.closed_cfg.get('alpha', 0.7)
+        self.plan_horizon = self.closed_cfg.get('plan_horizon', self.pred_length)
 
     def _init_cem_mu_sig(self):
         """
@@ -908,8 +910,9 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
     
     def _sample_cem(self, frame_buffer):
         # Initialize CEM distribution
-        mu = self.init_control.clone()  # (plan_horizon, action_size)
-        sigma = self.sigma.clone()      # (plan_horizon, action_size)
+        # TODO: Ayush: we can actually CEM plan over a longer time horizon than pred_length, if we wanted
+        mu = self.init_control  # (plan_horizon, action_size)
+        sigma = self.sigma      # (plan_horizon, action_size)
         for _ in range(self.cem_iters):
             costs = torch.zeros(self.num_action_samples, device=self.device)
             action_samples = torch.zeros((self.num_action_samples, self.plan_horizon, mu.shape[1]), device=self.device)
@@ -1003,27 +1006,27 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
                 continue
             else:
                 # Slide frame obs history frame buffer to next image
-                if len(frame_buffer) == self.past_length + self.plan_horizon:
+                if len(frame_buffer) == self.past_length + self.pred_length:
                     frame_buffer.pop(0)
                     act_buffer.pop(0)
                 next_image = process_image(self.env.render()).squeeze(0).permute(2, 0, 1)
                 frame_buffer.append(next_image)
 
                 # Add sample to replay buffer
-                if len(frame_buffer) == self.past_length + self.plan_horizon:
+                if len(frame_buffer) == self.past_length + self.pred_length:
                     # Compute action and img windows
                     if self.env_continuous:
                         act_add = torch.stack(
-                            [a for a in act_buffer[self.past_length-1:self.past_length-1+self.plan_horizon]]
+                            [a for a in act_buffer[self.past_length-1:self.past_length-1+self.pred_length]]
                         )
                     else:
-                        act_add = act_buffer[self.past_length-1:self.past_length-1+self.plan_horizon].unsqueeze(-1)
+                        act_add = act_buffer[self.past_length-1:self.past_length-1+self.pred_length].unsqueeze(-1)
 
                     self.replay_buffer.add(
                         img = torch.stack(frame_buffer[0:self.past_length], dim=0),
                         action = act_add,
                         reward = rew,
-                        next_img = torch.stack(frame_buffer[self.past_length:(self.past_length+self.plan_horizon)], dim=0),
+                        next_img = torch.stack(frame_buffer[self.past_length:(self.past_length+self.pred_length)], dim=0),
                         done = done
                     )
                     idx += 1
