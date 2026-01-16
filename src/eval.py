@@ -194,12 +194,13 @@ class Evaluator():
 
             # Model inputs
             with torch.no_grad():
-                frames = [f.to(trainer.device) for f in frame_buffer[-past_len:]]
-                window = trainer._frames_to_tensor(frames)
-                h = torch.zeros(1, model.deterministic_size, device=trainer.device)
-                mu_q, log_var_q, z_q = trainer._encode_posterior_rssm(window, h)
+                # frames = [f.to(trainer.device) for f in frame_buffer[-past_len:]]
+                # window = trainer._frames_to_tensor(frames)
+                window = torch.stack(frame_buffer[-trainer.model.past_length:], dim=0).unsqueeze(0).to(trainer.device)
+                mu_q, log_var_q, z_q = trainer.model.encode_posterior(window)
                 x_recon = trainer._decode_latent(z_q)
                 x_recon_next = []
+                h = torch.zeros(model.num_layers, 1, model.deterministic_size, device=trainer.device)
                 for act in action_seq:
                     act_batch = act.view(1, -1).to(trainer.device)
                     h, z_q, mu_p, log_var_p = trainer.model.rssm_step(h, z_q, act_batch)
@@ -310,13 +311,14 @@ class Evaluator():
             if i >= max_frames:
                 break
             x, x_next, u = x.to(self.device), x_next.to(self.device), u.to(self.device)
-            x = x.reshape(x.shape[0], -1, x.shape[-2], x.shape[-1])
+            # x = x.reshape(x.shape[0], -1, x.shape[-2], x.shape[-1])
             # x_next = torch.hstack([x_next for i in range(self.model.past_length)]).to(self.device)
-            x_next = x_next[:, 0]       # TODO: Only eval on first transition?
-            u = u[:, 0]
-            x_recon, x_pred, sample_return = self.model.sample(x, u, return_all=True)
+            # x_next = x_next[:, 0]       # TODO: Only eval on first transition?
+            # u = u[:, 0]
+            # x_recon, x_pred, sample_return = self.model.sample(x, u, return_all=True)
+            sample_return = self.model(x, x_next, u)
             x_list.append(x[0]); x_next_list.append(x_next[0])
-            x_recon_list.append(x_recon); x_pred_list.append(x_pred)
+            x_recon_list.append(sample_return['x_recon']); x_pred_list.append(sample_return['x_preds'][0])
             if self.model.output_uncertainty: x_pred_uncertainty_list.append(sample_return['x_pred_recon_uncertainty'].mean().item())
 
         # Initialize axes
@@ -379,13 +381,16 @@ class Evaluator():
                 if i >= max_samples:
                     break
             x, x_next, u = x.to(self.device), x_next.to(self.device), u.to(self.device)
-            x = x.reshape(x.shape[0], -1, x.shape[-2], x.shape[-1])
+            # x = x.reshape(x.shape[0], -1, x.shape[-2], x.shape[-1])
             # x_next = torch.hstack([x_next for _ in range(self.model.past_length)]).to(self.device)
-            x_next = x_next[:, 0]       # TODO: Only eval on first transition?
-            u = u[:, 0]
+            # x_next = x_next[:, 0]       # TODO: Only eval on first transition?
+            # u = u[:, 0]
 
-            x_recon, x_pred, sample_return = self.model.sample(x, u, return_all=True)
-            mu_pred = sample_return['mu_pred']
+            # x_recon, x_pred, sample_return = self.model.sample(x, u, return_all=True)
+            sample_return = self.model(x, x_next, u)
+            mu_pred = sample_return['mu_priors']
+            x_recon = sample_return['x_recon']
+            x_pred = sample_return['x_preds'][0]
 
             img_true = x[0][:3].unsqueeze(0)
             img_true_next = x_next[0][:3].unsqueeze(0)
