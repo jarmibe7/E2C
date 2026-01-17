@@ -869,16 +869,17 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
 
     def _rollout_info_gain(self, frame_buffer, action_seq):
         with torch.no_grad():
-            frames = [f.to(self.device) for f in frame_buffer[-self.past_length:]]
-            window = self._frames_to_tensor(frames)
+            # frames = [f.to(self.device) for f in frame_buffer[-self.past_length:]]
+            # window = self._frames_to_tensor(frames)
+            window = torch.stack(frame_buffer[-self.past_length:], dim=0).unsqueeze(0).to(self.device)
             total_kl = 0.0
 
             if self.uses_rssm:
+                h = torch.zeros(self.model.num_layers, 1, self.model.deterministic_size, device=self.device)
                 # TODO:
                 # this is a function-alized version of the RSSM rollout from the RSSME2C class
                 # useful for debugging
                 # this isn't super efficient since we re-encode at each step, but it's fine for now
-                h = torch.zeros(1, self.model.deterministic_size, device=self.device)
                 mu_q, log_var_q, z_q = self._encode_posterior_rssm(window, h)
                 for act in action_seq:
                     act_batch = act.view(1, -1).to(self.device)
