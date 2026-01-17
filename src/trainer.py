@@ -306,7 +306,7 @@ class ClosedLoopRandomTrainer(BaseTrainer):
         self.num_batches = config['closed_loop']['num_batches']
         self.pred_length = config['trans'].get('pred_length', 3)   # How long to predict ahead in network
         self.plan_horizon = config['closed_loop'].get('plan_horizon', self.pred_length)   # How long to imagine rollouts
-        assert self.num_rollout_steps > self.batch_size, 'Steps per rollout must be > batch_size!'
+        # assert self.num_rollout_steps > self.batch_size, 'Steps per rollout must be > batch_size!'
         assert self.batch_size < config['closed_loop']['buffer_capacity'], 'Batch size must be < buffer capacity!'
         if self.num_rollout_steps <= self.num_batches * self.batch_size:
             print(
@@ -371,7 +371,7 @@ class ClosedLoopRandomTrainer(BaseTrainer):
         z = self.model.reparameterize(mu, log_var)
         return mu, log_var, z
 
-    def collect_rollouts(self):
+    def collect_rollouts(self, epoch):
         """
         Collect observations and save them to replay buffer
         """
@@ -470,14 +470,24 @@ class ClosedLoopRandomTrainer(BaseTrainer):
     def learn(self):
         model_loss = 0.0
         pbar = tqdm(range(self.num_epochs), desc="Training")
+        if self.num_rollout_steps < self.num_batches:
+            print("Initializing buffer with random rollouts...")
+            for _ in range(max(self.num_batches // self.num_rollout_steps, self.config['closed_loop']['buffer_capacity'] // self.num_rollout_steps)):
+                self.collect_rollouts(-1)
         for epoch in range(self.num_epochs):
-            self.collect_rollouts()
             model_loss = self.train(epoch)
 
             pbar.set_postfix({
                 'Epoch': epoch+1,
                 'Model Loss': f"{model_loss:.4f}"})
             pbar.update(1)
+
+            self.collect_rollouts(epoch)
+            if (epoch + 1) % 50 == 0:
+                # show model video every 50 epochs
+                self.model.eval()
+                if self.config['train']['eval']: self.evaluate(self.config['run_path'])
+                self.model.train()
             
         pbar.close()
 
@@ -526,7 +536,7 @@ class ClosedLoopPolicyTrainer(BaseTrainer):
         )
         assert self.num_rollout_steps <= self.replay_buffer.capacity, 'Steps per rollout should be <= buffer_capacity!'
 
-    def collect_rollouts(self):
+    def collect_rollouts(self, epoch):
         """
         Collect observations and save them to replay buffer
         """
@@ -659,7 +669,7 @@ class ClosedLoopPolicyTrainer(BaseTrainer):
         model_loss, policy_loss = 0.0, 0.0
         pbar = tqdm(range(self.num_epochs), desc="Training")
         for epoch in range(self.num_epochs):
-            self.collect_rollouts()
+            self.collect_rollouts(epoch)
             model_loss, policy_loss = self.train(epoch)
 
             pbar.set_postfix({
@@ -764,10 +774,11 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
                     # total_kl += self._kl_diag_gaussian(mu_p, log_var_p, mu_q, log_var_q).mean().item()
 
                     # current vs t_prev
-                    total_kl += self._kl_diag_gaussian(mu_p, log_var_p, mu_q, log_var_q).mean().item()
+                    total_kl -= self._kl_diag_gaussian(mu_p, log_var_p, mu_q, log_var_q).mean().item()
                     mu_q = mu_p
                     log_var_q = log_var_p
             else:
+                # TODO: e2c-specific rollout function is outdated
                 mu_q, log_var_q, z_q = self._encode_posterior_e2c(window)
                 for act in action_seq:
                     act_batch = act.view(1, -1).to(self.device)
@@ -904,58 +915,6 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
                     )
                     idx += 1
         self.model.train()
-
-    def learn(self):
-        model_loss = 0.0
-        pbar = tqdm(range(self.num_epochs), desc="Training")
-        for epoch in range(self.num_epochs):
-            self.collect_rollouts(epoch)
-            model_loss = self.train(epoch)
-
-            pbar.set_postfix({
-                'Epoch': epoch+1,
-                'Model Loss': f"{model_loss:.4f}"})
-            pbar.update(1)
-
-            if (epoch + 1) % 50 == 0:
-                # show model video every 50 epochs
-                if self.config['train']['eval']: self.evaluate(self.config['run_path'])
-            
-        pbar.close()
-    
-    # TODO: re-use the KLD from loss
-    def train(self, epoch): 
-        # World model gradient update
-        total_model_loss, total_policy_loss = 0.0, 0.0
-        for i in range(self.num_batches):
-            # Unload batch
-            x, u, r, x_next, done  = self.replay_buffer.sample(self.batch_size)
-            x, x_next, u = x.to(self.device), x_next.to(self.device), u.to(self.device)
-            # x = x.reshape(x.shape[0], -1, *self.in_image_shape[1:])    # Stack obs history in channel dim
-
-            # Forward pass
-            train_return = self.model(x, x_next, u)
-            train_return['x'] = x
-            train_return['x_next'] = x_next
-
-            # Model loss and backprop
-            model_loss, loss_return = self.model_criterion(train_return, epoch)
-            self.plotter.log(loss_return)
-            self.model_optimizer.zero_grad()
-            model_loss.backward()
-            self.model_optimizer.step()
-
-            # TODO: Raise exception
-            if torch.isnan(model_loss):
-                print("NaN loss encountered, stopping training.")
-                break
-
-            total_model_loss += model_loss.item() * x.size(0)   # Aggregate total epoch loss
-
-        # Compute average model loss
-        avg_model_loss = total_model_loss / (self.batch_size*self.num_batches)
-
-        return avg_model_loss
     
 class ClosedLoopRewardTrainer(ClosedLoopInformativeTrainer):
     """
