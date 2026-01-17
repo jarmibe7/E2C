@@ -91,7 +91,7 @@ def process_image(image, dataset_name=env_name, image_shape=image_shape):
     """
     if 'cartpole' in dataset_name: image = image[50:350, 100:400]  # Zoom on cartpole
     if 'reacher' in dataset_name: image = image[100:-50, 100:-100]  # Zoom on reacher
-    if 'push' in dataset_name: image = image[100:-50, :-100, :]     # Zoom on robot # TODO: need to zoom on push?
+    # if 'push' in dataset_name: image = image[100:-50, :-100, :]     # Zoom on robot # TODO: need to zoom on push?
     image = torch.from_numpy(image.copy()).permute(2, 0, 1)  # Get image tensor into (C, H, W)
 
     # Image processing

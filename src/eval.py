@@ -234,8 +234,7 @@ class Evaluator():
             with torch.no_grad():
                 # Immediate error
                 s_true_t1 = torch.as_tensor(state_true)
-                s_pred_t1 = sr_model(x_recon_next[0].unsqueeze(0).to(device))['state_pred'].detach().cpu()
-                breakpoint()
+                s_pred_t1 = sr_model(x_recon_next[0].unsqueeze(0).to(device))['state_pred'].squeeze(0).detach().cpu()
                 immediate_err = (s_pred_t1 - s_true_t1).abs().squeeze(0).numpy()
                 immediate_state_errors.append(immediate_err)
 
@@ -247,8 +246,6 @@ class Evaluator():
 
                 mj_model = env.unwrapped.model
                 data  = env.unwrapped.data
-
-                # Save env state
                 spec = (
                     mujoco.mjtState.mjSTATE_INTEGRATION |
                     mujoco.mjtState.mjSTATE_PHYSICS |
@@ -265,7 +262,7 @@ class Evaluator():
                         obs_k, _, _, _, _ = env.step(action_seq[k].cpu().numpy())
 
                     s_true_k = torch.as_tensor(get_env_state(env, obs_k, self.dataset_name))
-                    s_pred_k = sr_model(x_recon_next[k].unsqueeze(0).to(device))['state_pred'].detach().cpu()
+                    s_pred_k = sr_model(x_recon_next[k].unsqueeze(0).to(device))['state_pred'].squeeze(0).detach().cpu()
                     cum_err += (s_pred_k - s_true_k).abs().squeeze(0).numpy()
 
                 cum_err = (cum_err / pred_len)
@@ -320,7 +317,7 @@ class Evaluator():
             print('\nException occured, saved state rep error figure to current directory')
             fig.savefig(fig_name)
         plt.close(fig)
-        return  
+        return
 
     def visualize_planner(self, trainer, run_path, max_steps=25, closed_loop=True):
         """
