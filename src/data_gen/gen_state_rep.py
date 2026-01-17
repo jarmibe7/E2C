@@ -41,7 +41,6 @@ def get_env_state(env, obs, env_name):
     otherwise fall back to observation.
     """
     unwrapped = env.unwrapped
-    breakpoint()
 
     # Reacher: first 2 are joint angles
     # Remaining qpos entries are target-related
