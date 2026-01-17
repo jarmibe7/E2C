@@ -13,7 +13,7 @@ import gymnasium_robotics
 gym.register_envs(gymnasium_robotics)
 from pathlib import Path
 from tqdm import tqdm
-# from pyvirtualdisplay import Display
+from pyvirtualdisplay import Display
 import time
 import os
 os.environ['MUJOCO_GL'] = 'egl'
@@ -45,6 +45,7 @@ class BaseTrainer():
         train_size = int(len(dataset) * config['train']['train_ratio'])
         test_size = len(dataset) - train_size
         self.dataset, test_dataset = torch.utils.data.random_split(dataset, [train_size, test_size])
+        self.dataset_name = config['env_name']
 
         # Save training params
         self.num_epochs = config['train']['num_epochs']
@@ -53,7 +54,6 @@ class BaseTrainer():
         self.out_image_shape = config['vae']['out_image_shape']
         self.device = device
         self.config = config
-        self.dataset_name = config['env_name']
         if config['closed_loop']['closed_loop']:
             # Compute training stats
             self.num_updates = self.num_epochs * config['closed_loop']['num_batches']
@@ -103,7 +103,7 @@ class BaseTrainer():
                 test_dataset,
                 batch_size=config['train']['batch_size'], 
                 device=config['train']['device'],
-                dataset_name=config['env_name']
+                dataset_name=self.dataset_name
             )
     
     def collect_rollouts(self, *args, **kwargs):
@@ -121,9 +121,10 @@ class BaseTrainer():
         """
         print('\n*** EVAL ***\n')
         self.model.eval()
-        self.evaluator.eval(run_path)
-        if self.config['closed_loop']['closed_loop']: 
+        # self.evaluator.eval(run_path)
+        if self.config['closed_loop']['closed_loop']:
             self.evaluator.visualize_planner(self, run_path, max_steps=50, closed_loop=True)
+            self.evaluator.eval_state_rep(self, run_path, max_steps=50, closed_loop=True)
 
     def save(self, config_save, run_path):
         """
@@ -431,6 +432,7 @@ class ClosedLoopRandomTrainer(BaseTrainer):
                         done = done
                     )
                     idx += 1
+        self.model.train()
 
     def train(self, epoch):
         """
@@ -472,7 +474,7 @@ class ClosedLoopRandomTrainer(BaseTrainer):
         model_loss = 0.0
         pbar = tqdm(range(self.num_epochs), desc="Training")
         if self.num_rollout_steps < self.num_batches:
-            print("Initializing buffer with random rollouts...")
+            print("\nInitializing buffer with random rollouts...")
             for _ in range(max(self.num_batches // self.num_rollout_steps, self.config['closed_loop']['buffer_capacity'] // self.num_rollout_steps)):
                 self.collect_rollouts(-1)
         for epoch in range(self.num_epochs):
@@ -744,7 +746,7 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
     def _rollout_info_gain(self, frame_buffer, action_seq):
         with torch.no_grad():
             # frames = [f.to(self.device) for f in frame_buffer[-self.past_length:]]
-            # window = self._frames_to_tensor(frames)
+            # window = self._frames_to_tensor(frame_buffer)
             window = torch.stack(frame_buffer[-self.past_length:], dim=0).unsqueeze(0).to(self.device)
             total_kl = 0.0
 
@@ -753,7 +755,6 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
                 # TODO:
                 # this is a function-alized version of the RSSM rollout from the RSSME2C class
                 # useful for debugging
-                # this isn't super efficient since we re-encode at each step, but it's fine for now
                 mu_q, log_var_q, z_q = self.model.encode_posterior(window)
                 for act in action_seq:
                     act_batch = act.view(1, -1).to(self.device)
@@ -806,6 +807,9 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
 
             # Sample action sequences from current distribution
             for k in range(self.num_action_samples):
+                if torch.any(sigma < 0) or torch.any(torch.isnan(sigma)): 
+                    print('WARNING: NaN values detected in sigma in _sample_cem!')
+                    sigma = self.sigma
                 a_t = torch.normal(mu, sigma)
 
                 # Clip to action space bounds

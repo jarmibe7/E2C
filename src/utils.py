@@ -9,6 +9,7 @@ import random
 import numpy as np
 import torch
 import math
+from pathlib import Path
 
 def anim_frames(frames):
     """
@@ -97,4 +98,16 @@ def shoulder_mass(mu_vec, r1=0.5, r2=2.0, dim=0):
     d = torch.abs(mu_vec - mean)
     return ((d > r1 * std) & (d <= r2 * std)).float().mean(dim=dim)
 
+def make_yaml_serializable(obj):
+    """Recursively convert objects that YAML can't serialize safely."""
+    if isinstance(obj, dict):
+        return {k: make_yaml_serializable(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [make_yaml_serializable(v) for v in obj]
+    elif isinstance(obj, Path):
+        return str(obj)
+    elif isinstance(obj, torch.Size):
+        return list(obj)
+    else:
+        return obj
     

@@ -26,6 +26,32 @@ from src.model.policy import ConvPolicy
 from src.trainer import E2CPretrainer, RSSMPretrainer, ClosedLoopPolicyTrainer, ClosedLoopRandomTrainer, ClosedLoopInformativeTrainer
 import argparse
 
+# # Configure Matplotlib to use LaTeX for text rendering
+# import matplotlib as mpl
+# plt.rcParams['text.usetex'] = False
+# plt.rcParams['pdf.fonttype'] = 42  # Ensures TrueType fonts are used
+# plt.rcParams['ps.fonttype'] = 42   # Ensures TrueType fonts for PostScript output
+# mpl.rcParams['lines.linewidth'] = 5
+# mpl.rcParams['lines.markersize'] = 10
+# mpl.rcParams['lines.markeredgewidth'] = 1
+# mpl.rcParams['axes.linewidth'] = 2
+# mpl.rcParams['figure.titlesize'] = 25
+# mpl.rcParams['figure.titleweight'] = 'bold'
+# mpl.rcParams['axes.titlesize'] = 20
+# # mpl.rcParams['axes.titleweight'] = 'bold'
+# mpl.rcParams['axes.labelsize'] = 20
+# mpl.rcParams['axes.titlepad'] = 5
+# mpl.rcParams['xtick.major.size'] = 6
+# mpl.rcParams['xtick.major.width'] = 3
+# mpl.rcParams['xtick.labelsize'] = 20
+# mpl.rcParams['xtick.major.pad'] = 3
+# mpl.rcParams['ytick.major.size'] = 6
+# mpl.rcParams['ytick.major.width'] = 3
+# mpl.rcParams['ytick.labelsize'] = 20
+# mpl.rcParams['ytick.major.pad'] = 3
+# mpl.rcParams['figure.subplot.hspace'] = 0.85
+# mpl.rcParams["axes.labelpad"] = 5
+
 # Set random seed globally
 set_seed(42)
 
@@ -139,7 +165,7 @@ def main():
             print('*** EVAL ONLY ***')
             # trainer.evaluate(config['run_path'])
             # trainer.evaluator.eval_traj(config['run_path'], max_frames=25)
-            trainer.evaluator.visualize_planner(trainer, config['run_path'], max_steps=50, closed_loop=True)
+            # trainer.evaluator.visualize_planner(trainer, config['run_path'], max_steps=50, closed_loop=True)
             trainer.evaluator.eval_state_rep(trainer, config['run_path'], max_steps=50, closed_loop=True)
             print('\n*** DONE ***')
             return
