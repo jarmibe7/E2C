@@ -338,7 +338,7 @@ if __name__ == "__main__":
     print('*** STARTING ***\n')
     # Load config, make run path, and choose torch device
     # ---------- CONFIG HERE ----------
-    config_name = 'state_rep_reacher_v0'
+    config_name = 'state_rep_push_v0'
     # ---------- CONFIG HERE ----------
     if 'state_rep' not in config_name:
         raise ValueError('Must use state representation model config!')
@@ -356,7 +356,7 @@ if __name__ == "__main__":
     # Make E2CDataset object
     print(f"Loading dataset: {config['train']['dataset']}\n")
     dataset = StateRepesentationDataset(config)
-    config['conv']['in_image_shape'] = dataset.in_img_shape
+    config['conv']['in_image_shape'] = dataset.img_shape
     config['train']['state_size'] = dataset.state_size
 
     # Create or load model

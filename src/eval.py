@@ -19,6 +19,7 @@ from src.model.rssm import RSSME2C
 from src.dataset import E2CDataset
 from src.utils import set_seed, anim_frames, shoulder_mass, excess_kurtosis, central_mass_ratio
 from src.data_gen.gen_gym import process_image
+from src.data_gen.gen_state_rep import get_env_state
 
 class Plotter():
     """
@@ -137,6 +138,158 @@ class Evaluator():
         self.eval_traj(run_path, max_frames=vid_max_frames)
         # self.eval_latent(run_path)
 
+    def eval_state_rep(self, trainer, run_path, max_steps=25, closed_loop=True):
+        """
+        Use a pretrained state representation model to evaluate prediction quality
+
+        Args:
+            trainer: Trainer instance (must expose env, model, device, past_length, pred_length/config).
+            run_path: Path to save the resulting video.
+            max_steps: Number of environment steps to visualize.
+            closed_loop: If True, feed ground-truth observations back into the model window.
+                         If False, feed the model's predicted next frame (open-loop rollout).
+        """
+        model = trainer.model
+        device = trainer.device
+        env = trainer.env
+        past_len = model.past_length if hasattr(model, 'past_length') else 3
+        pred_len = model.pred_length if hasattr(model, 'pred_length') else 3
+        try:
+            closed_loop_policy = trainer.config['closed_loop']['policy']
+        except:
+            print('No closed loop policy found in trainer config, defaulting to random')
+            closed_loop_policy = 'random'
+
+        model.eval()
+        self.state_rep.eval()
+        obs, _ = env.reset()
+
+        frame_buffer = []   # frames used as model input window
+        true_frames = []    # ground-truth frames for comparison
+        recon_frames = []   # model reconstructions
+        pred_sequences = [] # list of predicted sequences per step
+        immediate_state_errors = []         # Prediction error at timestep t+1
+        cumulative_state_errors = []        # cumulative pred error for entire pred_length
+
+        # Prime buffer with the first observation
+        first_img = process_image(env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1)
+        for _ in range(past_len):
+            frame_buffer.append(first_img)
+
+        step_idx = 0
+        for step_idx in tqdm(range(max_steps), desc="Eval with state representation model"):
+            # Current frame (ground truth)
+            curr_img = process_image(env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1)
+
+            # Action: reuse trainer.collect_rollouts logic (random sample)
+            if closed_loop_policy == 'informative':
+                trainer._init_cem_mu_sig()
+                action_seq = trainer._sample_cem(frame_buffer[-past_len:]) # pred_len, act_size
+            else:
+                # repeat pred len number of times for action horizon
+                act = [env.action_space.sample() for _ in range(pred_len)]
+                action_seq = torch.from_numpy(np.array(act)).to(device)
+            env_act = action_seq.cpu().detach().numpy()[0]
+
+            # Step env
+            obs, _, done, _, _ = env.step(env_act)
+            next_img_true = process_image(env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1)
+            state_true = get_env_state(env, obs, self.dataset_name)
+
+            # Model inputs
+            with torch.no_grad():
+                frames = [f.to(trainer.device) for f in frame_buffer[-past_len:]]
+                window = trainer._frames_to_tensor(frames)
+                h = torch.zeros(1, model.deterministic_size, device=trainer.device)
+                mu_q, log_var_q, z_q = trainer._encode_posterior_rssm(window, h)
+                x_recon = trainer._decode_latent(z_q)
+                x_recon_next = []
+                for act in action_seq:
+                    act_batch = act.view(1, -1).to(trainer.device)
+                    h, z_q, mu_p, log_var_p = trainer.model.rssm_step(h, z_q, act_batch)
+                    # z_q = torch.normal(0.5*torch.ones_like(mu_q), 0.1*torch.ones_like(log_var_q))
+                    x_recon_next.append(trainer._decode_latent(z_q).detach().cpu())
+
+            # State rep eval
+            with torch.no_grad():
+                # Immediate error
+                s_true_t1 = torch.as_tensor(state_true)
+                s_pred_t1 = self.state_rep(x_recon_next[0].to(device))
+                immediate_err = torch.norm(s_pred_t1 - s_true_t1, dim=-1)
+                immediate_state_errors.append(immediate_err.item())
+
+                # Cumulative error
+                cum_err = 0.0
+
+                # Save env state for temporary rollout
+                env_state = (
+                    env.unwrapped.state.copy()
+                    if hasattr(env.unwrapped, "state")
+                    else None
+                )
+
+                obs_k = obs # Init obs from prev transition
+                for k in range(pred_len):
+                    # Rollout predicted actions to get ground truth next states
+                    if k > 0:
+                        obs_k, _, _, _, _ = env.step(action_seq[k].cpu().numpy())
+
+                    state_true_k = get_env_state(env, obs_k, self.dataset_name)
+                    s_true_k = torch.as_tensor(state_true_k)
+                    s_pred_k = self.state_rep(x_recon_next[k].to(device))
+                    cum_err += torch.norm(s_pred_k - s_true_k, dim=-1)
+
+                cum_err = cum_err / pred_len
+                cumulative_state_errors.append(cum_err.item())
+
+                # Restore env state
+                if env_state is not None:
+                    env.unwrapped.state = env_state.copy()
+
+            if step_idx == 0:
+                print("Reconstruction shape:", x_recon.shape, "Next Reconstruction shape:", len(x_recon_next), x_recon_next[0].shape)
+
+            # Feed next frame based on loop type
+            next_for_buffer = next_img_true if closed_loop else x_recon_next.detach().cpu()
+
+            # Update buffers/logs
+            frame_buffer.append(next_for_buffer)
+            # if len(frame_buffer) > past_len:
+            #     frame_buffer = frame_buffer[-past_len:]
+
+            true_frames.append(curr_img)
+            recon_frames.append(x_recon.detach().cpu())
+            pred_sequences.append(x_recon_next)
+
+            if done:
+                env.reset()
+                done = False
+                frame_buffer = [process_image(env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1) for _ in range(past_len)]
+
+
+        steps = np.arange(len(immediate_state_errors))
+
+        fig, ax = plt.subplots(1, 1, figsize=(4, 4), dpi=150, tight_layout=True)
+        plt.plot(steps, immediate_state_errors, label="Immediate (1-step) Error")
+        plt.plot(steps, cumulative_state_errors, label="Cumulative (H-step) Error")
+        plt.xlabel("Environment Step (Eval)")
+        plt.ylabel("Squarred State Error")
+        plt.legend()
+        plt.grid(True)
+        plt.tight_layout()
+
+        fig_name = f'latent_fig.png'
+        try:
+            filepath = run_path / fig_name
+            print(f'\nSaved latent space figure to {filepath}')
+            fig.savefig(filepath)
+        except Exception as e:
+            print(e)
+            print('\nException occured, saved latent space figure to current directory')
+            fig.savefig(fig_name)
+        plt.close(fig)
+        return  
+
     def visualize_planner(self, trainer, run_path, max_steps=25, closed_loop=True):
         """
         Visualize trajectories using the trainer's planner/rollout logic.
@@ -167,14 +320,14 @@ class Evaluator():
         pred_sequences = [] # list of predicted sequences per step
 
         # Prime buffer with the first observation
-        first_img = process_image(env.render()).squeeze(0).permute(2, 0, 1)
+        first_img = process_image(env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1)
         for _ in range(past_len):
             frame_buffer.append(first_img)
 
         step_idx = 0
         for step_idx in tqdm(range(max_steps), desc="Visualizing Planner timesteps"):
             # Current frame (ground truth)
-            curr_img = process_image(env.render()).squeeze(0).permute(2, 0, 1)
+            curr_img = process_image(env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1)
 
             # Action: reuse trainer.collect_rollouts logic (random sample)
             if closed_loop_policy == 'informative':
@@ -190,17 +343,16 @@ class Evaluator():
 
             # Step env
             _, _, done, _, _ = env.step(env_act)
-            next_img_true = process_image(env.render()).squeeze(0).permute(2, 0, 1)
+            next_img_true = process_image(env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1)
 
             # Model inputs
             with torch.no_grad():
-                # frames = [f.to(trainer.device) for f in frame_buffer[-past_len:]]
-                # window = trainer._frames_to_tensor(frames)
-                window = torch.stack(frame_buffer[-trainer.model.past_length:], dim=0).unsqueeze(0).to(trainer.device)
-                mu_q, log_var_q, z_q = trainer.model.encode_posterior(window)
+                frames = [f.to(trainer.device) for f in frame_buffer[-past_len:]]
+                window = trainer._frames_to_tensor(frames)
+                h = torch.zeros(1, model.deterministic_size, device=trainer.device)
+                mu_q, log_var_q, z_q = trainer._encode_posterior_rssm(window, h)
                 x_recon = trainer._decode_latent(z_q)
                 x_recon_next = []
-                h = torch.zeros(model.num_layers, 1, model.deterministic_size, device=trainer.device)
                 for act in action_seq:
                     act_batch = act.view(1, -1).to(trainer.device)
                     h, z_q, mu_p, log_var_p = trainer.model.rssm_step(h, z_q, act_batch)
@@ -239,7 +391,7 @@ class Evaluator():
             if done:
                 env.reset()
                 done = False
-                frame_buffer = [process_image(env.render()).squeeze(0).permute(2, 0, 1) for _ in range(past_len)]
+                frame_buffer = [process_image(env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1) for _ in range(past_len)]
 
         # Build visualization grid: 2 rows, (pred_len + 1) columns
         cols = pred_len + 1
@@ -311,14 +463,13 @@ class Evaluator():
             if i >= max_frames:
                 break
             x, x_next, u = x.to(self.device), x_next.to(self.device), u.to(self.device)
-            # x = x.reshape(x.shape[0], -1, x.shape[-2], x.shape[-1])
+            x = x.reshape(x.shape[0], -1, x.shape[-2], x.shape[-1])
             # x_next = torch.hstack([x_next for i in range(self.model.past_length)]).to(self.device)
-            # x_next = x_next[:, 0]       # TODO: Only eval on first transition?
-            # u = u[:, 0]
-            # x_recon, x_pred, sample_return = self.model.sample(x, u, return_all=True)
-            sample_return = self.model(x, x_next, u)
+            x_next = x_next[:, 0]       # TODO: Only eval on first transition?
+            u = u[:, 0]
+            x_recon, x_pred, sample_return = self.model.sample(x, u, return_all=True)
             x_list.append(x[0]); x_next_list.append(x_next[0])
-            x_recon_list.append(sample_return['x_recon']); x_pred_list.append(sample_return['x_preds'][0])
+            x_recon_list.append(x_recon); x_pred_list.append(x_pred)
             if self.model.output_uncertainty: x_pred_uncertainty_list.append(sample_return['x_pred_recon_uncertainty'].mean().item())
 
         # Initialize axes
@@ -381,16 +532,13 @@ class Evaluator():
                 if i >= max_samples:
                     break
             x, x_next, u = x.to(self.device), x_next.to(self.device), u.to(self.device)
-            # x = x.reshape(x.shape[0], -1, x.shape[-2], x.shape[-1])
+            x = x.reshape(x.shape[0], -1, x.shape[-2], x.shape[-1])
             # x_next = torch.hstack([x_next for _ in range(self.model.past_length)]).to(self.device)
-            # x_next = x_next[:, 0]       # TODO: Only eval on first transition?
-            # u = u[:, 0]
+            x_next = x_next[:, 0]       # TODO: Only eval on first transition?
+            u = u[:, 0]
 
-            # x_recon, x_pred, sample_return = self.model.sample(x, u, return_all=True)
-            sample_return = self.model(x, x_next, u)
-            mu_pred = sample_return['mu_priors']
-            x_recon = sample_return['x_recon']
-            x_pred = sample_return['x_preds'][0]
+            x_recon, x_pred, sample_return = self.model.sample(x, u, return_all=True)
+            mu_pred = sample_return['mu_pred']
 
             img_true = x[0][:3].unsqueeze(0)
             img_true_next = x_next[0][:3].unsqueeze(0)

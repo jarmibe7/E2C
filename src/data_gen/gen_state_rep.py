@@ -15,6 +15,8 @@ import numpy as np
 from tqdm import tqdm
 from pyvirtualdisplay import Display
 import yaml
+import gymnasium_robotics
+gym.register_envs(gymnasium_robotics)
 
 from src.utils import set_seed, format_time
 from src.data_gen.gen_gym import process_image, name_to_env
@@ -22,8 +24,8 @@ from src.data_gen.gen_gym import process_image, name_to_env
 # ------------------------
 # Configuration
 # ------------------------
-ENV_NAME = "reacher"
-DATASET_SIZE = int(5e5)
+ENV_NAME = "push"
+DATASET_SIZE = int(1e3)
 IMAGE_SHAPE = (64, 64, 3)
 SEED = 42
 
@@ -33,29 +35,30 @@ DATA_PATH = PROJECT_ROOT / "data"
 # ------------------------
 # Utilities
 # ------------------------
-def get_env_state(env, obs):    
+def get_env_state(env, obs, env_name):    
     """
     Return true joint state when available (MuJoCo),
     otherwise fall back to observation.
     """
     unwrapped = env.unwrapped
+    breakpoint()
 
-    # MuJoCo environments
-    if hasattr(unwrapped, "data") and hasattr(unwrapped.data, "qpos"):
+    # Reacher: first 2 are joint angles
+    # Remaining qpos entries are target-related
+    if "reacher" in env_name:
         qpos = unwrapped.data.qpos.copy()
         qvel = unwrapped.data.qvel.copy()
-
-        # Reacher: first 2 are joint angles
-        # Remaining qpos entries are target-related
-        if ENV_NAME == "reacher":
-            joint_pos = qpos[:2]
-            joint_vel = qvel[:2]
-
+        joint_pos = qpos[:2]
+        joint_vel = qvel[:2]
         state = np.concatenate([joint_pos, joint_vel])
-        return torch.from_numpy(state).float()
-
-    # Fallback (e.g. CartPole)
-    return torch.as_tensor(obs, dtype=torch.float32)
+    elif 'push' in env_name:
+        state = obs['observation'][0:6]    # [0:3] == end effector pose, [3:6] == block pose
+    else:
+        # Fallback to observation
+        raise ValueError(f'Gym environment {env_name} is not specified in get_env_state()')
+    
+    if torch.is_tensor(state): return state
+    else: return torch.from_numpy(state).float()
 
 
 def update_metadata(dataset_dir, name, params):

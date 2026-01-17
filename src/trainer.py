@@ -100,7 +100,7 @@ class BaseTrainer():
                 test_dataset,
                 batch_size=config['train']['batch_size'], 
                 device=config['train']['device'],
-                dataset_name=config['train']['dataset']
+                dataset_name=config['env_name']
             )
     
     def collect_rollouts(self, *args, **kwargs):
@@ -118,8 +118,9 @@ class BaseTrainer():
         """
         print('\n*** EVAL ***\n')
         self.model.eval()
-        # self.evaluator.eval(run_path)
-        self.evaluator.visualize_planner(self, run_path, max_steps=50, closed_loop=True)
+        self.evaluator.eval(run_path)
+        if self.config['closed_loop']['closed_loop']: 
+            self.evaluator.visualize_planner(self, run_path, max_steps=50, closed_loop=True)
 
     def save(self, config_save, run_path):
         """
@@ -381,7 +382,7 @@ class ClosedLoopRandomTrainer(BaseTrainer):
         
         while idx < self.num_rollout_steps:
             # Render current frame
-            curr_img = process_image(self.env.render()).squeeze(0).permute(2, 0, 1)
+            curr_img = process_image(self.env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1)
             if len(frame_buffer) == 0:
                 frame_buffer.append(curr_img)
 
@@ -405,7 +406,7 @@ class ClosedLoopRandomTrainer(BaseTrainer):
                 if len(frame_buffer) == self.past_length + self.plan_horizon:
                     frame_buffer.pop(0)
                     act_buffer.pop(0)
-                next_image = process_image(self.env.render()).squeeze(0).permute(2, 0, 1)
+                next_image = process_image(self.env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1)
                 frame_buffer.append(next_image)
 
                 # Add sample to replay buffer
@@ -426,7 +427,6 @@ class ClosedLoopRandomTrainer(BaseTrainer):
                         done = done
                     )
                     idx += 1
-        self.model.train()
 
     def train(self, epoch):
         """
@@ -438,7 +438,7 @@ class ClosedLoopRandomTrainer(BaseTrainer):
             # Unload batch
             x, u, r, x_next, done  = self.replay_buffer.sample(self.batch_size)
             x, x_next, u = x.to(self.device), x_next.to(self.device), u.to(self.device)
-            # x = x.reshape(x.shape[0], -1, *self.in_image_shape[1:])    # Stack obs history in channel dim
+            x = x.reshape(x.shape[0], -1, *self.in_image_shape[1:])    # Stack obs history in channel dim
 
             # Forward pass
             train_return = self.model(x, x_next, u)
@@ -534,7 +534,7 @@ class ClosedLoopPolicyTrainer(BaseTrainer):
         idx = 0
         while idx < self.num_rollout_steps:
             # Render current frame
-            curr_img = process_image(self.env.render()).squeeze(0).permute(2, 0, 1)
+            curr_img = process_image(self.env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1)
             if len(frame_buffer) == 0:
                 frame_buffer.append(curr_img)
 
@@ -556,7 +556,7 @@ class ClosedLoopPolicyTrainer(BaseTrainer):
                 if len(frame_buffer) == self.past_length + 1:
                     frame_buffer.pop(0)
                     act_buffer.pop(0)
-                next_image = process_image(self.env.render()).squeeze(0).permute(2, 0, 1)
+                next_image = process_image(self.env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1)
                 frame_buffer.append(next_image)
 
                 # Add sample to replay buffer
@@ -720,7 +720,7 @@ class ClosedLoopUncertaintyTrainer(BaseTrainer):
         idx = 0
         while idx < self.num_rollout_steps:
             # Render current frame
-            curr_img = process_image(self.env.render()).squeeze(0).permute(2, 0, 1)
+            curr_img = process_image(self.env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1)
             if len(frame_buffer) == 0:
                 frame_buffer.append(curr_img)
 
@@ -742,7 +742,7 @@ class ClosedLoopUncertaintyTrainer(BaseTrainer):
                 if len(frame_buffer) == self.past_length + 1:
                     frame_buffer.pop(0)
                     act_buffer.pop(0)
-                next_image = process_image(self.env.render()).squeeze(0).permute(2, 0, 1)
+                next_image = process_image(self.env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1)
                 frame_buffer.append(next_image)
 
                 # Add sample to replay buffer
@@ -868,17 +868,17 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
 
     def _rollout_info_gain(self, frame_buffer, action_seq):
         with torch.no_grad():
-            # frames = [f.to(self.device) for f in frame_buffer[-self.past_length:]]
-            # window = self._frames_to_tensor(frame_buffer)
-            window = torch.stack(frame_buffer[-self.past_length:], dim=0).unsqueeze(0).to(self.device)
+            frames = [f.to(self.device) for f in frame_buffer[-self.past_length:]]
+            window = self._frames_to_tensor(frames)
             total_kl = 0.0
 
             if self.uses_rssm:
-                h = torch.zeros(self.model.num_layers, 1, self.model.deterministic_size, device=self.device)
                 # TODO:
                 # this is a function-alized version of the RSSM rollout from the RSSME2C class
                 # useful for debugging
-                mu_q, log_var_q, z_q = self.model.encode_posterior(window)
+                # this isn't super efficient since we re-encode at each step, but it's fine for now
+                h = torch.zeros(1, self.model.deterministic_size, device=self.device)
+                mu_q, log_var_q, z_q = self._encode_posterior_rssm(window, h)
                 for act in action_seq:
                     act_batch = act.view(1, -1).to(self.device)
                     h, z_q, mu_p, log_var_p = self.model.rssm_step(h, z_q, act_batch)
@@ -972,7 +972,7 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
         
         while idx < self.num_rollout_steps:
             self._init_cem_mu_sig()
-            curr_img = process_image(self.env.render()).squeeze(0).permute(2, 0, 1)
+            curr_img = process_image(self.env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1)
             if len(frame_buffer) == 0:
                 frame_buffer.append(curr_img)
 
@@ -1006,7 +1006,7 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
                 if len(frame_buffer) == self.past_length + self.plan_horizon:
                     frame_buffer.pop(0)
                     act_buffer.pop(0)
-                next_image = process_image(self.env.render()).squeeze(0).permute(2, 0, 1)
+                next_image = process_image(self.env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1)
                 frame_buffer.append(next_image)
 
                 # Add sample to replay buffer
@@ -1051,7 +1051,7 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
             # Unload batch
             x, u, r, x_next, done  = self.replay_buffer.sample(self.batch_size)
             x, x_next, u = x.to(self.device), x_next.to(self.device), u.to(self.device)
-            # x = x.reshape(x.shape[0], -1, *self.in_image_shape[1:])    # Stack obs history in channel dim
+            x = x.reshape(x.shape[0], -1, *self.in_image_shape[1:])    # Stack obs history in channel dim
 
             # Forward pass
             train_return = self.model(x, x_next, u)

@@ -17,8 +17,7 @@ class E2CDataset(torch.utils.data.Dataset):
     """
     def __init__(self, config):
         # Load raw dataset
-        env_name = config['train']['dataset'].split('_')[0]
-        dataset_dir = DATA_PATH / env_name
+        dataset_dir = DATA_PATH / config['env_name']
         data = torch.load(dataset_dir / f"{config['train']['dataset']}.pt")
         self.X = data["prev_images"].permute(0, 1, 4, 2, 3)  # Shape: [num_samples, past_length, C, H, W]
         self.X_next = data["next_images"].permute(0, 1, 4, 2, 3)  # Shape: [num_samples, pred_length, C, H, W]

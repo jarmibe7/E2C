@@ -60,6 +60,7 @@ def main():
 
     # Make E2CDataset object
     print(f"Loading dataset: {config['train']['dataset']}\n")
+    config['env_name'] = config['train']['dataset'].split('_')[0]
     dataset = E2CDataset(config)
     config['vae']['in_image_shape'] = dataset.in_img_shape
     num_out_channels = config['vae']['in_image_shape'][0] // config['trans']['past_length']    # Output only single frame
@@ -134,6 +135,7 @@ def main():
             # trainer.evaluate(config['run_path'])
             # trainer.evaluator.eval_traj(config['run_path'], max_frames=25)
             trainer.evaluator.visualize_planner(trainer, config['run_path'], max_steps=50, closed_loop=True)
+            trainer.evaluator.eval_state_rep(trainer, config['run_path'], max_steps=50, closed_loop=True)
             print('\n*** DONE ***')
             return
     

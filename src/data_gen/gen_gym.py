@@ -7,6 +7,7 @@ scp jarmibe7@dingo.mech.northwestern.edu:~/E2C/videos/e2c_cartpole.mp4 C:\\Users
 Author: Jared Berry, Ayush Gaggar
 """
 import os
+os.environ['MUJOCO_GL'] = 'egl'
 import re
 import numpy as np
 import torch
@@ -29,7 +30,7 @@ env_name = 'push'                                        # Gym environment name
 dataset_size = int(1e3)                                   # Number of samples: (img, next_img, control) tuple
 OUTPUT_NAME = env_name + f'_{dataset_size // 1000}k'        # Output name of dataset
 image_shape = (64, 64, 3)                                   # Downsampled image shape
-past_length = 1                                             # Number of previous observations to use for training
+past_length = 3                                             # Number of previous observations to use for training
 pred_length = 3                                             # Number of timesteps to predict in the future
 new_dt = None                                               # Desired new timestep in seconds
 # ---------------------------------
