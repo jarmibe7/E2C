@@ -347,34 +347,20 @@ class Evaluator():
 
             # Model inputs
             with torch.no_grad():
-                frames = [f.to(trainer.device) for f in frame_buffer[-past_len:]]
-                window = trainer._frames_to_tensor(frames)
-                h = torch.zeros(1, model.deterministic_size, device=trainer.device)
-                mu_q, log_var_q, z_q = trainer._encode_posterior_rssm(window, h)
-                x_recon = trainer._decode_latent(z_q)
+                # frames = [f.to(trainer.device) for f in frame_buffer[-past_len:]]
+                # window = trainer._frames_to_tensor(frames)
+                window = torch.stack(frame_buffer[-trainer.model.past_length:], dim=0).unsqueeze(0).to(trainer.device)
+                mu_q, log_var_q, z_q = trainer.model.encode_posterior(window)
+                x_recon = trainer._decode_latent(z_q[:, -1]) # recon current frame
                 x_recon_next = []
                 for act in action_seq:
                     act_batch = act.view(1, -1).to(trainer.device)
-                    h, z_q, mu_p, log_var_p = trainer.model.rssm_step(h, z_q, act_batch)
+                    if len(z_q.shape) == 2:
+                        h, z_q, mu_p, log_var_p = trainer.model.rssm_step(h, z_q.unsqueeze(1), act_batch)
+                    else:
+                        h, z_q, mu_p, log_var_p = trainer.model.rssm_step(h, z_q, act_batch)
                     # z_q = torch.normal(0.5*torch.ones_like(mu_q), 0.1*torch.ones_like(log_var_q))
                     x_recon_next.append(trainer._decode_latent(z_q).detach().cpu())
-
-            if step_idx == 0:
-                print("Reconstruction shape:", x_recon.shape, "Next Reconstruction shape:", len(x_recon_next), x_recon_next[0].shape)
-            """# Normalize to [pred_len, C, H, W]
-            if x_pred.dim() == 3:
-                x_pred_seq = x_pred.unsqueeze(0)
-            elif x_pred.dim() == 4:
-                # If shape is [B, C, H, W], treat as single-step
-                if x_pred.shape[0] == x_pred.shape[0]:
-                    x_pred_seq = x_pred
-                else:
-                    x_pred_seq = x_pred
-            elif x_pred.dim() == 5:
-                # [B, T, C, H, W]
-                x_pred_seq = x_pred.squeeze(0)
-            else:
-                raise ValueError(f"Unexpected prediction shape: {tuple(x_pred.shape)}")"""
 
             # Feed next frame based on loop type
             next_for_buffer = next_img_true if closed_loop else x_recon_next.detach().cpu()

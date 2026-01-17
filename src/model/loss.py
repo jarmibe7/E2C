@@ -268,7 +268,9 @@ class RSSMLoss(nn.Module):
         x_pred_uncertainty = self.expand_uncertainty(tr['x_pred_uncertainty'], tr['x_pred'])
         if self.image_loss == 'mse':
             recon = self.recon_mult*nn.functional.mse_loss(tr['x_next'], tr['x_pred'], reduction='mean')
+            recon += self.recon_mult*nn.functional.mse_loss(tr['x'][:, -1], tr['x_recon'], reduction='mean') # only reconstruct last in past_length
         elif self.image_loss == 'nll':
+            # TODO: Add reconstruction loss for tr['x_recon']
             recon = nn.functional.gaussian_nll_loss(
                 tr['x_next'],
                 tr['x_pred'], 
