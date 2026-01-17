@@ -20,7 +20,7 @@ from src.model.rssm import RSSME2C
 from src.dataset import E2CDataset
 from src.utils import set_seed, anim_frames, format_time
 from src.model.policy import ConvPolicy
-from src.trainer import E2CPretrainer, RSSMPretrainer, ClosedLoopPolicyTrainer, ClosedLoopUncertaintyTrainer, ClosedLoopRandomTrainer, ClosedLoopInformativeTrainer
+from src.trainer import E2CPretrainer, RSSMPretrainer, ClosedLoopPolicyTrainer, ClosedLoopRandomTrainer, ClosedLoopInformativeTrainer
 import argparse
 
 # Set random seed globally
@@ -115,10 +115,11 @@ def main():
             trainer = ClosedLoopPolicyTrainer(dataset, model, config, device, policy)
         elif policy_type == 'random':
             trainer = ClosedLoopRandomTrainer(dataset, model, config, device)
-        elif policy_type == 'uncertainty':
-            trainer = ClosedLoopUncertaintyTrainer(dataset, model, config, device)
         elif policy_type == 'informative':
             trainer = ClosedLoopInformativeTrainer(dataset, model, config, device)
+        elif policy_type == "direct_reward":
+            # TODO: Implement shallow reward-based closed loop trainer
+            pass
         else: 
             raise NotImplementedError(f'Policy type "{policy_type}" not supported!')
         config_save['env_interactions'] = trainer.num_env_inters
@@ -133,7 +134,7 @@ def main():
             print('*** EVAL ONLY ***')
             # trainer.evaluate(config['run_path'])
             # trainer.evaluator.eval_traj(config['run_path'], max_frames=25)
-            trainer.evaluator.visualize_planner(trainer, config['run_path'], max_steps=50, closed_loop=True)
+            trainer.evaluator.visualize_planner(trainer, config['run_path'], max_steps=150, closed_loop=True)
             print('\n*** DONE ***')
             return
     

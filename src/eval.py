@@ -198,12 +198,15 @@ class Evaluator():
                 # window = trainer._frames_to_tensor(frames)
                 window = torch.stack(frame_buffer[-trainer.model.past_length:], dim=0).unsqueeze(0).to(trainer.device)
                 mu_q, log_var_q, z_q = trainer.model.encode_posterior(window)
-                x_recon = trainer._decode_latent(z_q)
+                x_recon = trainer._decode_latent(z_q[:, -1]) # recon current frame
                 x_recon_next = []
                 h = torch.zeros(model.num_layers, 1, model.deterministic_size, device=trainer.device)
                 for act in action_seq:
                     act_batch = act.view(1, -1).to(trainer.device)
-                    h, z_q, mu_p, log_var_p = trainer.model.rssm_step(h, z_q, act_batch)
+                    if len(z_q.shape) == 2:
+                        h, z_q, mu_p, log_var_p = trainer.model.rssm_step(h, z_q.unsqueeze(1), act_batch)
+                    else:
+                        h, z_q, mu_p, log_var_p = trainer.model.rssm_step(h, z_q, act_batch)
                     # z_q = torch.normal(0.5*torch.ones_like(mu_q), 0.1*torch.ones_like(log_var_q))
                     x_recon_next.append(trainer._decode_latent(z_q).detach().cpu())
 
