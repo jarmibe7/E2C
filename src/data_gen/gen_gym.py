@@ -7,7 +7,8 @@ scp jarmibe7@dingo.mech.northwestern.edu:~/E2C/videos/e2c_cartpole.mp4 C:\\Users
 Author: Jared Berry, Ayush Gaggar
 """
 import os
-os.environ['MUJOCO_GL'] = 'egl'
+os.environ["DISPLAY"] = ":99"          # Ayush: If getting display errors, change this
+os.environ["MUJOCO_GL"] = "glfw"
 import re
 import numpy as np
 import torch
@@ -103,8 +104,13 @@ def process_image(image, dataset_name=env_name, image_shape=image_shape):
 def main():
     start_time = time.perf_counter()
     # Create virtual display for running on server
-    disp = Display(visible=0, size=(480, 480))
-    disp.start()
+    print("DISPLAY =", os.environ.get("DISPLAY"))
+    # disp = Display(
+    #     backend="xvfb",
+    #     visible=False,
+    #     size=(480, 480),
+    # )
+    # disp.start()
     
     # Buffers
     frame_buffer = []

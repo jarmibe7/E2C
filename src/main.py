@@ -5,6 +5,9 @@ Main training script for E2C
 
 Authors: Jared Berry, Ayush Gaggar
 """
+import os
+os.environ["DISPLAY"] = ":98"          # Ayush: If getting display errors, change this
+os.environ["MUJOCO_GL"] = "glfw"
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
@@ -35,6 +38,7 @@ RUNS_PATH = PROJECT_ROOT / "runs"
 def main():
     start_time = time.perf_counter()
     print('*** STARTING ***\n')
+    print("DISPLAY =", os.environ.get("DISPLAY"))
     # Load config, make run path, and choose torch device
     # ---------- CONFIG HERE ----------
     # Parse command-line arguments

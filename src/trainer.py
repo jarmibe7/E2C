@@ -13,7 +13,7 @@ import gymnasium_robotics
 gym.register_envs(gymnasium_robotics)
 from pathlib import Path
 from tqdm import tqdm
-from pyvirtualdisplay import Display
+# from pyvirtualdisplay import Display
 import time
 
 from src.model.loss import E2CLoss, UncertaintyE2CLoss, RSSMLoss
@@ -51,6 +51,7 @@ class BaseTrainer():
         self.out_image_shape = config['vae']['out_image_shape']
         self.device = device
         self.config = config
+        self.dataset_name = config['env_name']
         if config['closed_loop']['closed_loop']:
             # Compute training stats
             self.num_updates = self.num_epochs * config['closed_loop']['num_batches']
@@ -315,8 +316,8 @@ class ClosedLoopRandomTrainer(BaseTrainer):
             )
 
         # Initialize environment
-        disp = Display(visible=0, size=(480, 480))
-        disp.start()
+        # disp = Display(visible=0, size=(480, 480))
+        # disp.start()
         env_name = config['train']['dataset'].split('_')[0]
         self.env = gym.make(name_to_env[env_name], render_mode="rgb_array")
         self.env_continuous = (env_to_aspace[env_name] == 'continuous')
@@ -498,8 +499,8 @@ class ClosedLoopPolicyTrainer(BaseTrainer):
         assert self.num_rollout_steps > self.batch_size, 'Steps per rollout must be > batch_size!'
 
         # Initialize environment
-        disp = Display(visible=0, size=(480, 480))
-        disp.start()
+        # disp = Display(visible=0, size=(480, 480))
+        # disp.start()
         env_name = config['train']['dataset'].split('_')[0]
         self.env = gym.make(name_to_env[env_name], render_mode="rgb_array")
         self.env_continuous = (env_to_aspace[env_name] == 'continuous')
@@ -692,8 +693,8 @@ class ClosedLoopUncertaintyTrainer(BaseTrainer):
         assert self.num_rollout_steps > self.batch_size, 'Steps per rollout must be > batch_size!'
 
         # Initialize environment
-        disp = Display(visible=0, size=(480, 480))
-        disp.start()
+        # disp = Display(visible=0, size=(480, 480))
+        # disp.start()
         env_name = config['train']['dataset'].split('_')[0]
         self.env = gym.make(name_to_env[env_name], render_mode="rgb_array")
         self.env_continuous = (env_to_aspace[env_name] == 'continuous')
@@ -1054,6 +1055,7 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
             x = x.reshape(x.shape[0], -1, *self.in_image_shape[1:])    # Stack obs history in channel dim
 
             # Forward pass
+            breakpoint()
             train_return = self.model(x, x_next, u)
             train_return['x'] = x
             train_return['x_next'] = x_next
