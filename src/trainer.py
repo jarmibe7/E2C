@@ -1052,10 +1052,9 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
             # Unload batch
             x, u, r, x_next, done  = self.replay_buffer.sample(self.batch_size)
             x, x_next, u = x.to(self.device), x_next.to(self.device), u.to(self.device)
-            x = x.reshape(x.shape[0], -1, *self.in_image_shape[1:])    # Stack obs history in channel dim
+            # x = x.reshape(x.shape[0], -1, *self.in_image_shape[1:])    # Stack obs history in channel dim
 
             # Forward pass
-            breakpoint()
             train_return = self.model(x, x_next, u)
             train_return['x'] = x
             train_return['x_next'] = x_next

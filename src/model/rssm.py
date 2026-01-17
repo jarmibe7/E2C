@@ -125,7 +125,6 @@ class RSSME2C(nn.Module):
 
     def forward(self, x, x_next, u):
         batch_size = x.size(0)
-        breakpoint()
         # Initialize current deterministic state h to zeros
         h = torch.zeros(self.num_layers, batch_size, self.deterministic_size, device=self.device)
 
