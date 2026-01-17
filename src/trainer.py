@@ -754,7 +754,7 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
                 # this is a function-alized version of the RSSM rollout from the RSSME2C class
                 # useful for debugging
                 # this isn't super efficient since we re-encode at each step, but it's fine for now
-                mu_q, log_var_q, z_q = self._encode_posterior_rssm(window)
+                mu_q, log_var_q, z_q = self.model.encode_posterior(window)
                 for act in action_seq:
                     act_batch = act.view(1, -1).to(self.device)
                     if len(z_q.shape) == 2:
