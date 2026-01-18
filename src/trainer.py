@@ -104,6 +104,7 @@ class BaseTrainer():
                 device=config['train']['device'],
                 dataset_name=config['train']['dataset']
             )
+        self.curr_epoch = 0
     
     def collect_rollouts(self, *args, **kwargs):
         pass
@@ -470,11 +471,11 @@ class ClosedLoopRandomTrainer(BaseTrainer):
     def learn(self):
         model_loss = 0.0
         pbar = tqdm(range(self.num_epochs), desc="Training")
-        if self.num_rollout_steps < self.num_batches:
-            print("Initializing buffer with random rollouts...")
-            for _ in range(max(self.num_batches // self.num_rollout_steps, self.config['closed_loop']['buffer_capacity'] // self.num_rollout_steps)):
-                self.collect_rollouts(-1)
+        print("Initializing buffer with random rollouts...")
+        for _ in range(max(self.num_batches // self.num_rollout_steps, self.config['closed_loop']['buffer_capacity'] // self.num_rollout_steps)):
+            self.collect_rollouts(-1)
         for epoch in range(self.num_epochs):
+            self.curr_epoch = epoch
             model_loss = self.train(epoch)
 
             pbar.set_postfix({
@@ -717,6 +718,8 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
         self.sigma_init = self.closed_cfg.get('sigma_init', 0.5)    
         self.sigma_min = self.closed_cfg.get('sigma_min', 0.05)     # Min value for clamping variance
         self.sigma = torch.ones_like(self.init_control, device=self.device) * self.sigma_init
+        # self.sigma[:, -2] = self.sigma_init * 0.2   # Less variance on z-axis actions
+        # self.sigma[:, -1] = self.sigma_init * 0.1   # Less variance on gripper actions
 
     @staticmethod
     def _kl_diag_gaussian(mu_q, log_var_q, mu_p, log_var_p):
@@ -774,7 +777,7 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
                     # total_kl += self._kl_diag_gaussian(mu_p, log_var_p, mu_q, log_var_q).mean().item()
 
                     # current vs t_prev
-                    total_kl -= self._kl_diag_gaussian(mu_p, log_var_p, mu_q, log_var_q).mean().item()
+                    total_kl += self._kl_diag_gaussian(mu_p, log_var_p, mu_q, log_var_q).mean().item()
                     mu_q = mu_p
                     log_var_q = log_var_p
             else:
@@ -789,7 +792,7 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
                     mu_q, log_var_q, z_q = self._encode_posterior_e2c(window)
                     total_kl += self._kl_diag_gaussian(mu_p, log_var_p, mu_q, log_var_q).mean().item()
 
-            return total_kl
+            return total_kl / self.plan_horizon    # Average info gain per step
 
     
     def _sample_cem(self, frame_buffer):
@@ -838,14 +841,15 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
         # self.init_control[-1] = last_val
         # self.sigma[:-1] = sigma[1:].clone()
         # self.sigma[-1] = sigma[-1].clone()
-        return mu
+        return mu, costs
     
     def _select_information_action(self, frame_buffer):
         # if len(frame_buffer) < self.past_length:
         #     print("SOMETHING IS WRONG: not enough frames in buffer! Defaulting to random action.")
         #     a_np = self.env.action_space.sample()
         #     return torch.as_tensor(a_np, device=self.device, dtype=torch.float32).flatten()
-        return self._sample_cem(frame_buffer)[0].clone()
+        mu, costs = self._sample_cem(frame_buffer)
+        return mu[0].clone(), costs[0].clone()
 
     def collect_rollouts(self, epoch):
         """
@@ -868,7 +872,7 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
                 if epoch == self.epochs_warmup and len(frame_buffer) == self.past_length:
                     print(f'Switching to informative action selection using CEM over {self.num_action_samples} samples and {self.cem_iters} iterations. \n')
                 tic = time.time()
-                act = self._select_information_action(frame_buffer)
+                act, cost = self._select_information_action(frame_buffer)
                 toc = time.time()
                 if idx == 0 and epoch == self.epochs_warmup:
                     print(f"CEM planning will take ~{((toc - tic)*self.num_rollout_steps/60):.3f} minutes.")
