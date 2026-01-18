@@ -743,35 +743,23 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
             seqs.append(torch.stack(acts, dim=0))
         return seqs
 
-    def _rollout_info_gain(self, frame_buffer, action_seq):
+    def _rollout_info_gain(self, window, action_seq, t0_dist=None):
         with torch.no_grad():
-            # frames = [f.to(self.device) for f in frame_buffer[-self.past_length:]]
-            # window = self._frames_to_tensor(frame_buffer)
-            window = torch.stack(frame_buffer[-self.past_length:], dim=0).unsqueeze(0).to(self.device)
             total_kl = 0.0
 
             if self.uses_rssm:
                 h = torch.zeros(self.model.num_layers, 1, self.model.deterministic_size, device=self.device)
-                # TODO:
-                # this is a function-alized version of the RSSM rollout from the RSSME2C class
-                # useful for debugging
-                mu_q, log_var_q, z_q = self.model.encode_posterior(window)
+                # TODO: can re-use t0 encoding during MPC instead of re-encoding for every action_seq
+                if t0_dist is None:
+                    mu_q, log_var_q, z_q = self.model.encode_posterior(window)
+                else:
+                    mu_q, log_var_q, z_q = t0_dist
                 for act in action_seq:
                     act_batch = act.view(1, -1).to(self.device)
                     if len(z_q.shape) == 2:
                         h, z_q, mu_p, log_var_p = self.model.rssm_step(h, z_q.unsqueeze(1), act_batch)
                     else:
                         h, z_q, mu_p, log_var_p = self.model.rssm_step(h, z_q, act_batch)
-                    """ old way
-                    act_batch = act.view(1, -1).to(self.device)
-                    h, z_prior, mu_p, log_var_p = self.model.rssm_step(h, z_q, act_batch)
-                    x_pred = self._decode_latent(z_prior)
-                    frames = self._update_window(frames, x_pred)
-                    window = self._frames_to_tensor(frames)
-                    mu_q, log_var_q, z_q = self._encode_posterior_rssm(window, h) 
-                    """
-                    # print("current vs original:", self._kl_diag_gaussian(mu_p, log_var_p, mu_q, log_var_q), self._kl_diag_gaussian(mu_p, log_var_p, mu_q, log_var_q).shape)
-                    # print("original vs current:", self._kl_diag_gaussian(mu_q, log_var_q, mu_p, log_var_p), self._kl_diag_gaussian(mu_q, log_var_q, mu_p, log_var_p).shape)
                     
                     # current vs t0
                     # total_kl += self._kl_diag_gaussian(mu_p, log_var_p, mu_q, log_var_q).mean().item()
@@ -800,10 +788,11 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
         # TODO: Ayush: we can actually CEM plan over a longer time horizon than pred_length, if we wanted
         mu = self.init_control  # (plan_horizon, action_size)
         sigma = self.sigma      # (plan_horizon, action_size)
+        act_low = torch.as_tensor(self.env.action_space.low, device=self.device, dtype=torch.float32)
+        act_high = torch.as_tensor(self.env.action_space.high, device=self.device, dtype=torch.float32)
         for _ in range(self.cem_iters):
             costs = torch.zeros(self.num_action_samples, device=self.device)
             action_samples = torch.zeros((self.num_action_samples, self.plan_horizon, mu.shape[1]), device=self.device)
-            trajs = []
 
             # Sample action sequences from current distribution
             for k in range(self.num_action_samples):
@@ -812,13 +801,17 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
                 # Clip to action space bounds
                 action_samples[k] = torch.clamp(
                     a_t, 
-                    torch.as_tensor(self.env.action_space.low, device=self.device, dtype=torch.float32), 
-                    torch.as_tensor(self.env.action_space.high, device=self.device, dtype=torch.float32)
+                    act_low, 
+                    act_high
                 )
             
             # Evaluate information gain for each sequence
+            # frames = [f.to(self.device) for f in frame_buffer[-self.past_length:]]
+            # window = self._frames_to_tensor(frame_buffer)
+            window = torch.stack(frame_buffer[-self.past_length:], dim=0).unsqueeze(0).to(self.device)
+            mu_q, log_var_q, z_q = self.model.encode_posterior(window)
             for k, action_seq in enumerate(action_samples):
-                costs[k] = self._rollout_info_gain(frame_buffer, action_seq)
+                costs[k] = self._rollout_info_gain(window, action_seq, t0_dist=(mu_q, log_var_q, z_q))
             
             # Select elite sequences
             num_elites = max(1, int(self.elite_frac * self.num_action_samples))
@@ -830,7 +823,7 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
             new_mu = torch.stack([torch.mean(torch.stack([seq[t] for seq in elite_seqs], dim=0), dim=0) for t in range(self.plan_horizon)], dim=0)
             new_sigma = torch.stack([torch.std(torch.stack([seq[t] for seq in elite_seqs], dim=0), dim=0) for t in range(self.plan_horizon)], dim=0)
             mu = self.alpha * mu + (1 - self.alpha) * new_mu
-            sigma = self.alpha * sigma + (1 - self.alpha) * new_sigma
+            sigma = torch.nan_to_num(self.alpha * sigma + (1 - self.alpha) * new_sigma, nan=self.sigma_min)
             sigma = torch.clamp(sigma, min=self.sigma_min)
             
         # Prepare final action sequences to return
@@ -844,10 +837,6 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
         return mu, costs
     
     def _select_information_action(self, frame_buffer):
-        # if len(frame_buffer) < self.past_length:
-        #     print("SOMETHING IS WRONG: not enough frames in buffer! Defaulting to random action.")
-        #     a_np = self.env.action_space.sample()
-        #     return torch.as_tensor(a_np, device=self.device, dtype=torch.float32).flatten()
         mu, costs = self._sample_cem(frame_buffer)
         return mu[0].clone(), costs[0].clone()
 
