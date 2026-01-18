@@ -165,6 +165,8 @@ class Evaluator():
         true_frames = []    # ground-truth frames for visualization
         recon_frames = []   # model reconstructions
         pred_sequences = [] # list of predicted sequences per step
+        plan_obj_vals = []  # objective function values per step
+        env_rew = []        # env rewards [blind during training]
 
         # Prime buffer with the first observation
         first_img = process_image(env.render()).squeeze(0).permute(2, 0, 1)
@@ -179,17 +181,21 @@ class Evaluator():
             # Action: reuse trainer.collect_rollouts logic (random sample)
             if closed_loop_policy == 'informative':
                 trainer._init_cem_mu_sig()
-                action_seq = trainer._sample_cem(frame_buffer[-past_len:]) # pred_len, act_size
+                mu, costs = trainer._sample_cem(frame_buffer[-past_len:]) # pred_len, act_size
+                action_seq = mu.clone()
+                plan_obj_vals.append(costs[0].clone().cpu().item())
             else:
                 # repeat pred len number of times for action horizon
                 act = [env.action_space.sample() for _ in range(pred_len)]
                 action_seq = torch.from_numpy(np.array(act)).to(device)
+                plan_obj_vals.append(0.0)   # no cost info for random policy
             env_act = action_seq.cpu().detach().numpy()[0]
             # if not getattr(trainer, 'env_continuous', True):
             #     env_act = int(env_act.item())
 
             # Step env
-            _, _, done, _, _ = env.step(env_act)
+            _, rew, done, _, _ = env.step(env_act)
+            env_rew.append(rew)
             next_img_true = process_image(env.render()).squeeze(0).permute(2, 0, 1)
 
             # Model inputs
@@ -222,7 +228,7 @@ class Evaluator():
             recon_frames.append(x_recon.detach().cpu())
             pred_sequences.append(x_recon_next)
 
-            if done:
+            if (step_idx + 1) % trainer.config['closed_loop']['num_rollout_steps'] == 0:
                 env.reset()
                 done = False
                 frame_buffer = [process_image(env.render()).squeeze(0).permute(2, 0, 1) for _ in range(past_len)]
@@ -231,8 +237,8 @@ class Evaluator():
         cols = pred_len + 1
         fig, ax = plt.subplots(2, cols, figsize=(3 * cols, 10))
         ax = np.atleast_2d(ax)
-        ax[0, 0].set_title("Pred Current")
-        ax[1, 0].set_title("True Current")
+        ax[0, 0].set_title(f"Pred t=0; {plan_obj_vals[0]:.2f}")
+        ax[1, 0].set_title(f"True t=0; {env_rew[0]:.2f}")
         for j in range(1, cols):
             ax[0, j].set_title(f"Pred t={j}")
             ax[1, j].set_title(f"True t={j}")
@@ -247,11 +253,15 @@ class Evaluator():
             a.axis('off')
 
         def update(frame_idx):
+            # TODO: Plot KLD value
+            # TODO: somehow show "reward"/number of times interacted with object?
             true_curr = true_frames[frame_idx]
             true_next = true_frames[frame_idx + 1] if frame_idx + 1 < len(true_frames) else true_curr
             recon = recon_frames[frame_idx]
 
             # Pred current recon
+            ax[0, 0].set_title(f"Pred t=0; {plan_obj_vals[frame_idx]:.2f}")
+            ax[1, 0].set_title(f"True t=0; {env_rew[frame_idx]:.2f}")
             ims[0].set_data(recon[:3].permute(1, 2, 0).detach().cpu().numpy())
             ims[1].set_data(true_curr[:3].permute(1, 2, 0).detach().cpu().numpy())
 
@@ -265,7 +275,7 @@ class Evaluator():
 
         ani = FuncAnimation(fig, update, frames=len(true_frames), interval=5.)
         writer = FFMpegWriter(fps=2)
-        vid_name = 'planner_vis_CL_' + closed_loop_policy + '.mp4' if closed_loop else 'planner_vis_OL_' + closed_loop_policy + '.mp4'
+        vid_name = 'planner_CL_' + closed_loop_policy + f'_{trainer.curr_epoch}.mp4' if closed_loop else 'planner_vis_OL_' + closed_loop_policy + f'_{trainer.curr_epoch}.mp4'
         try:
             filepath = run_path / vid_name
             print(f'Saved planner visualization to {filepath}')
