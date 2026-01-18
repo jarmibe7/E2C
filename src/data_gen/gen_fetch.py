@@ -53,7 +53,7 @@ DATA_PATH = PROJECT_ROOT / "data"
 
 seed = 42
 set_seed(seed)
-name_to_env = {'reacher': 'Reacher-v5', 'cartpole': 'CartPole-v1', 'push': 'FetchPush-v4'}
+name_to_env = {'reacher': 'Reacher-v5', 'cartpole': 'CartPole-v1', 'push': 'FetchPushDense-v4'}
 env_to_aspace = {'reacher': 'continuous', 'cartpole': 'discrete', 'push': 'continuous'}
 
 def update_dataset_metadata(dataset_dir, dataset_name, params):
