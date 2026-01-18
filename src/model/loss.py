@@ -208,6 +208,7 @@ class RSSMLoss(nn.Module):
         self.recon_mult = loss_params['recon_mult']
         self.beta = loss_params['beta']
         self.lam = loss_params['lambda']
+        self.free_nats = loss_params.get('free_nats', 0.0)
         self.anneal_mode = loss_params['kld_anneal_mode']
         self.image_loss = loss_params.get('image_loss', 'nll')
 
@@ -285,7 +286,9 @@ class RSSMLoss(nn.Module):
             tr["log_var_posts"],
             tr["mu_priors"],
             tr["log_var_priors"]
-        ).mean()
+        )
+        kld = torch.clamp(kld, min=self.free_nats)
+        kld = kld.mean()
         kld = self.kld_anneal(epoch)*kld
 
         loss = recon + kld
