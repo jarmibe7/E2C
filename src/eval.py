@@ -137,6 +137,198 @@ class Evaluator():
         self.eval_traj(run_path, max_frames=vid_max_frames)
         # self.eval_latent(run_path)
 
+    def eval_state_rep(self, trainer, run_path, max_steps=25, closed_loop=True):
+        """
+        Use a pretrained state representation model to evaluate prediction errors
+
+        Args:
+            trainer: Trainer instance (must expose env, model, device, past_length, pred_length/config).
+            run_path: Path to save the resulting video.
+            max_steps: Number of environment steps to visualize.
+            closed_loop: If True, feed ground-truth observations back into the model window.
+                         If False, feed the model's predicted next frame (open-loop rollout).
+        """
+        # Load state rep model
+        sr_run_path = PROJECT_ROOT / 'runs' / self.dataset_name / 'state_rep' / 'trained'
+        device = trainer.device
+        with open(sr_run_path / f'config.yaml', "r") as f:
+            sr_config = yaml.safe_load(f)
+        sr_model = StateRepresentationModel(
+            state_size=sr_config['train']['state_size'],
+            conv_params=sr_config['conv'],
+            device=device
+        )
+        sr_model_path = sr_run_path / 'model.pt'
+        sr_model.load_state_dict(torch.load(sr_model_path))
+        sr_model.to(device)
+
+        model = trainer.model
+        env = trainer.env
+        past_len = model.past_length if hasattr(model, 'past_length') else 3
+        pred_len = model.pred_length if hasattr(model, 'pred_length') else 3
+        try:
+            closed_loop_policy = trainer.config['closed_loop']['policy']
+        except:
+            print('No closed loop policy found in trainer config, defaulting to random')
+            closed_loop_policy = 'random'
+
+        model.eval()
+        sr_model.eval()
+        obs, _ = env.reset()
+
+        frame_buffer = []   # frames used as model input window
+        immediate_state_errors = []         # Prediction error at timestep t+1
+        cumulative_state_errors = []        # cumulative pred error for entire pred_length
+
+        # Prime buffer with the first observation
+        first_img = process_image(env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1)
+        for _ in range(past_len):
+            frame_buffer.append(first_img)
+
+        step_idx = 0
+        for step_idx in tqdm(range(max_steps), desc="Eval with state representation model"):
+            # Current frame (ground truth)
+            curr_img = process_image(env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1)
+
+            # Action: reuse trainer.collect_rollouts logic (random sample)
+            if closed_loop_policy == 'informative':
+                trainer._init_cem_mu_sig()
+                action_seq = trainer._sample_cem(frame_buffer[-past_len:]) # pred_len, act_size
+            else:
+                # repeat pred len number of times for action horizon
+                act = [env.action_space.sample() for _ in range(pred_len)]
+                action_seq = torch.from_numpy(np.array(act)).to(device)
+            env_act = action_seq.cpu().detach().numpy()[0]
+
+            # Step env
+            obs, _, terminated, truncated, _ = env.step(env_act)
+            next_img_true = process_image(env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1)
+            state_true = get_env_state(env, obs, self.dataset_name)
+
+            # Model forward pass
+            with torch.no_grad():
+                # frames = [f.to(trainer.device) for f in frame_buffer[-past_len:]]
+                # window = trainer._frames_to_tensor(frames)
+                window = torch.stack(frame_buffer[-trainer.model.past_length:], dim=0).unsqueeze(0).to(trainer.device)
+                mu_q, log_var_q, z_q = trainer.model.encode_posterior(window)
+                x_recon = trainer._decode_latent(z_q[:, -1])
+                x_recon_next = []
+                h = torch.zeros(model.num_layers, 1, model.deterministic_size, device=trainer.device)
+                for act in action_seq:
+                    act_batch = act.view(1, -1).to(trainer.device)
+                    if len(z_q.shape) == 2:
+                        h, z_q, mu_p, log_var_p = trainer.model.rssm_step(h, z_q.unsqueeze(1), act_batch)
+                    else:
+                        h, z_q, mu_p, log_var_p = trainer.model.rssm_step(h, z_q, act_batch)
+                    # z_q = torch.normal(0.5*torch.ones_like(mu_q), 0.1*torch.ones_like(log_var_q))
+                    x_recon_next.append(trainer._decode_latent(z_q).detach().cpu())
+
+            # State rep eval for error per dimension of state vec
+            with torch.no_grad():
+                # Immediate error
+                s_true_t1 = torch.as_tensor(state_true)
+                s_pred_t1 = sr_model(x_recon_next[0].unsqueeze(0).to(device))['state_pred'].squeeze(0).detach().cpu()
+                immediate_err = (s_pred_t1 - s_true_t1).abs().squeeze(0).numpy()
+                immediate_state_errors.append(immediate_err)
+
+                # Cumulative error
+                np.zeros_like(immediate_err)
+
+                # # Save env state for temporary rollout
+                # cum_err = np.zeros_like(immediate_err)
+
+                # mj_model = env.unwrapped.model
+                # data  = env.unwrapped.data
+                # spec = (
+                #     mujoco.mjtState.mjSTATE_INTEGRATION |
+                #     mujoco.mjtState.mjSTATE_PHYSICS |
+                #     mujoco.mjtState.mjSTATE_CTRL
+                # )
+
+                # state_dim = mujoco.mj_stateSize(mj_model, spec)
+                # mj_state = np.zeros(state_dim, dtype=np.float64)
+                # mujoco.mj_getState(mj_model, data, mj_state, spec)
+                # obs_k = obs
+                # for k in range(pred_len):
+                #     # Rollout predicted actions to get ground truth next states
+                #     if k > 0:
+                #         obs_k, _, _, _, _ = env.step(action_seq[k].cpu().numpy())
+
+                #     s_true_k = torch.as_tensor(get_env_state(env, obs_k, self.dataset_name))
+                #     s_pred_k = sr_model(x_recon_next[k].unsqueeze(0).to(device))['state_pred'].squeeze(0).detach().cpu()
+                #     cum_err += (s_pred_k - s_true_k).abs().squeeze(0).numpy()
+
+                # cum_err = (cum_err / pred_len)
+                # cumulative_state_errors.append(cum_err)
+
+                # # Restore env state
+                # mujoco.mj_setState(mj_model, data, mj_state, spec)
+                # mujoco.mj_forward(mj_model, data)
+
+            if step_idx == 0:
+                print("Reconstruction shape:", x_recon.shape, "Next Reconstruction shape:", len(x_recon_next), x_recon_next[0].shape)
+
+            # Feed next frame based on loop type
+            next_for_buffer = next_img_true if closed_loop else x_recon_next.detach().cpu()
+
+            # Update buffers/logs
+            frame_buffer.append(next_for_buffer)
+
+            if terminated or truncated:
+                env.reset()
+                done = False
+                frame_buffer = [process_image(env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1) for _ in range(past_len)]
+
+
+        ##### DEBUG #####
+        num_debug_frames = 5
+        debug_frames = x_recon_next[:num_debug_frames]  # list of [C,H,W] tensors
+
+        fig, axes = plt.subplots(1, len(debug_frames), figsize=(15, 3), dpi=150)
+        for i, frame in enumerate(debug_frames):
+            img = frame.permute(1, 2, 0).cpu().numpy()  # [C,H,W] -> [H,W,C]
+            img = (img - img.min()) / (img.max() - img.min() + 1e-8)  # normalize to [0,1]
+            axes[i].imshow(img)
+            axes[i].axis('off')
+            axes[i].set_title(f"Step {i}")
+
+        plt.tight_layout()
+        fig.savefig("debug.png")
+        ##### DEBUG #####
+
+
+        # Convert to arrays for boxplot
+        immediate_arr = np.stack(immediate_state_errors, axis=0)   # [num_steps, state_dim]
+        # cumulative_arr = np.stack(cumulative_state_errors, axis=0) # [num_steps, state_dim]
+        state_dim = immediate_arr.shape[1]
+
+        # Boxplot per state dimension
+        fig, axes = plt.subplots(1, 2, figsize=(12, 5), dpi=150, tight_layout=True)
+
+        axes[0].boxplot([immediate_arr[:, i] for i in range(state_dim)], patch_artist=True)
+        axes[0].set_xticklabels([f"Dim {i}" for i in range(state_dim)], rotation=45)
+        axes[0].set_title("Immediate (1-step) Prediction Error per Dimension")
+        axes[0].set_ylabel("Absolute Error")
+        axes[0].grid(True)
+
+        # axes[1].boxplot([cumulative_arr[:, i] for i in range(state_dim)], patch_artist=True)
+        # axes[1].set_xticklabels([f"Dim {i}" for i in range(state_dim)], rotation=45)
+        # axes[1].set_title(f"Cumulative ({pred_len}-step) Prediction Error per Dimension")
+        # axes[1].set_ylabel("Absolute Error")
+        # axes[1].grid(True)
+
+        fig_name = f'sr_error_fig.png'
+        try:
+            filepath = run_path / fig_name
+            print(f'\nSaved state rep error figure to {filepath}')
+            fig.savefig(filepath)
+        except Exception as e:
+            print(e)
+            print('\nException occured, saved state rep error figure to current directory')
+            fig.savefig(fig_name)
+        plt.close(fig)
+        return
+
     def visualize_planner(self, trainer, run_path, max_steps=25, closed_loop=True):
         """
         Visualize trajectories using the trainer's planner/rollout logic.
