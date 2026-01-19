@@ -10,9 +10,12 @@ import torch
 import numpy as np
 import itertools
 from tqdm import tqdm
+from pathlib import Path
+import yaml
 from torchmetrics import PeakSignalNoiseRatio as psnr
 from torchmetrics import StructuralSimilarityIndexMeasure as ssim
 import lpips
+import mujoco
 
 from src.model.e2c import ConvE2C
 from src.model.rssm import RSSME2C
@@ -21,6 +24,8 @@ from src.utils import set_seed, anim_frames, shoulder_mass, excess_kurtosis, cen
 from src.data_gen.gen_fetch import process_image
 from src.data_gen.gen_state_rep import get_env_state
 from src.model.state_rep import StateRepresentationModel
+
+PROJECT_ROOT = Path(__file__).parent.parent
 
 class Plotter():
     """
@@ -151,7 +156,7 @@ class Evaluator():
                          If False, feed the model's predicted next frame (open-loop rollout).
         """
         # Load state rep model
-        sr_run_path = PROJECT_ROOT / 'runs' / self.dataset_name / 'state_rep' / 'trained'
+        sr_run_path = PROJECT_ROOT / 'runs' / self.dataset_name.split('_')[0] / 'state_rep' / 'trained'
         device = trainer.device
         with open(sr_run_path / f'config.yaml', "r") as f:
             sr_config = yaml.safe_load(f)
@@ -195,7 +200,7 @@ class Evaluator():
             # Action: reuse trainer.collect_rollouts logic (random sample)
             if closed_loop_policy == 'informative':
                 trainer._init_cem_mu_sig()
-                action_seq = trainer._sample_cem(frame_buffer[-past_len:]) # pred_len, act_size
+                action_seq = trainer._sample_cem(frame_buffer[-past_len:])[0] # pred_len, act_size
             else:
                 # repeat pred len number of times for action horizon
                 act = [env.action_space.sample() for _ in range(pred_len)]
@@ -237,35 +242,35 @@ class Evaluator():
                 np.zeros_like(immediate_err)
 
                 # # Save env state for temporary rollout
-                # cum_err = np.zeros_like(immediate_err)
+                cum_err = np.zeros_like(immediate_err)
 
-                # mj_model = env.unwrapped.model
-                # data  = env.unwrapped.data
-                # spec = (
-                #     mujoco.mjtState.mjSTATE_INTEGRATION |
-                #     mujoco.mjtState.mjSTATE_PHYSICS |
-                #     mujoco.mjtState.mjSTATE_CTRL
-                # )
+                mj_model = env.unwrapped.model
+                data  = env.unwrapped.data
+                spec = (
+                    mujoco.mjtState.mjSTATE_INTEGRATION |
+                    mujoco.mjtState.mjSTATE_PHYSICS |
+                    mujoco.mjtState.mjSTATE_CTRL
+                )
 
-                # state_dim = mujoco.mj_stateSize(mj_model, spec)
-                # mj_state = np.zeros(state_dim, dtype=np.float64)
-                # mujoco.mj_getState(mj_model, data, mj_state, spec)
-                # obs_k = obs
-                # for k in range(pred_len):
-                #     # Rollout predicted actions to get ground truth next states
-                #     if k > 0:
-                #         obs_k, _, _, _, _ = env.step(action_seq[k].cpu().numpy())
+                state_dim = mujoco.mj_stateSize(mj_model, spec)
+                mj_state = np.zeros(state_dim, dtype=np.float64)
+                mujoco.mj_getState(mj_model, data, mj_state, spec)
+                obs_k = obs
+                for k in range(pred_len):
+                    # Rollout predicted actions to get ground truth next states
+                    if k > 0:
+                        obs_k, _, _, _, _ = env.step(action_seq[k].cpu().numpy())
 
-                #     s_true_k = torch.as_tensor(get_env_state(env, obs_k, self.dataset_name))
-                #     s_pred_k = sr_model(x_recon_next[k].unsqueeze(0).to(device))['state_pred'].squeeze(0).detach().cpu()
-                #     cum_err += (s_pred_k - s_true_k).abs().squeeze(0).numpy()
+                    s_true_k = torch.as_tensor(get_env_state(env, obs_k, self.dataset_name))
+                    s_pred_k = sr_model(x_recon_next[k].unsqueeze(0).to(device))['state_pred'].squeeze(0).detach().cpu()
+                    cum_err += (s_pred_k - s_true_k).abs().squeeze(0).numpy()
 
-                # cum_err = (cum_err / pred_len)
-                # cumulative_state_errors.append(cum_err)
+                cum_err = (cum_err / pred_len)
+                cumulative_state_errors.append(cum_err)
 
-                # # Restore env state
-                # mujoco.mj_setState(mj_model, data, mj_state, spec)
-                # mujoco.mj_forward(mj_model, data)
+                # Restore env state
+                mujoco.mj_setState(mj_model, data, mj_state, spec)
+                mujoco.mj_forward(mj_model, data)
 
             if step_idx == 0:
                 print("Reconstruction shape:", x_recon.shape, "Next Reconstruction shape:", len(x_recon_next), x_recon_next[0].shape)
@@ -301,7 +306,7 @@ class Evaluator():
 
         # Convert to arrays for boxplot
         immediate_arr = np.stack(immediate_state_errors, axis=0)   # [num_steps, state_dim]
-        # cumulative_arr = np.stack(cumulative_state_errors, axis=0) # [num_steps, state_dim]
+        cumulative_arr = np.stack(cumulative_state_errors, axis=0) # [num_steps, state_dim]
         state_dim = immediate_arr.shape[1]
 
         # Boxplot per state dimension
@@ -313,11 +318,11 @@ class Evaluator():
         axes[0].set_ylabel("Absolute Error")
         axes[0].grid(True)
 
-        # axes[1].boxplot([cumulative_arr[:, i] for i in range(state_dim)], patch_artist=True)
-        # axes[1].set_xticklabels([f"Dim {i}" for i in range(state_dim)], rotation=45)
-        # axes[1].set_title(f"Cumulative ({pred_len}-step) Prediction Error per Dimension")
-        # axes[1].set_ylabel("Absolute Error")
-        # axes[1].grid(True)
+        axes[1].boxplot([cumulative_arr[:, i] for i in range(state_dim)], patch_artist=True)
+        axes[1].set_xticklabels([f"Dim {i}" for i in range(state_dim)], rotation=45)
+        axes[1].set_title(f"Cumulative ({pred_len}-step) Prediction Error per Dimension")
+        axes[1].set_ylabel("Absolute Error")
+        axes[1].grid(True)
 
         fig_name = f'sr_error_fig.png'
         try:

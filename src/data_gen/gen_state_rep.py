@@ -21,7 +21,7 @@ import gymnasium_robotics
 gym.register_envs(gymnasium_robotics)
 
 from src.utils import set_seed, format_time
-from src.data_gen.gen_gym import process_image, name_to_env
+from src.data_gen.gen_fetch import process_image, name_to_env
 
 # ------------------------
 # Configuration
@@ -105,6 +105,7 @@ def main():
         # Render + store
         img = process_image(env.render(), dataset_name=ENV_NAME, image_shape=IMAGE_SHAPE)
         state = get_env_state(env, obs, ENV_NAME)
+        breakpoint()
 
         images[idx] = img
         states[idx] = state.view(-1)
