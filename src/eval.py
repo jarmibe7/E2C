@@ -208,7 +208,7 @@ class Evaluator():
             env_act = action_seq.cpu().detach().numpy()[0]
 
             # Step env
-            obs, _, done, _, _ = env.step(env_act)
+            obs, _, terminated, truncated, _ = env.step(env_act)
             next_img_true = process_image(env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1)
             state_true = get_env_state(env, obs, self.dataset_name)
 
@@ -241,36 +241,36 @@ class Evaluator():
                 # Cumulative error
                 np.zeros_like(immediate_err)
 
-                # Save env state for temporary rollout
-                cum_err = np.zeros_like(immediate_err)
+                # # Save env state for temporary rollout
+                # cum_err = np.zeros_like(immediate_err)
 
-                mj_model = env.unwrapped.model
-                data  = env.unwrapped.data
-                spec = (
-                    mujoco.mjtState.mjSTATE_INTEGRATION |
-                    mujoco.mjtState.mjSTATE_PHYSICS |
-                    mujoco.mjtState.mjSTATE_CTRL
-                )
+                # mj_model = env.unwrapped.model
+                # data  = env.unwrapped.data
+                # spec = (
+                #     mujoco.mjtState.mjSTATE_INTEGRATION |
+                #     mujoco.mjtState.mjSTATE_PHYSICS |
+                #     mujoco.mjtState.mjSTATE_CTRL
+                # )
 
-                state_dim = mujoco.mj_stateSize(mj_model, spec)
-                mj_state = np.zeros(state_dim, dtype=np.float64)
-                mujoco.mj_getState(mj_model, data, mj_state, spec)
-                obs_k = obs
-                for k in range(pred_len):
-                    # Rollout predicted actions to get ground truth next states
-                    if k > 0:
-                        obs_k, _, _, _, _ = env.step(action_seq[k].cpu().numpy())
+                # state_dim = mujoco.mj_stateSize(mj_model, spec)
+                # mj_state = np.zeros(state_dim, dtype=np.float64)
+                # mujoco.mj_getState(mj_model, data, mj_state, spec)
+                # obs_k = obs
+                # for k in range(pred_len):
+                #     # Rollout predicted actions to get ground truth next states
+                #     if k > 0:
+                #         obs_k, _, _, _, _ = env.step(action_seq[k].cpu().numpy())
 
-                    s_true_k = torch.as_tensor(get_env_state(env, obs_k, self.dataset_name))
-                    s_pred_k = sr_model(x_recon_next[k].unsqueeze(0).to(device))['state_pred'].squeeze(0).detach().cpu()
-                    cum_err += (s_pred_k - s_true_k).abs().squeeze(0).numpy()
+                #     s_true_k = torch.as_tensor(get_env_state(env, obs_k, self.dataset_name))
+                #     s_pred_k = sr_model(x_recon_next[k].unsqueeze(0).to(device))['state_pred'].squeeze(0).detach().cpu()
+                #     cum_err += (s_pred_k - s_true_k).abs().squeeze(0).numpy()
 
-                cum_err = (cum_err / pred_len)
-                cumulative_state_errors.append(cum_err)
+                # cum_err = (cum_err / pred_len)
+                # cumulative_state_errors.append(cum_err)
 
-                # Restore env state
-                mujoco.mj_setState(mj_model, data, mj_state, spec)
-                mujoco.mj_forward(mj_model, data)
+                # # Restore env state
+                # mujoco.mj_setState(mj_model, data, mj_state, spec)
+                # mujoco.mj_forward(mj_model, data)
 
             if step_idx == 0:
                 print("Reconstruction shape:", x_recon.shape, "Next Reconstruction shape:", len(x_recon_next), x_recon_next[0].shape)
@@ -281,15 +281,32 @@ class Evaluator():
             # Update buffers/logs
             frame_buffer.append(next_for_buffer)
 
-            if done:
+            if terminated or truncated:
                 env.reset()
                 done = False
                 frame_buffer = [process_image(env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1) for _ in range(past_len)]
 
 
+        ##### DEBUG #####
+        num_debug_frames = 5
+        debug_frames = x_recon_next[:num_debug_frames]  # list of [C,H,W] tensors
+
+        fig, axes = plt.subplots(1, len(debug_frames), figsize=(15, 3), dpi=150)
+        for i, frame in enumerate(debug_frames):
+            img = frame.permute(1, 2, 0).cpu().numpy()  # [C,H,W] -> [H,W,C]
+            img = (img - img.min()) / (img.max() - img.min() + 1e-8)  # normalize to [0,1]
+            axes[i].imshow(img)
+            axes[i].axis('off')
+            axes[i].set_title(f"Step {i}")
+
+        plt.tight_layout()
+        fig.savefig("debug.png")
+        ##### DEBUG #####
+
+
         # Convert to arrays for boxplot
         immediate_arr = np.stack(immediate_state_errors, axis=0)   # [num_steps, state_dim]
-        cumulative_arr = np.stack(cumulative_state_errors, axis=0) # [num_steps, state_dim]
+        # cumulative_arr = np.stack(cumulative_state_errors, axis=0) # [num_steps, state_dim]
         state_dim = immediate_arr.shape[1]
 
         # Boxplot per state dimension
@@ -301,11 +318,11 @@ class Evaluator():
         axes[0].set_ylabel("Absolute Error")
         axes[0].grid(True)
 
-        axes[1].boxplot([cumulative_arr[:, i] for i in range(state_dim)], patch_artist=True)
-        axes[1].set_xticklabels([f"Dim {i}" for i in range(state_dim)], rotation=45)
-        axes[1].set_title(f"Cumulative ({pred_len}-step) Prediction Error per Dimension")
-        axes[1].set_ylabel("Absolute Error")
-        axes[1].grid(True)
+        # axes[1].boxplot([cumulative_arr[:, i] for i in range(state_dim)], patch_artist=True)
+        # axes[1].set_xticklabels([f"Dim {i}" for i in range(state_dim)], rotation=45)
+        # axes[1].set_title(f"Cumulative ({pred_len}-step) Prediction Error per Dimension")
+        # axes[1].set_ylabel("Absolute Error")
+        # axes[1].grid(True)
 
         fig_name = f'sr_error_fig.png'
         try:

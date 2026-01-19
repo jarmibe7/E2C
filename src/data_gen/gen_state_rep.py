@@ -7,7 +7,9 @@ Author: Jared Berry
 import time
 from pathlib import Path
 from datetime import datetime
-
+import os
+os.environ["DISPLAY"] = ":99"          # Ayush: If getting display errors, change this
+os.environ["MUJOCO_GL"] = "glfw"
 import gymnasium as gym
 import torch
 import torchvision
@@ -83,14 +85,14 @@ def main():
     set_seed(SEED)
     start_time = time.perf_counter()
 
-    disp = Display(visible=0, size=(480, 480))
-    disp.start()
+    # disp = Display(visible=0, size=(480, 480))
+    # disp.start()
 
     env = gym.make(name_to_env[ENV_NAME], render_mode="rgb_array")
     obs, _ = env.reset(seed=SEED)
 
     # Infer state dimension
-    state = get_env_state(env, obs)
+    state = get_env_state(env, obs, ENV_NAME)
     state_dim = state.numel()
 
     images = torch.zeros((DATASET_SIZE, *IMAGE_SHAPE), dtype=torch.float32)
@@ -102,7 +104,7 @@ def main():
     while idx < DATASET_SIZE:
         # Render + store
         img = process_image(env.render(), dataset_name=ENV_NAME, image_shape=IMAGE_SHAPE)
-        state = get_env_state(env, obs)
+        state = get_env_state(env, obs, ENV_NAME)
 
         images[idx] = img
         states[idx] = state.view(-1)
@@ -119,7 +121,7 @@ def main():
 
     pbar.close()
     env.close()
-    disp.stop()
+    # disp.stop()
 
     # Save
     dataset_dir = DATA_PATH / ENV_NAME / 'state_rep'

@@ -165,8 +165,8 @@ def main():
             print('*** EVAL ONLY ***')
             # trainer.evaluate(config['run_path'])
             # trainer.evaluator.eval_traj(config['run_path'], max_frames=25)
-            # trainer.evaluator.visualize_planner(trainer, config['run_path'], max_steps=50, closed_loop=True)
-            trainer.evaluator.eval_state_rep(trainer, config['run_path'], max_steps=50, closed_loop=True)
+            trainer.evaluator.visualize_planner(trainer, config['run_path'], max_steps=50, closed_loop=True)
+            # trainer.evaluator.eval_state_rep(trainer, config['run_path'], max_steps=50, closed_loop=True)
             print('\n*** DONE ***')
             return
     
