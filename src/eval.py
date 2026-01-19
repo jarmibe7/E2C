@@ -169,14 +169,14 @@ class Evaluator():
         env_rew = []        # env rewards [blind during training]
 
         # Prime buffer with the first observation
-        first_img = process_image(env.render()).squeeze(0).permute(2, 0, 1)
+        first_img = process_image(env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1)
         for _ in range(past_len):
             frame_buffer.append(first_img)
 
         step_idx = 0
         for step_idx in tqdm(range(max_steps), desc="Visualizing Planner timesteps"):
             # Current frame (ground truth)
-            curr_img = process_image(env.render()).squeeze(0).permute(2, 0, 1)
+            curr_img = process_image(env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1)
 
             # Action: reuse trainer.collect_rollouts logic (random sample)
             if closed_loop_policy == 'informative':
@@ -196,7 +196,7 @@ class Evaluator():
             # Step env
             _, rew, done, _, _ = env.step(env_act)
             env_rew.append(rew)
-            next_img_true = process_image(env.render()).squeeze(0).permute(2, 0, 1)
+            next_img_true = process_image(env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1)
 
             # Model inputs
             with torch.no_grad():
@@ -207,7 +207,7 @@ class Evaluator():
                 x_recon = trainer._decode_latent(z_q[:, -1]) # recon current frame
                 x_recon_next = []
                 h = torch.zeros(model.num_layers, 1, model.deterministic_size, device=trainer.device)
-                for act in action_seq:
+                for act in action_seq[:pred_len]:
                     act_batch = act.view(1, -1).to(trainer.device)
                     if len(z_q.shape) == 2:
                         h, z_q, mu_p, log_var_p = trainer.model.rssm_step(h, z_q.unsqueeze(1), act_batch)
@@ -217,7 +217,7 @@ class Evaluator():
                     x_recon_next.append(trainer._decode_latent(z_q).detach().cpu())
 
             # Feed next frame based on loop type
-            next_for_buffer = next_img_true if closed_loop else x_recon_next.detach().cpu()
+            next_for_buffer = next_img_true if closed_loop else x_recon_next[-1].detach().cpu()
 
             # Update buffers/logs
             frame_buffer.append(next_for_buffer)
@@ -231,7 +231,7 @@ class Evaluator():
             if (step_idx + 1) % trainer.config['closed_loop']['num_rollout_steps'] == 0:
                 env.reset()
                 done = False
-                frame_buffer = [process_image(env.render()).squeeze(0).permute(2, 0, 1) for _ in range(past_len)]
+                frame_buffer = [process_image(env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1) for _ in range(past_len)]
 
         # Build visualization grid: 2 rows, (pred_len + 1) columns
         cols = pred_len + 1
@@ -278,7 +278,7 @@ class Evaluator():
         vid_name = 'planner_CL_' + closed_loop_policy + f'_{trainer.curr_epoch}.mp4' if closed_loop else 'planner_vis_OL_' + closed_loop_policy + f'_{trainer.curr_epoch}.mp4'
         try:
             filepath = run_path / vid_name
-            print(f'Saved planner visualization to {filepath}')
+            print(f'Saved planner visualization to {filepath}\n')
             ani.save(filepath, writer=writer)
         except Exception as e:
             print(e)

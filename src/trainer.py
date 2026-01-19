@@ -385,7 +385,7 @@ class ClosedLoopRandomTrainer(BaseTrainer):
         
         while idx < self.num_rollout_steps:
             # Render current frame
-            curr_img = process_image(self.env.render()).squeeze(0).permute(2, 0, 1)
+            curr_img = process_image(self.env.render(), self.evaluator.dataset_name).squeeze(0).permute(2, 0, 1)
             if len(frame_buffer) == 0:
                 frame_buffer.append(curr_img)
 
@@ -409,7 +409,7 @@ class ClosedLoopRandomTrainer(BaseTrainer):
                 if len(frame_buffer) == self.past_length + self.pred_length:
                     frame_buffer.pop(0)
                     act_buffer.pop(0)
-                next_image = process_image(self.env.render()).squeeze(0).permute(2, 0, 1)
+                next_image = process_image(self.env.render(), self.evaluator.dataset_name).squeeze(0).permute(2, 0, 1)
                 frame_buffer.append(next_image)
 
                 # Add sample to replay buffer
@@ -548,7 +548,7 @@ class ClosedLoopPolicyTrainer(BaseTrainer):
         idx = 0
         while idx < self.num_rollout_steps:
             # Render current frame
-            curr_img = process_image(self.env.render()).squeeze(0).permute(2, 0, 1)
+            curr_img = process_image(self.env.render(), self.evaluator.dataset_name).squeeze(0).permute(2, 0, 1)
             if len(frame_buffer) == 0:
                 frame_buffer.append(curr_img)
 
@@ -570,7 +570,7 @@ class ClosedLoopPolicyTrainer(BaseTrainer):
                 if len(frame_buffer) == self.past_length + 1:
                     frame_buffer.pop(0)
                     act_buffer.pop(0)
-                next_image = process_image(self.env.render()).squeeze(0).permute(2, 0, 1)
+                next_image = process_image(self.env.render(), self.evaluator.dataset_name).squeeze(0).permute(2, 0, 1)
                 frame_buffer.append(next_image)
 
                 # Add sample to replay buffer
@@ -718,8 +718,8 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
         self.sigma_init = self.closed_cfg.get('sigma_init', 0.5)    
         self.sigma_min = self.closed_cfg.get('sigma_min', 0.05)     # Min value for clamping variance
         self.sigma = torch.ones_like(self.init_control, device=self.device) * self.sigma_init
-        # self.sigma[:, -2] = self.sigma_init * 0.2   # Less variance on z-axis actions
-        # self.sigma[:, -1] = self.sigma_init * 0.1   # Less variance on gripper actions
+        # self.sigma[:, -2] = self.sigma_init * 0.5   # Less variance on z-axis actions
+        # self.sigma[:, -1] = self.sigma_init * 0.25   # Less variance on gripper actions
 
     @staticmethod
     def _kl_diag_gaussian(mu_q, log_var_q, mu_p, log_var_p):
@@ -753,7 +753,8 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
                 if t0_dist is None:
                     mu_q, log_var_q, z_q = self.model.encode_posterior(window)
                 else:
-                    mu_q, log_var_q, z_q = t0_dist
+                    mu_q, log_var_q = t0_dist
+                    z_q = self.model.reparameterize(mu_q, log_var_q)
                 for act in action_seq:
                     act_batch = act.view(1, -1).to(self.device)
                     if len(z_q.shape) == 2:
@@ -790,6 +791,13 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
         sigma = self.sigma      # (plan_horizon, action_size)
         act_low = torch.as_tensor(self.env.action_space.low, device=self.device, dtype=torch.float32)
         act_high = torch.as_tensor(self.env.action_space.high, device=self.device, dtype=torch.float32)
+        if self.evaluator.dataset_name == 'pointmaze':
+            # scale action bounds for pointmaze
+            act_low *= 2.5
+            act_high *= 2.5
+        elif self.evaluator.dataset_name == 'mountaincar':
+            act_low *= 1.5
+            act_high *= 1.5
         for _ in range(self.cem_iters):
             costs = torch.zeros(self.num_action_samples, device=self.device)
             action_samples = torch.zeros((self.num_action_samples, self.plan_horizon, mu.shape[1]), device=self.device)
@@ -811,7 +819,7 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
             window = torch.stack(frame_buffer[-self.past_length:], dim=0).unsqueeze(0).to(self.device)
             mu_q, log_var_q, z_q = self.model.encode_posterior(window)
             for k, action_seq in enumerate(action_samples):
-                costs[k] = self._rollout_info_gain(window, action_seq, t0_dist=(mu_q, log_var_q, z_q))
+                costs[k] = self._rollout_info_gain(window, action_seq, t0_dist=(mu_q, log_var_q))
             
             # Select elite sequences
             num_elites = max(1, int(self.elite_frac * self.num_action_samples))
@@ -852,7 +860,7 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
         
         while idx < self.num_rollout_steps:
             self._init_cem_mu_sig()
-            curr_img = process_image(self.env.render()).squeeze(0).permute(2, 0, 1)
+            curr_img = process_image(self.env.render(), self.evaluator.dataset_name).squeeze(0).permute(2, 0, 1)
             if len(frame_buffer) == 0:
                 frame_buffer.append(curr_img)
 
@@ -871,7 +879,9 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
                 act = torch.from_numpy(self.env.action_space.sample()).to(self.device)
             env_act = act.cpu().detach().numpy()
             if not self.env_continuous:
-                env_act = int(env_act.item())
+                # TODO: round to closest valid discrete action?
+                env_act = torch.round(act)
+                env_act = env_act.item()
             act_buffer.append(act)
             next_obs, rew, done, _, _ = self.env.step(env_act)
 
@@ -886,7 +896,7 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
                 if len(frame_buffer) == self.past_length + self.pred_length:
                     frame_buffer.pop(0)
                     act_buffer.pop(0)
-                next_image = process_image(self.env.render()).squeeze(0).permute(2, 0, 1)
+                next_image = process_image(self.env.render(), self.evaluator.dataset_name).squeeze(0).permute(2, 0, 1)
                 frame_buffer.append(next_image)
 
                 # Add sample to replay buffer
@@ -933,7 +943,7 @@ class ClosedLoopRewardTrainer(ClosedLoopInformativeTrainer):
         
         while idx < self.num_rollout_steps:
             # Render current frame
-            curr_img = process_image(self.env.render()).squeeze(0).permute(2, 0, 1)
+            curr_img = process_image(self.env.render(), self.evaluator.dataset_name).squeeze(0).permute(2, 0, 1)
             if len(frame_buffer) == 0:
                 frame_buffer.append(curr_img)
 
@@ -961,7 +971,7 @@ class ClosedLoopRewardTrainer(ClosedLoopInformativeTrainer):
                 if len(frame_buffer) == self.past_length + self.pred_length:
                     frame_buffer.pop(0)
                     act_buffer.pop(0)
-                next_image = process_image(self.env.render()).squeeze(0).permute(2, 0, 1)
+                next_image = process_image(self.env.render(), self.evaluator.dataset_name).squeeze(0).permute(2, 0, 1)
                 frame_buffer.append(next_image)
 
                 # Add sample to replay buffer

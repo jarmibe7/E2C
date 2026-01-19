@@ -97,8 +97,8 @@ def main():
         config_save['load_path'] = config['run_path']
     else:
         # Load existing model to train from checkpoint
-        print(f'Loading model from checkpoint\n')
         model_path = load_path + '/model.pt'
+        print(f'Loading model from checkpoint: {model_path}\n')
         model.load_state_dict(torch.load(model_path))
         config['run_path'] = PROJECT_ROOT / Path(load_path)
     
@@ -146,6 +146,7 @@ def main():
         config_save['runtime'] = format_time(time.perf_counter() - start_time)
         if config['train']['save']: trainer.save(config_save, config['run_path'])
         if config['train']['eval']: trainer.evaluate(config['run_path'])
+        trainer.evaluator.visualize_planner(trainer, config['run_path'], max_steps=150, closed_loop=True)
     except Exception:
         print('\n\n'); traceback.print_exc(); print('\n\n')
         if config['train']['save']:
