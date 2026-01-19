@@ -7,7 +7,9 @@ Author: Jared Berry
 import time
 from pathlib import Path
 from datetime import datetime
-
+import os
+os.environ["DISPLAY"] = ":99"          # Ayush: If getting display errors, change this
+os.environ["MUJOCO_GL"] = "glfw"
 import gymnasium as gym
 import torch
 import torchvision
@@ -15,6 +17,8 @@ import numpy as np
 from tqdm import tqdm
 from pyvirtualdisplay import Display
 import yaml
+import gymnasium_robotics
+gym.register_envs(gymnasium_robotics)
 
 from src.utils import set_seed, format_time
 from src.data_gen.gen_gym import process_image, name_to_env
@@ -22,8 +26,8 @@ from src.data_gen.gen_gym import process_image, name_to_env
 # ------------------------
 # Configuration
 # ------------------------
-ENV_NAME = "reacher"
-DATASET_SIZE = int(5e5)
+ENV_NAME = "push"
+DATASET_SIZE = int(1e3)
 IMAGE_SHAPE = (64, 64, 3)
 SEED = 42
 
@@ -33,29 +37,29 @@ DATA_PATH = PROJECT_ROOT / "data"
 # ------------------------
 # Utilities
 # ------------------------
-def get_env_state(env, obs):    
+def get_env_state(env, obs, env_name):    
     """
     Return true joint state when available (MuJoCo),
     otherwise fall back to observation.
     """
     unwrapped = env.unwrapped
 
-    # MuJoCo environments
-    if hasattr(unwrapped, "data") and hasattr(unwrapped.data, "qpos"):
+    # Reacher: first 2 are joint angles
+    # Remaining qpos entries are target-related
+    if "reacher" in env_name:
         qpos = unwrapped.data.qpos.copy()
         qvel = unwrapped.data.qvel.copy()
-
-        # Reacher: first 2 are joint angles
-        # Remaining qpos entries are target-related
-        if ENV_NAME == "reacher":
-            joint_pos = qpos[:2]
-            joint_vel = qvel[:2]
-
+        joint_pos = qpos[:2]
+        joint_vel = qvel[:2]
         state = np.concatenate([joint_pos, joint_vel])
-        return torch.from_numpy(state).float()
-
-    # Fallback (e.g. CartPole)
-    return torch.as_tensor(obs, dtype=torch.float32)
+    elif 'push' in env_name:
+        state = obs['observation'][0:6]    # [0:3] == end effector pose, [3:6] == block pose
+    else:
+        # Fallback to observation
+        raise ValueError(f'Gym environment {env_name} is not specified in get_env_state()')
+    
+    if torch.is_tensor(state): return state
+    else: return torch.from_numpy(state).float()
 
 
 def update_metadata(dataset_dir, name, params):
@@ -81,14 +85,14 @@ def main():
     set_seed(SEED)
     start_time = time.perf_counter()
 
-    disp = Display(visible=0, size=(480, 480))
-    disp.start()
+    # disp = Display(visible=0, size=(480, 480))
+    # disp.start()
 
     env = gym.make(name_to_env[ENV_NAME], render_mode="rgb_array")
     obs, _ = env.reset(seed=SEED)
 
     # Infer state dimension
-    state = get_env_state(env, obs)
+    state = get_env_state(env, obs, ENV_NAME)
     state_dim = state.numel()
 
     images = torch.zeros((DATASET_SIZE, *IMAGE_SHAPE), dtype=torch.float32)
@@ -100,7 +104,7 @@ def main():
     while idx < DATASET_SIZE:
         # Render + store
         img = process_image(env.render(), dataset_name=ENV_NAME, image_shape=IMAGE_SHAPE)
-        state = get_env_state(env, obs)
+        state = get_env_state(env, obs, ENV_NAME)
 
         images[idx] = img
         states[idx] = state.view(-1)
@@ -117,7 +121,7 @@ def main():
 
     pbar.close()
     env.close()
-    disp.stop()
+    # disp.stop()
 
     # Save
     dataset_dir = DATA_PATH / ENV_NAME / 'state_rep'
