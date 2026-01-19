@@ -30,14 +30,14 @@ train:
   dataset: push_1k      # Which dataset to use for training (in data/)
   batch_size: 128
   num_epochs: 500
-  device: cuda:0             # cpu | cuda:0 | cuda:1 | cuda:2
+  device: cuda:2             # cpu | cuda:0 | cuda:1 | cuda:2
   render: False              # Whether to render live interactive training plot, or simply save after training is finished
   save: True                 # Whether to save final trained model and training plot
   eval: True                 # Whether to eval model performance immediately after training
   plot_freq: 10000           # Frequency to update the plot, in timesteps
   train_ratio: 0.9           # Ratio of dataset to use for training
-  load_path: runs/push/2026-01-17_11-54-03                # Path to load model from (for resuming training or eval only)    
-  eval_only: True           # Whether to only eval the model without training
+  load_path: # runs/push/2026-01-17_11-54-03                # Path to load model from (for resuming training or eval only)    
+  eval_only: False           # Whether to only eval the model without training
 # Policy settings for training closed loop
 closed_loop: 
   closed_loop: True                 # Whether to use closed loop training
@@ -53,7 +53,7 @@ closed_loop:
   init_control: random              # Initial control sequence: zero | random | from_txt
   sigma_init: 0.3                   # Initial stddev for sampling actions
   sigma_min: 0.05                   # Minimum stddev for sampling actions
-  alpha: 0.7                        # Smoothing factor for updating action distribution
+  alpha: 0.5                        # Smoothing factor for updating action distribution
 
 # env_inters = num_epochs * num_rollout_steps - # interactions collected from environment
     # 500 * 50 = 25,000

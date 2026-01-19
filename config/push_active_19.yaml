@@ -38,18 +38,18 @@ train:
   eval: True                 # Whether to eval model performance immediately after training
   plot_freq: 10000           # Frequency to update the plot, in timesteps
   train_ratio: 0.9           # Ratio of dataset to use for training
-  load_path:                 # Path to load model from (for resuming training or eval only)    
-  eval_only: False           # Whether to only eval the model without training
+  load_path: runs/push/2026-01-17_17-54-31                # Path to load model from (for resuming training or eval only)    
+  eval_only: True           # Whether to only eval the model without training
 # Policy settings for training closed loop
 closed_loop: 
   closed_loop: True                 # Whether to use closed loop training
   policy: informative                    # What type of policy to use: conv | random | uncertainty | informative
   epochs_warmup: 1                  # Number of epochs to train on random actions before informative training
   num_rollout_steps: 50           # Number of timesteps to collect in a rollout
-  plan_horizon: 10                   # Planning horizon for CEM MPC
+  plan_horizon: 5                   # Planning horizon for CEM MPC
   num_batches: 100                    # Number of batches to train on per gradient update
   buffer_capacity: 2000             # Replay buffer capacity - keeping it small just to debug
-  samples: 30                      # Number of action sequences to sample for MPC
+  samples: 50                      # Number of action sequences to sample for MPC
   elite_frac: 0.1                   # Fraction of action sequences to use as elites for CEM
   iters: 3                          # Number of CEM iterations
   init_control: random              # Initial control sequence: zero | random | from_txt
