@@ -18,7 +18,8 @@ import traceback
 import json
 
 from src.eval import Plotter
-from src.utils import set_seed, wrapped_angle_error, format_time
+from src.utils import set_seed, wrapped_angle_error, format_time, make_yaml_serializable
+from src.model.state_rep import StateRepresentationModel
 
 set_seed(42)
 
@@ -27,73 +28,15 @@ DATA_PATH = PROJECT_ROOT / "data"
 CONFIG_PATH = PROJECT_ROOT / "config"
 RUNS_PATH = PROJECT_ROOT / "runs"
 
-
-class StateRepresentationModel(nn.Module):
-    """
-    A state representation model infers robot states from images of a Gym environment. 
-
-    Args:
-        state_size: Dimension of control vector
-        conv_params: Dictionary containing CNN params for encoder/decoder
-        device: Torch device object
-    """
-    def __init__(self, state_size, conv_params, device):
-        super().__init__()
-        self.device = device
-        self.state_size = state_size    # Output size
-        
-        # CNN parameters
-        in_channels = conv_params['in_image_shape'][0]
-        k = conv_params['kernel_size']
-        s = conv_params['stride']
-        p = conv_params['pad']
-
-        # Convolutional layers
-        self.cnn = nn.Sequential(
-            nn.Conv2d(in_channels, 32, kernel_size=k+2, stride=s-1, padding=p+1),
-            nn.ReLU(),
-            nn.Conv2d(32, 32, kernel_size=k, stride=s, padding=p),
-            nn.ReLU(),
-            nn.Conv2d(32, 32, kernel_size=k, stride=s, padding=p),
-            nn.ReLU(),
-            # nn.Conv2d(32, 32, kernel_size=k, stride=s, padding=p),
-            # nn.ReLU(),
-        )
-
-        with torch.no_grad():
-            x = torch.zeros(1, in_channels, conv_params['in_image_shape'][1], conv_params['in_image_shape'][2])
-            enc_out = self.cnn(x)
-            self.out_dim_flat = enc_out.view(enc_out.size(0), -1).shape[1] # Keep batch dim, determine number of elements
-            self.out_shape = enc_out.shape
-
-        # Linear layers
-        self.fc = nn.Sequential(
-            nn.Linear(self.out_dim_flat, 256),
-            nn.ReLU(),
-            nn.Linear(256, 128),
-            nn.ReLU(),
-            nn.Linear(128, self.state_size),
-            # nn.ReLU(),
-            # nn.Linear(64, self.state_size),
-        )
-
-    def forward(self, x):
-        conv_out = self.cnn(x)
-        flattened = conv_out.reshape(conv_out.size(0), -1)
-        out = self.fc(flattened)
-
-        tr = {
-            'state_pred': out
-        }
-        return tr
     
 class StateRepresentationLoss(nn.Module):
     """
     Loss for state representation model is difference between true and predicted states
     """
-    def __init__(self, loss_params):
+    def __init__(self, loss_params, env_name):
         super().__init__()
         self.recon_mult = loss_params['recon_mult']
+        self.env_name = env_name
 
     def forward(self, tr):
         state_pred = tr['state_pred']
@@ -102,15 +45,21 @@ class StateRepresentationLoss(nn.Module):
         # Wrap first angle
         pred_angle = state_pred[:, 0]
         true_angle = state_true[:, 0]
-        wrapped = wrapped_angle_error(pred_angle, true_angle)
 
-        # Replace raw difference with wrapped for loss
-        loss_angle = wrapped.pow(2).mean()
+        if self.env_name == 'reacher':
+            # Wrap first angle only for Reacher
+            pred_angle = state_pred[:, 0]
+            true_angle = state_true[:, 0]
+            wrapped = wrapped_angle_error(pred_angle, true_angle)
+            loss_first = wrapped.pow(2).mean()
+        else:
+            # Use normal MSE for first dimension
+            loss_first = F.mse_loss(state_pred[:, 0], state_true[:, 0])
 
-        # If you also regress other dimensions
+        # Combine with other dimensions
         loss_rest  = F.mse_loss(state_pred[:, 1:], state_true[:, 1:])
 
-        loss = loss_angle + loss_rest
+        loss = loss_first + loss_rest
 
         # Make return dictionary for loss values
         loss_return = {
@@ -124,8 +73,8 @@ class StateRepesentationDataset():
     """
     def __init__(self, config):
         # Load raw dataset
-        env_name = config['train']['dataset'].split('_')[0]
-        dataset_dir = DATA_PATH / env_name / 'state_rep'
+        
+        dataset_dir = DATA_PATH / config['env_name'] / 'state_rep'
         data = torch.load(dataset_dir / f"{config['train']['dataset']}_state_from_image.pt")
         self.img = data["images"].permute(0, 3, 1, 2)  # Shape: [num_samples, C, H, W]
         self.img_shape = (self.img.shape[1:])
@@ -144,6 +93,7 @@ class StateRepresentationPretrainer():
         train_size = int(len(dataset) * config['train']['train_ratio'])
         test_size = len(dataset) - train_size
         self.dataset, self.test_dataset = torch.utils.data.random_split(dataset, [train_size, test_size])
+        self.env_name = config['env_name']
 
         # Save training params
         self.num_epochs = config['train']['num_epochs']
@@ -159,7 +109,7 @@ class StateRepresentationPretrainer():
         # Create loss criterion
         loss_type = config['loss'].get('loss_type', None)
         if loss_type == 'mse':
-            self.model_criterion = StateRepresentationLoss(config['loss'])
+            self.model_criterion = StateRepresentationLoss(config['loss'], config['env_name'])
         else:
             raise NotImplementedError(f'Loss type "{loss_type}" not supported!')
 
@@ -225,13 +175,10 @@ class StateRepresentationPretrainer():
                 out = self.model(img)
                 state_pred = out["state_pred"]
 
-                # Wrap first angle
-
-                angle_diff = wrapped_angle_error(state_pred[:, 0], state[:, 0])
-
-                # Replace first dim with wrapped difference for MSE/MAE calc
+                # Replace first dim with wrapped difference for MSE/MAE calc with reacher env
                 diff = state_pred - state
-                diff[:, 0] = angle_diff
+                if self.env_name == 'reacher':
+                    diff[:, 0] = wrapped_angle_error(state_pred[:, 0], state[:, 0])
 
                 # Aggregate losses using wrapped difference
                 mse = (diff ** 2).sum()
@@ -248,10 +195,19 @@ class StateRepresentationPretrainer():
         preds = torch.cat(all_preds, dim=0)
         targets = torch.cat(all_targets, dim=0)
 
-        # Per-dimension MSE
+        if self.env_name == 'reacher':
+            first_dim_error = wrapped_angle_error(preds[:, 0], targets[:, 0]) ** 2
+        else:
+            first_dim_error = (preds[:, 0] - targets[:, 0]) ** 2
+
+        # Concatenate first dim with the rest
         per_dim_mse = torch.cat([
-            (wrapped_angle_error(preds[:, 0], targets[:, 0]).unsqueeze(1) ** 2),
+            first_dim_error.unsqueeze(1),
             (preds[:, 1:] - targets[:, 1:]) ** 2
+        ], dim=1).mean(dim=0)
+        per_dim_mae = torch.cat([
+            first_dim_error.unsqueeze(1),
+            torch.abs(preds[:, 1:] - targets[:, 1:])
         ], dim=1).mean(dim=0)
 
         # Mean metrics
@@ -270,6 +226,7 @@ class StateRepresentationPretrainer():
             "mae": mae_mean,
             "explained_variance": explained_variance_mean,
             "per_dim_mse": per_dim_mse.tolist(),
+            "per_dim_mae": per_dim_mae.tolist()
         }
 
         # Save metrics
@@ -338,26 +295,28 @@ if __name__ == "__main__":
     print('*** STARTING ***\n')
     # Load config, make run path, and choose torch device
     # ---------- CONFIG HERE ----------
-    config_name = 'state_rep_reacher_v0'
+    config_name = 'state_rep_push_v0'
     # ---------- CONFIG HERE ----------
     if 'state_rep' not in config_name:
         raise ValueError('Must use state representation model config!')
     with open(CONFIG_PATH / f'{config_name}.yaml', "r") as f:
         config = yaml.safe_load(f)
     config['config_name'] = config_name
-    config_save = copy.deepcopy(config)
     timestamp = datetime.fromtimestamp(time.time()).strftime("%Y-%m-%d_%H-%M-%S")
     run_path = RUNS_PATH / Path(config['train']['dataset'].split('_')[0]) / 'state_rep' / timestamp
-    config['run_path'] = run_path
     if 'cuda' in config['train']['device']: 
         assert torch.cuda.is_available(), f"{config['train']['device']} selected in {config_name}, but is unavailable!"
     device = torch.device(config['train']['device'])
 
     # Make E2CDataset object
     print(f"Loading dataset: {config['train']['dataset']}\n")
+    config['env_name'] = config['train']['dataset'].split('_')[0]
     dataset = StateRepesentationDataset(config)
-    config['conv']['in_image_shape'] = dataset.in_img_shape
+    config['conv']['in_image_shape'] = dataset.img_shape
     config['train']['state_size'] = dataset.state_size
+    config['run_path'] = run_path
+    config_save = make_yaml_serializable(copy.deepcopy(config))
+    
 
     # Create or load model
     model = StateRepresentationModel(
