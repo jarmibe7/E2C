@@ -443,7 +443,6 @@ class ClosedLoopRandomTrainer(BaseTrainer):
             # Unload batch
             x, u, r, x_next, done  = self.replay_buffer.sample(self.batch_size)
             x, x_next, u = x.to(self.device), x_next.to(self.device), u.to(self.device)
-            # x = x.reshape(x.shape[0], -1, *self.in_image_shape[1:])    # Stack obs history in channel dim
 
             # Forward pass
             train_return = self.model(x, x_next, u)
@@ -781,13 +780,11 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
         with torch.no_grad(), torch.cuda.amp.autocast():
             B, T, A = action_samples.shape
             if t0_dist is None:
-                # hs, mu_q, log_var_q, zs = self.model.encode_posterior(window)
                 mu_q, log_var_q, zs = self.model.encode_posterior(window)
             else:
                 mu_q, log_var_q, zs = t0_dist
             total_kl = torch.zeros(B, device=self.device)
 
-            # h = hs[:, -1].unsqueeze(1).repeat(self.model.num_layers, B, 1)
             h = torch.zeros(self.model.num_layers, B, self.model.deterministic_size, device=self.device)
             z = zs[:, -1].repeat(B, 1)
             mu_q = mu_q[:, -1].repeat(B, 1)
@@ -814,7 +811,6 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
 
                     # Posterior from updated observation window
                     enc = self.model.encoder(x_pred)
-                    # stats = self.model.post(torch.cat([enc, h[-1]], dim=-1))
                     stats = self.model.post(enc)
                     mu_post, log_var_post = stats.chunk(2, dim=-1)
 
@@ -847,18 +843,10 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
             action_samples = torch.normal(mu.unsqueeze(0), sigma.unsqueeze(0)).expand(self.num_action_samples, -1, -1)
             # Clip to action space bounds
             action_samples = torch.clamp(action_samples, act_low, act_high)
-
             
             # Evaluate information gain for each sequence
-            # frames = [f.to(self.device) for f in frame_buffer[-self.past_length:]]
-            # window = self._frames_to_tensor(frame_buffer)
             window = torch.stack(frame_buffer[-self.past_length:], dim=0).unsqueeze(0).to(self.device)
             mu_prior, log_var_prior, z_prior = self.model.encode_posterior(window)
-            # hs, mu_prior, log_var_prior, z_prior = self.model.encode_posterior(window)
-            # for k, action_seq in enumerate(action_samples):
-            #     # costs[k] = self._rollout_info_gain(window, action_seq, t0_dist=(mu_q, log_var_q))
-            #     costs[k] = self._rollout_info_gain_decoded(window, action_seq, t0_dist=(hs, mu_prior, log_var_prior, z_prior))
-            # costs = self.rollout_info_gain_decoded_batch(window, action_samples, t0_dist=(hs, mu_prior, log_var_prior, z_prior))
             costs = self.rollout_info_gain_decoded_batch(window, action_samples, t0_dist=(mu_prior, log_var_prior, z_prior))
 
             
