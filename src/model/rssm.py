@@ -76,13 +76,6 @@ class RSSME2C(nn.Module):
             nn.ReLU(),
             nn.Linear(64, 2 * self.stochastic_size)
         )
-        self.current_posterior = nn.Sequential(                      # Representation model
-            nn.Linear(self.enc_latent_size, 256),
-            nn.ReLU(),
-            nn.Linear(256, 64),
-            nn.ReLU(),
-            nn.Linear(64, 2 * self.stochastic_size)
-        )
         # self.post = nn.Sequential(                      # Representation model
         #     nn.Linear(self.enc_latent_size + self.deterministic_size, 256),
         #     nn.ReLU(),
@@ -124,31 +117,20 @@ class RSSME2C(nn.Module):
         return h_next, z_next, mu, log_var
     
     def encode_posterior(self, obs, actions=None):
-        # learning too much, don't need to know transitions for past_length really
         B, T = obs.shape[:2]
-        # h = torch.zeros(self.num_layers, B, self.deterministic_size, device=self.device)
-
         mus, log_vars, zs, hs = [], [], [], []
 
         for t in range(T):
             x = obs[:, t]
             enc = self.encoder(x)
 
-            # h_t = h[-1]
-            # post_in = torch.cat([enc, h_t], dim=-1)
             stats = self.post(enc)
-            # stats = self.current_posterior(enc)
             mu, log_var = stats.chunk(2, dim=-1)
             z = self.reparameterize(mu, log_var)
 
             mus.append(mu)
             log_vars.append(log_var)
             zs.append(z)
-            # hs.append(h_t)
-
-            # if actions is not None:
-            #     h, _, _, _ = self.rssm_step(h, z.unsqueeze(1), actions[:, t])
-
         return (
             # torch.stack(hs, dim=1),
             torch.stack(mus, dim=1),
@@ -158,10 +140,8 @@ class RSSME2C(nn.Module):
     
     def forward(self, x, x_next, u):
         # Infer belief over past context
-        # hs, mus, log_vars, zs = self.encode_posterior(x, u[:, :x.size(1)])
         mus, log_vars, zs = self.encode_posterior(x, u[:, :x.size(1)])
         
-        # h = hs[:, -1].unsqueeze(0).repeat(self.num_layers, 1, 1)
         h = torch.zeros(self.num_layers, x.size(0), self.deterministic_size, device=self.device)
         # Take last belief state as start
         z = zs[:, -1]
@@ -195,7 +175,6 @@ class RSSME2C(nn.Module):
 
             # posterior update using real next frame
             enc = self.encoder(x_next[:, t])
-            # post_in = torch.cat([enc, h[-1]], dim=-1)
             stats = self.post(enc)
             mu_q, log_var_q = stats.chunk(2, dim=-1)
             z = self.reparameterize(mu_q, log_var_q)
@@ -219,80 +198,7 @@ class RSSME2C(nn.Module):
 
         return outputs
     
-    # def forward(self, x, x_next, u):
-    #     batch_size = x.size(0)
-    #     # Initialize current deterministic state h to zeros
-    #     h = torch.zeros(self.num_layers, batch_size, self.deterministic_size, device=self.device)
 
-    #     mus, log_vars, zs = self.encode_posterior(x)
-    #     if self.output_uncertainty:
-    #         # only decode last in past_length for reconstruction
-    #         x_recon, x_recon_uncertainty = self.decoder(zs[:, -1])
-    #     else:
-    #         x_recon = self.decoder(zs[:, -1])
-
-    #     # Iterate over pred_length
-    #     z_preds, mu_priors, log_var_priors = [], [], []
-    #     mu_posts, log_var_posts = [mus[:, -1]], [log_vars[:, -1]]
-    #     x_preds = []
-    #     if self.output_uncertainty: x_pred_uncerts = []
-
-    #     # Initialize training encoding window
-    #     window = x
-        
-    #     for t in range(x_next.shape[1]):
-    #         # RSSM prior rollout (predict next latent)
-    #         # pass in all zs into rnn
-    #         h, z_pred, mu_p, log_var_p = self.rssm_step(h, zs, u[:,t])
-    #         z_preds.append(z_pred)
-    #         mu_priors.append(mu_p)
-    #         log_var_priors.append(log_var_p)
-            
-    #         # Decode predicted latent
-    #         if self.output_uncertainty:
-    #             x_pred, x_pred_uncertainty = self.decoder(z_pred)
-    #             x_pred_uncerts.append(x_pred_uncertainty)
-    #         else:
-    #             x_pred = self.decoder(z_pred)
-    #         x_preds.append(x_pred)
-            
-    #         # Build next window for encoder: shift old window and append predicted frame
-    #         # window: [B, past_length*C, H, W] => keep last past_length-1 frames
-    #         if self.past_length > 1:
-    #             window_frames = window[:, 1:]   # drop first frame
-    #             window = torch.cat([window_frames, x_pred.unsqueeze(1).detach()], dim=1)
-    #         else:
-    #             window = x_pred.detach()  # past_length==1, just use pred image
-
-    #         # Incorporate posterior
-    #         mus, log_vars, zs = self.encode_posterior(window)
-
-    #         mu_posts.append(mus[:, -1])
-    #         log_var_posts.append(log_vars[:, -1])
-
-
-    #     # Stack accumulated priors + posteriors
-    #     if self.output_uncertainty:
-    #         return {
-    #             "x_recon": x_recon,
-    #             "x_pred": torch.stack(x_preds, dim=1),
-    #             "mu_posts": torch.stack(mu_posts[:-1], dim=1),
-    #             "log_var_posts": torch.stack(log_var_posts[:-1], dim=1),
-    #             "mu_priors": torch.stack(mu_priors, dim=1),
-    #             "log_var_priors": torch.stack(log_var_priors, dim=1),
-    #             "x_recon_uncertainty": x_recon_uncertainty,
-    #             "x_pred_uncertainty": torch.stack(x_pred_uncerts, dim=1)
-    #         }
-    #     else:
-    #         return {
-    #             "x_recon": x_recon,
-    #             "x_pred": torch.stack(x_preds, dim=1),
-    #             "mu_posts": torch.stack(mu_posts[:-1], dim=1),
-    #             "log_var_posts": torch.stack(log_var_posts[:-1], dim=1),
-    #             "mu_priors": torch.stack(mu_priors, dim=1),
-    #             "log_var_priors": torch.stack(log_var_priors, dim=1),
-    #         }
-        
     def reconstruct(self, x_traj):
         """
         Reconstruct an entire trajectory to test encoder/decoder
