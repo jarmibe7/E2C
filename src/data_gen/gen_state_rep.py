@@ -18,6 +18,7 @@ from tqdm import tqdm
 from pyvirtualdisplay import Display
 import yaml
 import gymnasium_robotics
+import matplotlib.pyplot as plt
 gym.register_envs(gymnasium_robotics)
 
 from src.utils import set_seed, format_time
@@ -27,7 +28,7 @@ from src.data_gen.gen_fetch import process_image, name_to_env
 # Configuration
 # ------------------------
 ENV_NAME = "push"
-DATASET_SIZE = int(1e3)
+DATASET_SIZE = int(5e5)
 IMAGE_SHAPE = (64, 64, 3)
 SEED = 42
 
@@ -54,6 +55,8 @@ def get_env_state(env, obs, env_name):
         state = np.concatenate([joint_pos, joint_vel])
     elif 'push' in env_name:
         state = obs['observation'][0:6]    # [0:3] == end effector pose, [3:6] == block pose
+    elif 'mountain' in env_name:
+        state = obs
     else:
         # Fallback to observation
         raise ValueError(f'Gym environment {env_name} is not specified in get_env_state()')
@@ -105,7 +108,6 @@ def main():
         # Render + store
         img = process_image(env.render(), dataset_name=ENV_NAME, image_shape=IMAGE_SHAPE)
         state = get_env_state(env, obs, ENV_NAME)
-        breakpoint()
 
         images[idx] = img
         states[idx] = state.view(-1)

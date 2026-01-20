@@ -10,6 +10,6 @@ setup(
     description="Implementation of Embed to Control: A Locally Linear Latent Dynamics Model for Control from Raw Images",
     author="Jared Berry, Ayush Gaggar",
     packages=find_packages(),
-    python_requires=">=3.8",
+    python_requires=">=3.10",
     install_requires=read_requirements(),
 )

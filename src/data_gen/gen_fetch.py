@@ -54,7 +54,7 @@ DATA_PATH = PROJECT_ROOT / "data"
 
 seed = 42
 set_seed(seed)
-name_to_env = {'reacher': 'Reacher-v5', 'cartpole': 'CartPole-v1', 'push': 'FetchPushDense-v3', 'pointmaze': 'PointMaze_UMaze-v3', 'antmaze': 'AntMaze_UMaze-v5', 'mountaincar': 'MountainCarContinuous-v0'}
+name_to_env = {'reacher': 'Reacher-v5', 'cartpole': 'CartPole-v1', 'push': 'FetchPushDense-v4', 'pointmaze': 'PointMaze_UMaze-v3', 'antmaze': 'AntMaze_UMaze-v5', 'mountaincar': 'MountainCarContinuous-v0'}
 env_to_aspace = {'reacher': 'continuous', 'cartpole': 'discrete', 'push': 'continuous', 'pointmaze': 'continuous', 'antmaze': 'continuous', 'mountaincar': 'continuous'}
 
 def update_dataset_metadata(dataset_dir, dataset_name, params):
