@@ -156,7 +156,7 @@ class Evaluator():
                          If False, feed the model's predicted next frame (open-loop rollout).
         """
         # Load state rep model
-        sr_run_path = PROJECT_ROOT / 'runs' / self.dataset_name.split('_')[0] / 'state_rep' / 'trained'
+        sr_run_path = PROJECT_ROOT / 'runs' / self.dataset_name.split('_')[0] / 'state_rep' / 'trained2'
         device = trainer.device
         with open(sr_run_path / f'config.yaml', "r") as f:
             sr_config = yaml.safe_load(f)
@@ -211,6 +211,7 @@ class Evaluator():
             obs, _, terminated, truncated, _ = env.step(env_act)
             next_img_true = process_image(env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1)
             state_true = get_env_state(env, obs, self.dataset_name)
+            breakpoint()    # TODO: Action seq for random diff len than info.
 
             # Model forward pass
             with torch.no_grad():

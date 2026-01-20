@@ -27,7 +27,7 @@ from src.data_gen.gen_fetch import process_image, name_to_env
 # ------------------------
 # Configuration
 # ------------------------
-ENV_NAME = "push"
+ENV_NAME = "mountaincar"
 DATASET_SIZE = int(5e5)
 IMAGE_SHAPE = (64, 64, 3)
 SEED = 42
