@@ -117,6 +117,8 @@ def main():
             trainer = ClosedLoopRandomTrainer(dataset, model, config, device)
         elif policy_type == 'informative':
             trainer = ClosedLoopInformativeTrainer(dataset, model, config, device)
+        elif policy_type == 'maxdyn':
+            trainer = ClosedLoopInformativeTrainer(dataset, model, config, device)
         elif policy_type == "direct_reward":
             # TODO: Implement shallow reward-based closed loop trainer
             pass
