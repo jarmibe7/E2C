@@ -99,8 +99,8 @@ def process_image(image, dataset_name, image_shape=image_shape):
     # Image processing
     normalized = image.unsqueeze(0).float() / 255.0 # Normalize to [0,1]
     if 'mountaincar' in dataset_name:
-        # image_resized = torchvision.transforms.ToTensor((Image.fromarray(normalized).resize((image_shape[0], image_shape[1]))))
         image_resized = torchvision.transforms.Resize(size=image_shape[0:2], antialias=True)(normalized)
+        image_resized = image_resized.clamp(0.0, 1.0)
     else:
         image_resized = torchvision.transforms.functional.resize(normalized, image_shape[0:2], interpolation=torchvision.transforms.functional.InterpolationMode.NEAREST)   # Downscaling
     

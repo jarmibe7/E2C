@@ -63,10 +63,6 @@ class RSSME2C(nn.Module):
             num_layers=self.num_layers,
             batch_first=True
         )
-        # self.rnn = nn.GRUCell(                          # Recurrent model
-        #     self.stochastic_size + self.control_size,
-        #     self.deterministic_size
-        # )
         self.prior = nn.Sequential(                     # Transition model
             nn.Linear(self.deterministic_size, 200),
             nn.ReLU(),
@@ -80,6 +76,13 @@ class RSSME2C(nn.Module):
             nn.ReLU(),
             nn.Linear(64, 2 * self.stochastic_size)
         )
+        # self.post = nn.Sequential(                      # Representation model
+        #     nn.Linear(self.enc_latent_size + self.deterministic_size, 256),
+        #     nn.ReLU(),
+        #     nn.Linear(256, 64),
+        #     nn.ReLU(),
+        #     nn.Linear(64, 2 * self.stochastic_size)
+        # )
 
     def reparameterize(self, mu, log_var):
         # Get standard deviation from log variance
@@ -105,7 +108,6 @@ class RSSME2C(nn.Module):
         # repeat u across z's time dimension
         u = u.unsqueeze(1).repeat(1, z.size(1), 1)  # u: [B, past_length, control_size]
         rnn_input = torch.cat([z, u], dim=-1)
-        # h_next = self.rnn(rnn_input, h)
         _, h_next = self.rnn(rnn_input, h)  # h_next: [B, 1, deterministic]
 
         stats = self.prior(h_next[-1])
@@ -114,137 +116,89 @@ class RSSME2C(nn.Module):
 
         return h_next, z_next, mu, log_var
     
-    def encode_posterior(self, obs_tensor):
-        mu_list = []
-        log_var_list = []
-        z_list = []
+    def encode_posterior(self, obs, actions=None):
+        B, T = obs.shape[:2]
+        mus, log_vars, zs, hs = [], [], [], []
 
-        for i in range(self.past_length):
-            x_frame = obs_tensor[:, i]
-            enc = self.encoder(x_frame)
-            post_stats = self.post(enc)
-            mu, log_var = post_stats.chunk(2, dim=-1)
+        for t in range(T):
+            x = obs[:, t]
+            enc = self.encoder(x)
+
+            stats = self.post(enc)
+            mu, log_var = stats.chunk(2, dim=-1)
             z = self.reparameterize(mu, log_var)
 
-            mu_list.append(mu)
-            log_var_list.append(log_var)
-            z_list.append(z)
-
-        mus = torch.stack(mu_list, dim=1)
-        log_vars = torch.stack(log_var_list, dim=1)
-        zs = torch.stack(z_list, dim=1)
-
-        return mus, log_vars, zs
+            mus.append(mu)
+            log_vars.append(log_var)
+            zs.append(z)
+        return (
+            # torch.stack(hs, dim=1),
+            torch.stack(mus, dim=1),
+            torch.stack(log_vars, dim=1),
+            torch.stack(zs, dim=1),
+        )
     
-    """ # Prev way that worked
-    def encode_posterior(self, obs_tensor):
-        post_in = torch.zeros((obs_tensor.size(0), self.enc_latent_size * self.past_length), device=self.device)
-        for i in range(self.past_length):
-            x_frame = obs_tensor[:, i]
-            post_in[:, (i * self.enc_latent_size):((i+1) * self.enc_latent_size)] = self.encoder(x_frame)
-        post_stats = self.post(post_in)
-        mu, log_var = post_stats.chunk(2, dim=-1)
-        z = self.reparameterize(mu, log_var)
-        return mu, log_var, z
-    """
-
     def forward(self, x, x_next, u):
-        batch_size = x.size(0)
-        # Initialize current deterministic state h to zeros
-        h = torch.zeros(self.num_layers, batch_size, self.deterministic_size, device=self.device)
-
-        # Encode current and next observations
-        # enc = self.encoder(x)
-
-        # Posterior for current observations
-        # post_in = torch.cat([enc, h.squeeze(0)], dim=-1)            # [batch, enc_latent + deterministic]
-        # post_stats = self.post(enc)                  # [batch, 2*stochastic]
-        # mu, log_var = post_stats.chunk(2, dim=-1)
-        # z = self.reparameterize(mu, log_var)        # Current stochastic latent state
+        # Infer belief over past context
+        mus, log_vars, zs = self.encode_posterior(x, u[:, :x.size(1)])
         
-        # new gru way
-        mus, log_vars, zs = self.encode_posterior(x)
+        h = torch.zeros(self.num_layers, x.size(0), self.deterministic_size, device=self.device)
+        # Take last belief state as start
+        z = zs[:, -1]
+
+        # reconstruct current observation
         if self.output_uncertainty:
-            # only decode last in past_length for reconstruction
-            x_recon, x_recon_uncertainty = self.decoder(zs[:, -1])
+            x_recon, x_recon_uncertainty = self.decoder(z)
         else:
-            x_recon = self.decoder(zs[:, -1])
+            x_recon = self.decoder(z)
 
         # Iterate over pred_length
-        z_preds, mu_priors, log_var_priors = [], [], []
-        mu_posts, log_var_posts = [mus[:, -1]], [log_vars[:, -1]]
+        mu_priors, log_var_priors = [], []
+        mu_posts, log_var_posts = [], []
         x_preds = []
-        if self.output_uncertainty: x_pred_uncerts = []
+        if self.output_uncertainty:
+            x_pred_uncerts = []
 
-        # Initialize training encoding window
-        window = x
-        
-        for t in range(x_next.shape[1]):
-            # RSSM prior rollout (predict next latent)
-            # pass in all zs into rnn
-            h, z_pred, mu_p, log_var_p = self.rssm_step(h, zs, u[:,t])
-            z_preds.append(z_pred)
+        for t in range(x_next.size(1)):
+            # prior
+            h, z_prior, mu_p, log_var_p = self.rssm_step(h, z.unsqueeze(1), u[:, t])
             mu_priors.append(mu_p)
             log_var_priors.append(log_var_p)
-            
-            # Decode predicted latent
+
+            # decode prior (open loop prediction)
             if self.output_uncertainty:
-                x_pred, x_pred_uncertainty = self.decoder(z_pred)
-                x_pred_uncerts.append(x_pred_uncertainty)
+                x_pred, x_pred_uncert = self.decoder(z_prior)
+                x_pred_uncerts.append(x_pred_uncert)
             else:
-                x_pred = self.decoder(z_pred)
+                x_pred = self.decoder(z_prior)
             x_preds.append(x_pred)
-            
-            # # Encode next observation
-            # x_next_frame = x_next[:, t]
-            # x_next_enc = self.encoder(torch.cat([x_next_frame]*self.past_length, dim=1))  # Need to stack for encoding
 
-            # Build next window for encoder: shift old window and append predicted frame
-            # window: [B, past_length*C, H, W] => keep last past_length-1 frames
-            if self.past_length > 1:
-                window_frames = window[:, 1:]   # drop first frame
-                window = torch.cat([window_frames, x_pred.unsqueeze(1).detach()], dim=1)
-            else:
-                window = x_pred.detach()  # past_length==1, just use pred image
+            # posterior update using real next frame
+            enc = self.encoder(x_next[:, t])
+            stats = self.post(enc)
+            mu_q, log_var_q = stats.chunk(2, dim=-1)
+            z = self.reparameterize(mu_q, log_var_q)
 
-            # Incorporate posterior
-            mus, log_vars, zs = self.encode_posterior(window)
-            # post = torch.zeros((batch_size, self.enc_latent_size * self.past_length), device=self.device)
-            # for i in range(self.past_length):
-            #     x_frame = window[:, i]
-            #     post[:, (i * self.enc_latent_size):((i+1) * self.enc_latent_size)] = self.encoder(x_frame)
-            # # x_next_enc = self.encoder(window)
-            # # post_in = torch.cat([x_next_enc, h], dim=-1)            # [batch, enc_latent + deterministic]
-            # post_stats = self.post(post)                         # [batch, 2*stochastic]
-            # mu, log_var = post_stats.chunk(2, dim=-1)
-            # z = self.reparameterize(mu, log_var)        # Current stochastic latent state
-
-            mu_posts.append(mus[:, -1])
-            log_var_posts.append(log_vars[:, -1])
-
+            mu_posts.append(mu_q)
+            log_var_posts.append(log_var_q)
 
         # Stack accumulated priors + posteriors
+        outputs = {
+            "x_recon": x_recon,
+            "x_pred": torch.stack(x_preds, dim=1),
+            "mu_posts": torch.stack(mu_posts, dim=1),
+            "log_var_posts": torch.stack(log_var_posts, dim=1),
+            "mu_priors": torch.stack(mu_priors, dim=1),
+            "log_var_priors": torch.stack(log_var_priors, dim=1),
+        }
+
         if self.output_uncertainty:
-            return {
-                "x_recon": x_recon,
-                "x_pred": torch.stack(x_preds, dim=1),
-                "mu_posts": torch.stack(mu_posts[:-1], dim=1),
-                "log_var_posts": torch.stack(log_var_posts[:-1], dim=1),
-                "mu_priors": torch.stack(mu_priors, dim=1),
-                "log_var_priors": torch.stack(log_var_priors, dim=1),
-                "x_recon_uncertainty": x_recon_uncertainty,
-                "x_pred_uncertainty": torch.stack(x_pred_uncerts, dim=1)
-            }
-        else:
-            return {
-                "x_recon": x_recon,
-                "x_pred": torch.stack(x_preds, dim=1),
-                "mu_posts": torch.stack(mu_posts[:-1], dim=1),
-                "log_var_posts": torch.stack(log_var_posts[:-1], dim=1),
-                "mu_priors": torch.stack(mu_priors, dim=1),
-                "log_var_priors": torch.stack(log_var_priors, dim=1),
-            }
-        
+            outputs["x_recon_uncertainty"] = x_recon_uncertainty
+            outputs["x_pred_uncertainty"] = torch.stack(x_pred_uncerts, dim=1)
+
+        return outputs
+    
+
     def reconstruct(self, x_traj):
         """
         Reconstruct an entire trajectory to test encoder/decoder

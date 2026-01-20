@@ -378,8 +378,8 @@ class Evaluator():
             # Current frame (ground truth)
             curr_img = process_image(env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1)
 
-            # Action: reuse trainer.collect_rollouts logic (random sample)
-            if closed_loop_policy == 'informative':
+            # Action: reuse trainer.collect_rollouts logic
+            if closed_loop_policy == 'informative' or 'maxdyn':
                 trainer._init_cem_mu_sig()
                 mu, costs = trainer._sample_cem(frame_buffer[-past_len:]) # pred_len, act_size
                 action_seq = mu.clone()
@@ -400,21 +400,30 @@ class Evaluator():
 
             # Model inputs
             with torch.no_grad():
-                # frames = [f.to(trainer.device) for f in frame_buffer[-past_len:]]
-                # window = trainer._frames_to_tensor(frames)
                 window = torch.stack(frame_buffer[-trainer.model.past_length:], dim=0).unsqueeze(0).to(trainer.device)
-                mu_q, log_var_q, z_q = trainer.model.encode_posterior(window)
-                x_recon = trainer._decode_latent(z_q[:, -1]) # recon current frame
-                x_recon_next = []
+                mu_prior, log_var_prior, zs = self.model.encode_posterior(window)
                 h = torch.zeros(model.num_layers, 1, model.deterministic_size, device=trainer.device)
-                for act in action_seq[:pred_len]:
+                z = zs[:, -1]
+                if self.model.output_uncertainty:
+                    x_recon, x_pred_uncertainty = self.model.decoder(z)
+                else:
+                    x_recon = self.model.decoder(z)
+                x_recon_next = []
+                for act in action_seq:
                     act_batch = act.view(1, -1).to(trainer.device)
-                    if len(z_q.shape) == 2:
-                        h, z_q, mu_p, log_var_p = trainer.model.rssm_step(h, z_q.unsqueeze(1), act_batch)
+                    h, z_prior, mu_p, log_var_p = trainer.model.rssm_step(h, z.unsqueeze(1), act_batch)
+                    # Decode prior to observation space
+                    if self.model.output_uncertainty:
+                        x_pred, x_pred_uncertainty = trainer.model.decoder(z_prior)
                     else:
-                        h, z_q, mu_p, log_var_p = trainer.model.rssm_step(h, z_q, act_batch)
-                    # z_q = torch.normal(0.5*torch.ones_like(mu_q), 0.1*torch.ones_like(log_var_q))
-                    x_recon_next.append(trainer._decode_latent(z_q).detach().cpu())
+                        x_pred = trainer.model.decoder(z_prior)
+                    x_recon_next.append(x_pred.detach().cpu())
+                    # Posterior from updated observation window
+                    enc = trainer.model.encoder(x_pred)
+                    # stats = trainer.model.post(torch.cat([enc, h[-1]], dim=-1))
+                    stats = trainer.model.post(enc)
+                    mu_q, log_var_q = stats.chunk(2, dim=-1)
+                    z = trainer.model.reparameterize(mu_q, log_var_q)
 
             # Feed next frame based on loop type
             next_for_buffer = next_img_true if closed_loop else x_recon_next[-1].detach().cpu()
@@ -455,9 +464,9 @@ class Evaluator():
         def update(frame_idx):
             # TODO: Plot KLD value
             # TODO: somehow show "reward"/number of times interacted with object?
-            true_curr = true_frames[frame_idx]
-            true_next = true_frames[frame_idx + 1] if frame_idx + 1 < len(true_frames) else true_curr
-            recon = recon_frames[frame_idx]
+            true_curr = true_frames[frame_idx].squeeze(0)
+            true_next = true_frames[frame_idx + 1].squeeze(0) if frame_idx + 1 < len(true_frames) else true_curr
+            recon = recon_frames[frame_idx].squeeze(0)
 
             # Pred current recon
             ax[0, 0].set_title(f"Pred t=0; {plan_obj_vals[frame_idx]:.2f}")
@@ -467,7 +476,7 @@ class Evaluator():
 
             # Predictions across horizon
             for j in range(1, cols):
-                pred_frame = pred_sequences[frame_idx][j-1]
+                pred_frame = pred_sequences[frame_idx][j-1].squeeze(0)
                 ims[2 * j].set_data(pred_frame.permute(1, 2, 0).detach().cpu().numpy())
                 if j == 1:
                     true_frame = true_next  # reuse true_next for all future slots
@@ -478,7 +487,7 @@ class Evaluator():
         vid_name = 'planner_CL_' + closed_loop_policy + f'_{trainer.curr_epoch}.mp4' if closed_loop else 'planner_vis_OL_' + closed_loop_policy + f'_{trainer.curr_epoch}.mp4'
         try:
             filepath = run_path / vid_name
-            print(f'Saved planner visualization to {filepath}\n')
+            print(f'Saved planner visualization to {filepath}\n\n')
             ani.save(filepath, writer=writer)
         except Exception as e:
             print(e)
@@ -488,6 +497,7 @@ class Evaluator():
         return
         
     def eval_traj(self, run_path, max_frames=50):
+        # TODO: update eval_traj with model
         # Create figure
         fig, ax = plt.subplots(2, 2, figsize=(8, 10))
         ax[0, 0].set_title("Predicted Current Image")
@@ -514,8 +524,8 @@ class Evaluator():
             # x_recon, x_pred, sample_return = self.model.sample(x, u, return_all=True)
             sample_return = self.model(x, x_next, u)
             x_list.append(x[0]); x_next_list.append(x_next[0])
-            x_recon_list.append(sample_return['x_recon']); x_pred_list.append(sample_return['x_preds'][0])
-            if self.model.output_uncertainty: x_pred_uncertainty_list.append(sample_return['x_pred_recon_uncertainty'].mean().item())
+            x_recon_list.append(sample_return['x_recon']); x_pred_list.append(sample_return['x_pred'][0])
+            if self.model.output_uncertainty: x_pred_uncertainty_list.append(sample_return['x_pred_uncertainty'].mean().item())
 
         # Initialize axes
         ims = []
