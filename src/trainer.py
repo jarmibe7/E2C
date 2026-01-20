@@ -324,6 +324,7 @@ class ClosedLoopRandomTrainer(BaseTrainer):
         self.env = gym.make(name_to_env[env_name], render_mode="rgb_array")
         self.env_continuous = (env_to_aspace[env_name] == 'continuous')
         self.past_length = config['trans']['past_length']
+        self.obj_fun = config['closed_loop'].get('policy', None)
 
         # Initialize replay buffer
         self.replay_buffer = ReplayBuffer(
@@ -729,21 +730,13 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
             + (torch.exp(log_var_q) + (mu_q - mu_p) ** 2) / torch.exp(log_var_p)
             - 1
         ).sum(dim=-1)
-    
-    def _sample_random_action_sequences(self):
-        seqs = []
-        for _ in range(self.num_action_samples):
-            acts = []
-            for _ in range(self.plan_horizon):
-                a_np = self.env.action_space.sample()
-                a_t = torch.as_tensor(a_np, device=self.device, dtype=torch.float32)
-                if a_t.dim() == 0:
-                    a_t = a_t.unsqueeze(0)
-                acts.append(a_t)
-            seqs.append(torch.stack(acts, dim=0))
-        return seqs
 
     def _rollout_info_gain(self, window, action_seq, t0_dist=None):
+        """
+        KL Divergence across _latent states_ --> drives agent to dynamic regions
+        “go where stuff changes”
+        latent novelty
+        """
         with torch.no_grad():
             total_kl = 0.0
 
@@ -769,6 +762,7 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
                     total_kl += self._kl_diag_gaussian(mu_p, log_var_p, mu_q, log_var_q).mean().item()
                     mu_q = mu_p
                     log_var_q = log_var_p
+                    z_q = self.model.reparameterize(mu_q, log_var_q)
             else:
                 # TODO: e2c-specific rollout function is outdated
                 mu_q, log_var_q, z_q = self._encode_posterior_e2c(window)
@@ -783,10 +777,59 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
 
             return total_kl / self.plan_horizon    # Average info gain per step
 
+    def rollout_info_gain_decoded_batch(self, window, action_samples, t0_dist):
+        with torch.no_grad(), torch.cuda.amp.autocast():
+            B, T, A = action_samples.shape
+            if t0_dist is None:
+                # hs, mu_q, log_var_q, zs = self.model.encode_posterior(window)
+                mu_q, log_var_q, zs = self.model.encode_posterior(window)
+            else:
+                mu_q, log_var_q, zs = t0_dist
+            total_kl = torch.zeros(B, device=self.device)
+
+            # h = hs[:, -1].unsqueeze(1).repeat(self.model.num_layers, B, 1)
+            h = torch.zeros(self.model.num_layers, B, self.model.deterministic_size, device=self.device)
+            z = zs[:, -1].repeat(B, 1)
+            mu_q = mu_q[:, -1].repeat(B, 1)
+            log_var_q = log_var_q[:, -1].repeat(B, 1)
+
+            for t in range(T):
+                action = action_samples[:, t]
+                # Prior from dynamics
+                h, z_prior, mu_p, log_var_p = self.model.rssm_step(
+                    h, z.unsqueeze(1), action
+                )
+                if self.obj_fun == 'maxdyn':
+                    # Encourage dynamics change
+                    total_kl += self._kl_diag_gaussian(mu_p, log_var_p, mu_q, log_var_q).mean().item()
+                    mu_q = mu_p
+                    log_var_q = log_var_p
+                    z_prior = self.model.reparameterize(mu_q, log_var_q)
+                else:
+                    # Decode prior to observation space
+                    if self.model.output_uncertainty:
+                        x_pred, x_pred_uncertainty = self.model.decoder(z_prior)
+                    else:
+                        x_pred = self.model.decoder(z_prior)
+
+                    # Posterior from updated observation window
+                    enc = self.model.encoder(x_pred)
+                    # stats = self.model.post(torch.cat([enc, h[-1]], dim=-1))
+                    stats = self.model.post(enc)
+                    mu_post, log_var_post = stats.chunk(2, dim=-1)
+
+                    # expected information gain - KL(q || p)
+                    # total_kl += self._kl_diag_gaussian(mu_post, log_var_post, mu_p, log_var_p).mean(dim=-1)
+                    # TODO: try doing KLD over t0 z, instead of t_prev
+                    total_kl += self._kl_diag_gaussian(mu_q, log_var_q, mu_p, log_var_p).mean(dim=-1)
+
+                    # update belief
+                    z = self.model.reparameterize(mu_post, log_var_post)
+
+            return total_kl / T # Average info gain per step
     
     def _sample_cem(self, frame_buffer):
         # Initialize CEM distribution
-        # TODO: Ayush: we can actually CEM plan over a longer time horizon than pred_length, if we wanted
         mu = self.init_control  # (plan_horizon, action_size)
         sigma = self.sigma      # (plan_horizon, action_size)
         act_low = torch.as_tensor(self.env.action_space.low, device=self.device, dtype=torch.float32)
@@ -800,26 +843,24 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
             act_high *= 1.5
         for _ in range(self.cem_iters):
             costs = torch.zeros(self.num_action_samples, device=self.device)
-            action_samples = torch.zeros((self.num_action_samples, self.plan_horizon, mu.shape[1]), device=self.device)
-
             # Sample action sequences from current distribution
-            for k in range(self.num_action_samples):
-                a_t = torch.normal(mu, sigma)
+            action_samples = torch.normal(mu.unsqueeze(0), sigma.unsqueeze(0)).expand(self.num_action_samples, -1, -1)
+            # Clip to action space bounds
+            action_samples = torch.clamp(action_samples, act_low, act_high)
 
-                # Clip to action space bounds
-                action_samples[k] = torch.clamp(
-                    a_t, 
-                    act_low, 
-                    act_high
-                )
             
             # Evaluate information gain for each sequence
             # frames = [f.to(self.device) for f in frame_buffer[-self.past_length:]]
             # window = self._frames_to_tensor(frame_buffer)
             window = torch.stack(frame_buffer[-self.past_length:], dim=0).unsqueeze(0).to(self.device)
-            mu_q, log_var_q, z_q = self.model.encode_posterior(window)
-            for k, action_seq in enumerate(action_samples):
-                costs[k] = self._rollout_info_gain(window, action_seq, t0_dist=(mu_q, log_var_q))
+            mu_prior, log_var_prior, z_prior = self.model.encode_posterior(window)
+            # hs, mu_prior, log_var_prior, z_prior = self.model.encode_posterior(window)
+            # for k, action_seq in enumerate(action_samples):
+            #     # costs[k] = self._rollout_info_gain(window, action_seq, t0_dist=(mu_q, log_var_q))
+            #     costs[k] = self._rollout_info_gain_decoded(window, action_seq, t0_dist=(hs, mu_prior, log_var_prior, z_prior))
+            # costs = self.rollout_info_gain_decoded_batch(window, action_samples, t0_dist=(hs, mu_prior, log_var_prior, z_prior))
+            costs = self.rollout_info_gain_decoded_batch(window, action_samples, t0_dist=(mu_prior, log_var_prior, z_prior))
+
             
             # Select elite sequences
             num_elites = max(1, int(self.elite_frac * self.num_action_samples))
@@ -833,15 +874,7 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
             mu = self.alpha * mu + (1 - self.alpha) * new_mu
             sigma = torch.nan_to_num(self.alpha * sigma + (1 - self.alpha) * new_sigma, nan=self.sigma_min)
             sigma = torch.clamp(sigma, min=self.sigma_min)
-            
-        # Prepare final action sequences to return
-        # TODO: Ayush: should we even be updating init_control and sigma like this? or just reinitialize to 0 every time?
-        #       Jared: The optimal ontrol would be dependent on time and state, so there may be no point in updating?
-        # last_val = self.init_control[-1].clone()
-        # self.init_control[:-1] = mu[1:].clone()
-        # self.init_control[-1] = last_val
-        # self.sigma[:-1] = sigma[1:].clone()
-        # self.sigma[-1] = sigma[-1].clone()
+
         return mu, costs
     
     def _select_information_action(self, frame_buffer):
