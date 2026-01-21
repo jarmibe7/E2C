@@ -379,7 +379,7 @@ class Evaluator():
             curr_img = process_image(env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1)
 
             # Action: reuse trainer.collect_rollouts logic
-            if closed_loop_policy == 'informative' or 'maxdyn':
+            if closed_loop_policy in ['informative', 'maxdyn']:
                 trainer._init_cem_mu_sig()
                 mu, costs = trainer._sample_cem(frame_buffer[-past_len:]) # pred_len, act_size
                 action_seq = mu.clone()

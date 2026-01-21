@@ -295,7 +295,7 @@ if __name__ == "__main__":
     print('*** STARTING ***\n')
     # Load config, make run path, and choose torch device
     # ---------- CONFIG HERE ----------
-    config_name = 'state_rep_push_v0'
+    config_name = 'state_rep_mountaincar_v0'
     # ---------- CONFIG HERE ----------
     if 'state_rep' not in config_name:
         raise ValueError('Must use state representation model config!')
