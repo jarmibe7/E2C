@@ -36,8 +36,8 @@ train:
   eval: True                 # Whether to eval model performance immediately after training
   plot_freq: 10000           # Frequency to update the plot, in timesteps
   train_ratio: 0.9           # Ratio of dataset to use for training
-  load_path: # runs/push/2026-01-19_14-14-30             # Path to load model from (for resuming training or eval only)    
-  eval_only: False           # Whether to only eval the model without training
+  load_path: runs/push/2026-01-20_19-03-07             # Path to load model from (for resuming training or eval only)    
+  eval_only: True           # Whether to only eval the model without training
 # Policy settings for training closed loop
 closed_loop: 
   closed_loop: True                 # Whether to use closed loop training

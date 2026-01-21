@@ -211,7 +211,6 @@ class Evaluator():
             obs, _, terminated, truncated, _ = env.step(env_act)
             next_img_true = process_image(env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1)
             state_true = get_env_state(env, obs, self.dataset_name)
-            breakpoint()    # TODO: Action seq for random diff len than info.
 
             # Model forward pass
             with torch.no_grad():
@@ -288,21 +287,21 @@ class Evaluator():
                 frame_buffer = [process_image(env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1) for _ in range(past_len)]
 
 
-        ##### DEBUG #####
-        num_debug_frames = 5
-        debug_frames = x_recon_next[:num_debug_frames]  # list of [C,H,W] tensors
+        # ##### DEBUG #####
+        # num_debug_frames = 5
+        # debug_frames = x_recon_next[:num_debug_frames]  # list of [C,H,W] tensors
 
-        fig, axes = plt.subplots(1, len(debug_frames), figsize=(15, 3), dpi=150)
-        for i, frame in enumerate(debug_frames):
-            img = frame.permute(1, 2, 0).cpu().numpy()  # [C,H,W] -> [H,W,C]
-            img = (img - img.min()) / (img.max() - img.min() + 1e-8)  # normalize to [0,1]
-            axes[i].imshow(img)
-            axes[i].axis('off')
-            axes[i].set_title(f"Step {i}")
+        # fig, axes = plt.subplots(1, len(debug_frames), figsize=(15, 3), dpi=150)
+        # for i, frame in enumerate(debug_frames):
+        #     img = frame.permute(1, 2, 0).cpu().numpy()  # [C,H,W] -> [H,W,C]
+        #     img = (img - img.min()) / (img.max() - img.min() + 1e-8)  # normalize to [0,1]
+        #     axes[i].imshow(img)
+        #     axes[i].axis('off')
+        #     axes[i].set_title(f"Step {i}")
 
-        plt.tight_layout()
-        fig.savefig("debug.png")
-        ##### DEBUG #####
+        # plt.tight_layout()
+        # fig.savefig("debug.png")
+        # ##### DEBUG #####
 
 
         # Convert to arrays for boxplot
