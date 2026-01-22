@@ -40,22 +40,26 @@ class Plotter():
         self.plot_freq = plot_freq
         self.plot_history = None
         self.fig = None
-        self.colors = ['blue', 'orange', 'green', 'red', 'purple', 'black']
+        self.colors = ['blue', 'orange', 'green', 'red', 'purple', 'black', 'pink']
+        self.plot_history = {}
+
+    def log_value(self, key, value):
+        # Log value in plot history
+        if key not in self.plot_history:
+                self.plot_history[key] = []
+        self.plot_history[key].append(value)
+        return
 
     def log(self, lr):
         """
         Update live training plot logs, and plot at frequency self.plot_freq
         """
         # Create plot history dictionary if none exists
-        self.num_steps += 1
-        if self.plot_history is None:
-            self.plot_history = {}
-            for key in lr.keys():
-                self.plot_history[key] = []
+        self.num_steps += 1            
 
         # Update plot history arrays
         for key in lr.keys():
-            self.plot_history[key].append(lr[key])
+            self.log_value(key, lr[key])
 
         # Replot
         if self.num_steps % self.plot_freq == 0: self.plot()

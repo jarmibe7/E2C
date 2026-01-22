@@ -321,8 +321,8 @@ class ClosedLoopRandomTrainer(BaseTrainer):
             )
 
         # Initialize environment
-        # disp = Display(visible=0, size=(480, 480))
-        # disp.start()
+        disp = Display(visible=0, size=(480, 480))
+        disp.start()
         env_name = config['train']['dataset'].split('_')[0]
         if env_name in meta_world_envs:
             self.env = gym.make('Meta-World/MT1', env_name=name_to_env[env_name], render_mode='rgb_array', camera_name='corner')
@@ -390,6 +390,7 @@ class ClosedLoopRandomTrainer(BaseTrainer):
         act_buffer = []
         idx = 0
         
+        max_rollout_reward = 0.0
         while idx < self.num_rollout_steps:
             # Render current frame
             curr_img = process_image(self.env.render(), self.evaluator.dataset_name).squeeze(0).permute(2, 0, 1)
@@ -403,6 +404,7 @@ class ClosedLoopRandomTrainer(BaseTrainer):
                 env_act = int(env_act.item())
             act_buffer.append(act)
             next_obs, rew, done, _, _ = self.env.step(env_act)
+            max_rollout_reward = max(rew, max_rollout_reward)
 
             # If done reset env, otherwise add sample to dataset
             if done:
@@ -437,6 +439,7 @@ class ClosedLoopRandomTrainer(BaseTrainer):
                         done = done
                     )
                     idx += 1
+        self.plotter.log_value('Max Rollout Reward', max_rollout_reward)
         self.model.train()
 
     def train(self, epoch):
@@ -885,6 +888,7 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
         act_buffer = []
         idx = 0
         
+        max_rollout_reward = 0.0
         while idx < self.num_rollout_steps:
             self._init_cem_mu_sig()
             curr_img = process_image(self.env.render(), self.evaluator.dataset_name).squeeze(0).permute(2, 0, 1)
@@ -911,6 +915,7 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
                 env_act = env_act.item()
             act_buffer.append(act)
             next_obs, rew, done, _, _ = self.env.step(env_act)
+            max_rollout_reward = max(rew, max_rollout_reward)
 
             if done:
                 obs, _ = self.env.reset()
@@ -944,6 +949,7 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
                         done = done
                     )
                     idx += 1
+        self.plotter.log_value('Max Rollout Reward', max_rollout_reward)
         self.model.train()
     
 class ClosedLoopRewardTrainer(ClosedLoopInformativeTrainer):

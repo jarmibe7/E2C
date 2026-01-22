@@ -30,7 +30,7 @@ train:
   dataset: push_1k      # Which dataset to use for training (in data/)
   batch_size: 128
   num_epochs: 500
-  device: cuda:2             # cpu | cuda:0 | cuda:1 | cuda:2
+  device: cuda:0             # cpu | cuda:0 | cuda:1 | cuda:2
   render: False              # Whether to render live interactive training plot, or simply save after training is finished
   save: True                 # Whether to save final trained model and training plot
   eval: True                 # Whether to eval model performance immediately after training
@@ -41,12 +41,12 @@ train:
 # Policy settings for training closed loop
 closed_loop: 
   closed_loop: True                 # Whether to use closed loop training
-  policy: informative                    # What type of policy to use: conv | random | uncertainty | informative
+  policy: random                    # What type of policy to use: conv | random | uncertainty | informative
   epochs_warmup: 1                  # Number of epochs to train on random actions before informative training
   num_rollout_steps: 50           # Number of timesteps to collect in a rollout
   plan_horizon: 12                   # Planning horizon for CEM MPC
   num_batches: 100                    # Number of batches to train on per gradient update
-  buffer_capacity: 2000             # Replay buffer capacity - keeping it small just to debug
+  buffer_capacity: 200             # Replay buffer capacity - keeping it small just to debug
   samples: 30                      # Number of action sequences to sample for MPC
   elite_frac: 0.1                   # Fraction of action sequences to use as elites for CEM
   iters: 3                          # Number of CEM iterations

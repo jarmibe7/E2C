@@ -5,6 +5,9 @@ Main training script for E2C
 
 Authors: Jared Berry, Ayush Gaggar
 """
+# import os
+# os.environ["DISPLAY"] = ":99" 
+# os.environ["MUJOCO_GL"] = "glfw"
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
