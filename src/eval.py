@@ -118,7 +118,7 @@ class Evaluator():
     """
     Class for evaluating model performance on a test set.
     """
-    def __init__(self, model, test_dataset, batch_size, device, dataset_name):
+    def __init__(self, model, test_dataset, batch_size, device, dataset_name, num_epochs=None):
         # Set model to eval mode
         self.model = model
         self.test_dataset = test_dataset
@@ -126,6 +126,8 @@ class Evaluator():
         # Params
         self.batch_size = batch_size
         self.device = device
+        # self.num_epochs = num_epochs
+        # if self.num_epochs is not None: self.epoch_idx = 0
 
         if 'particle_grav' in dataset_name: self.dataset_latent_func = self.eval_four_var_latent
         elif 'cartpole' in dataset_name: self.dataset_latent_func = self.eval_four_var_latent
@@ -133,6 +135,30 @@ class Evaluator():
         else: self.dataset_latent_func = self.eval_four_var_latent
             
         self.dataset_name = dataset_name
+
+        # Load state rep model
+        try:
+            sr_run_path = PROJECT_ROOT / 'runs' / self.dataset_name.split('_')[0] / 'state_rep' / 'trained2'
+            with open(sr_run_path / f'config.yaml', "r") as f:
+                sr_config = yaml.safe_load(f)
+            self.sr_model = StateRepresentationModel(
+                state_size=sr_config['train']['state_size'],
+                conv_params=sr_config['conv'],
+                device=device
+            )
+            sr_model_path = sr_run_path / 'model.pt'
+            self.sr_model.load_state_dict(torch.load(sr_model_path))
+            self.sr_model.to(device)
+            self.sr_model.eval()
+            self.epoch_list = []
+            self.epoch_imm_mean = []
+            self.epoch_imm_std = []
+            self.epoch_cum_mean = []
+            self.epoch_cum_std = []
+            self.use_state_rep = True
+        except:
+            print('State rep model not detected, will not run state rep eval!')
+            self.use_state_rep = False
 
     def eval(self, run_path, vid_max_frames=50):
         self.model.eval()
@@ -144,7 +170,7 @@ class Evaluator():
         self.eval_traj(run_path, max_frames=vid_max_frames)
         # self.eval_latent(run_path)
 
-    def eval_state_rep(self, trainer, run_path, max_steps=25, closed_loop=True):
+    def eval_state_rep(self, trainer, run_path, max_steps=25, closed_loop=True, epoch=None):
         """
         Use a pretrained state representation model to evaluate prediction errors
 
@@ -155,20 +181,9 @@ class Evaluator():
             closed_loop: If True, feed ground-truth observations back into the model window.
                          If False, feed the model's predicted next frame (open-loop rollout).
         """
-        # Load state rep model
-        sr_run_path = PROJECT_ROOT / 'runs' / self.dataset_name.split('_')[0] / 'state_rep' / 'trained2'
-        device = trainer.device
-        with open(sr_run_path / f'config.yaml', "r") as f:
-            sr_config = yaml.safe_load(f)
-        sr_model = StateRepresentationModel(
-            state_size=sr_config['train']['state_size'],
-            conv_params=sr_config['conv'],
-            device=device
-        )
-        sr_model_path = sr_run_path / 'model.pt'
-        sr_model.load_state_dict(torch.load(sr_model_path))
-        sr_model.to(device)
+        if not self.use_state_rep: return [], []
 
+        device = trainer.device
         model = trainer.model
         env = trainer.env
         past_len = model.past_length if hasattr(model, 'past_length') else 3
@@ -180,7 +195,6 @@ class Evaluator():
             closed_loop_policy = 'random'
 
         model.eval()
-        sr_model.eval()
         obs, _ = env.reset()
 
         frame_buffer = []   # frames used as model input window
@@ -234,7 +248,7 @@ class Evaluator():
             with torch.no_grad():
                 # Immediate error
                 s_true_t1 = torch.as_tensor(state_true)
-                s_pred_t1 = sr_model(x_recon_next[0].unsqueeze(0).to(device))['state_pred'].squeeze(0).detach().cpu()
+                s_pred_t1 = self.sr_model(x_recon_next[0].unsqueeze(0).to(device))['state_pred'].squeeze(0).detach().cpu()
                 immediate_err = (s_pred_t1 - s_true_t1).abs().squeeze(0).numpy()
                 immediate_state_errors.append(immediate_err)
 
@@ -262,7 +276,7 @@ class Evaluator():
                         obs_k, _, _, _, _ = env.step(action_seq[k].cpu().numpy())
 
                     s_true_k = torch.as_tensor(get_env_state(env, obs_k, self.dataset_name))
-                    s_pred_k = sr_model(x_recon_next[k].unsqueeze(0).to(device))['state_pred'].squeeze(0).detach().cpu()
+                    s_pred_k = self.sr_model(x_recon_next[k].unsqueeze(0).to(device))['state_pred'].squeeze(0).detach().cpu()
                     cum_err += (s_pred_k - s_true_k).abs().squeeze(0).numpy()
 
                 cum_err = (cum_err / pred_len)
@@ -304,27 +318,81 @@ class Evaluator():
         # ##### DEBUG #####
 
 
-        # Convert to arrays for boxplot
+        # Convert to arrays
         immediate_arr = np.stack(immediate_state_errors, axis=0)   # [num_steps, state_dim]
         cumulative_arr = np.stack(cumulative_state_errors, axis=0) # [num_steps, state_dim]
         state_dim = immediate_arr.shape[1]
 
-        # Boxplot per state dimension
-        fig, axes = plt.subplots(1, 2, figsize=(12, 5), dpi=150, tight_layout=True)
+        # If epoch not given, use violin plot
+        if epoch is not None:
+            self.epoch_list.append(epoch)
+            # Immediate
+            imm_flat = immediate_arr.reshape(-1)
+            self.epoch_imm_mean.append(imm_flat.mean())
+            self.epoch_imm_std.append(imm_flat.std())
 
-        axes[0].boxplot([immediate_arr[:, i] for i in range(state_dim)], patch_artist=True)
-        axes[0].set_xticklabels([f"Dim {i}" for i in range(state_dim)], rotation=45)
-        axes[0].set_title("Immediate (1-step) Prediction Error per Dimension")
-        axes[0].set_ylabel("Absolute Error")
-        axes[0].grid(True)
+            # Cumulative
+            cum_flat = cumulative_arr.reshape(-1)
+            self.epoch_cum_mean.append(cum_flat.mean())
+            self.epoch_cum_std.append(cum_flat.std())
 
-        axes[1].boxplot([cumulative_arr[:, i] for i in range(state_dim)], patch_artist=True)
-        axes[1].set_xticklabels([f"Dim {i}" for i in range(state_dim)], rotation=45)
-        axes[1].set_title(f"Cumulative ({pred_len}-step) Prediction Error per Dimension")
-        axes[1].set_ylabel("Absolute Error")
-        axes[1].grid(True)
+            fig, ax = plt.subplots(figsize=(6, 4), dpi=150, tight_layout=True)
 
-        fig_name = f'sr_error_fig.png'
+            epochs = np.array(self.epoch_list)
+
+            imm_mean = np.array(self.epoch_imm_mean)
+            imm_std  = np.array(self.epoch_imm_std)
+            cum_mean = np.array(self.epoch_cum_mean)
+            cum_std  = np.array(self.epoch_cum_std)
+
+            ax.plot(epochs, imm_mean, label="Immediate (1-step)")
+            ax.fill_between(
+                epochs,
+                imm_mean - imm_std,
+                imm_mean + imm_std,
+                alpha=0.2
+            )
+
+            ax.plot(epochs, cum_mean, label=f"Cumulative ({pred_len}-step)")
+            ax.fill_between(
+                epochs,
+                cum_mean - cum_std,
+                cum_mean + cum_std,
+                alpha=0.2
+            )
+
+            ax.set_xlabel("Epoch")
+            ax.set_ylabel("Mean Absolute Error")
+            ax.set_title("Prediction Error with Uncertainty Over Training")
+            ax.grid(True)
+            ax.legend()
+            fig_name = f'sr_error_training.png'
+        else:
+            fig, axes = plt.subplots(1, 2, figsize=(12, 5), dpi=150, tight_layout=True)
+
+            _ = axes[0].violinplot(
+                [immediate_arr[:, i] for i in range(state_dim)], 
+                showmeans=False,
+                showmedians=True,
+                showextrema=True
+            )
+            axes[0].set_xticklabels([f"Dim {i}" for i in range(state_dim)], rotation=45)
+            axes[0].set_title("Immediate (1-step) Prediction Error per Dimension")
+            axes[0].set_ylabel("Absolute Error")
+            axes[0].grid(True)
+
+            axes[1].violinplot(
+                [cumulative_arr[:, i] for i in range(state_dim)], 
+                showmeans=False,
+                showmedians=True,
+                showextrema=True
+            )
+            axes[1].set_xticklabels([f"Dim {i}" for i in range(state_dim)], rotation=45)
+            axes[1].set_title(f"Cumulative ({pred_len}-step) Prediction Error per Dimension")
+            axes[1].set_ylabel("Absolute Error")
+            axes[1].grid(True)
+            fig_name = f'sr_error_violin.png'
+
         try:
             filepath = run_path / fig_name
             print(f'\nSaved state rep error figure to {filepath}')
@@ -334,7 +402,8 @@ class Evaluator():
             print('\nException occured, saved state rep error figure to current directory')
             fig.savefig(fig_name)
         plt.close(fig)
-        return
+        
+        return immediate_arr, cumulative_arr
 
     def visualize_planner(self, trainer, run_path, max_steps=25, closed_loop=True):
         """

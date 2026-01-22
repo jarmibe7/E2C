@@ -16,12 +16,13 @@ from tqdm import tqdm
 from pyvirtualdisplay import Display
 import time
 import os
+import metaworld
 os.environ['MUJOCO_GL'] = 'egl'
 
 from src.model.loss import E2CLoss, UncertaintyE2CLoss, RSSMLoss
 from src.eval import Plotter, Evaluator
 from src.replay_buffer import ReplayBuffer
-from src.data_gen.gen_fetch import name_to_env, env_to_aspace, process_image
+from src.data_gen.gen_fetch import name_to_env, env_to_aspace, process_image, meta_world_envs, metaworld_cam_name
 
 # Paths
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -102,7 +103,8 @@ class BaseTrainer():
                 test_dataset,
                 batch_size=config['train']['batch_size'], 
                 device=config['train']['device'],
-                dataset_name=config['train']['dataset']
+                dataset_name=config['train']['dataset'],
+                num_epochs=config['train']['num_epochs']
             )
         self.curr_epoch = 0
     
@@ -115,7 +117,7 @@ class BaseTrainer():
     def learn(self, *args, **kwargs):
         pass
 
-    def evaluate(self, run_path):
+    def evaluate(self, run_path, epoch=None):
         """
         Evaluate model and output figures to run directory
         """
@@ -123,6 +125,7 @@ class BaseTrainer():
         self.model.eval()
         # self.evaluator.eval(run_path)
         self.evaluator.visualize_planner(self, run_path, max_steps=50, closed_loop=True)
+        _, _ = self.evaluator.eval_state_rep(self, run_path, max_steps=50, closed_loop=True, epoch=epoch)
 
     def save(self, config_save, run_path):
         """
@@ -321,8 +324,11 @@ class ClosedLoopRandomTrainer(BaseTrainer):
         # disp = Display(visible=0, size=(480, 480))
         # disp.start()
         env_name = config['train']['dataset'].split('_')[0]
-        self.env = gym.make(name_to_env[env_name], render_mode="rgb_array")
-        self.env_continuous = (env_to_aspace[env_name] == 'continuous')
+        if env_name in meta_world_envs:
+            self.env = gym.make('Meta-World/MT1', env_name=name_to_env[env_name], render_mode='rgb_array', camera_name='corner')
+        else:
+            self.env = gym.make(name_to_env[env_name], render_mode="rgb_array")
+        self.env_continuous = (env_to_aspace.get(env_name, 'continuous') == 'continuous')
         self.past_length = config['trans']['past_length']
         self.obj_fun = config['closed_loop'].get('policy', None)
 
@@ -487,7 +493,7 @@ class ClosedLoopRandomTrainer(BaseTrainer):
             if (epoch + 1) % 50 == 0:
                 # show model video every 50 epochs
                 self.model.eval()
-                if self.config['train']['eval']: self.evaluate(self.config['run_path'])
+                if self.config['train']['eval']: self.evaluate(self.config['run_path'], epoch=epoch+1)
                 self.model.train()
             
         pbar.close()

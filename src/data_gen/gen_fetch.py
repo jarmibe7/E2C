@@ -193,8 +193,7 @@ def main():
                 frame_buffer.pop(0)
                 act_buffer.pop(0)
             next_image = process_image(env.render(), env_name)
-            debug_render(next_image)
-            # breakpoint()
+            # debug_render(next_image)
             frame_buffer.append(next_image)
 
             # Add obs history buffer to dataset
