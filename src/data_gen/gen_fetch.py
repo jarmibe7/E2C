@@ -20,19 +20,21 @@ from tqdm import tqdm
 import yaml
 from datetime import datetime
 from PIL import Image
+import metaworld
 
 from src.utils import set_seed, format_time
 import gymnasium_robotics
 gym.register_envs(gymnasium_robotics)
 
 # Parameters for dataset
-env_name = 'mountaincar'                                           # Gym environment name
+env_name = 'button'                                           # Gym environment name
 dataset_size = int(1e3)                                     # Number of samples: (img, next_img, control) tuple
 OUTPUT_NAME = env_name + f'_{dataset_size // 1000}k'        # Output name of dataset
 image_shape = (64, 64, 3)                                   # Downsampled image shape
 past_length = 3                                             # Number of previous observations to use for training
 pred_length = 3                                             # Number of timesteps to predict in the future
 new_dt = None                                               # Desired new timestep in seconds
+metaworld_cam_name = 'corner'                        # Camera angle for metaworld environments: corner | behindGripper         
 # ---------------------------------
 # Only modify XML if new_dt is set
 if new_dt is not None:
@@ -54,8 +56,25 @@ DATA_PATH = PROJECT_ROOT / "data"
 
 seed = 42
 set_seed(seed)
-name_to_env = {'reacher': 'Reacher-v5', 'cartpole': 'CartPole-v1', 'push': 'FetchPushDense-v4', 'pointmaze': 'PointMaze_UMaze-v3', 'antmaze': 'AntMaze_UMaze-v5', 'mountaincar': 'MountainCarContinuous-v0'}
-env_to_aspace = {'reacher': 'continuous', 'cartpole': 'discrete', 'push': 'continuous', 'pointmaze': 'continuous', 'antmaze': 'continuous', 'mountaincar': 'continuous'}
+meta_world_envs = ['shelf', 'sweep', 'assembly', 'test', 'plate', 'button', 'door', 'drawer', 'window']
+name_to_env = {'reacher': 'Reacher-v5', 
+                'cartpole': 'CartPole-v1', 
+                'push': 'FetchPushDense-v4', 
+                'pointmaze': 'PointMaze_UMaze-v3', 
+                'antmaze': 'AntMaze_UMaze-v5', 
+                'mountaincar': 'MountainCarContinuous-v0',
+                'shelf': 'shelf-place-v3', 
+                'sweep': 'sweep-into-v3', 
+                'assembly': 'assembly-v3', 
+                'plate': 'plate-slide-v3',
+                'button': 'button-press-v3',
+                'door': 'door-close-v3',
+                'drawer': 'drawer-close-v3',
+                'window': 'window-open-v3'
+               }
+env_to_aspace = {'reacher': 'continuous', 'cartpole': 'discrete', 'push': 'continuous', 
+                 'pointmaze': 'continuous', 'antmaze': 'continuous', 'mountaincar': 'continuous',
+                 'shelf': 'continuous', 'sweep': 'continuous', 'assembly': 'continuous', 'test': 'continuous'}
 
 def update_dataset_metadata(dataset_dir, dataset_name, params):
     """
@@ -84,25 +103,36 @@ def update_dataset_metadata(dataset_dir, dataset_name, params):
     with open(metadata_path, "w") as f:
         yaml.safe_dump(metadata, f, sort_keys=False)
 
+def debug_render(img):
+    if len(img.shape) == 4: plt.imshow(img[0])
+    else: plt.imshow(img)
+    plt.savefig('debug.png')
+
 def process_image(image, dataset_name, image_shape=image_shape):
     """
     Image processing
     """
+    dataset_name = dataset_name.split('_')[0]
     if 'cartpole' in dataset_name: image = image[50:350, 100:400]   # Zoom on cartpole
     elif 'reacher' in dataset_name: image = image[100:-50, 100:-100]  # Zoom on reacher
     elif 'push' in dataset_name: image = image[100:-50, :-100, :]     # Zoom on robot # TODO: need to zoom on push?
     elif 'pointmaze' in dataset_name: image = image[110:-70, 20:-20, :]
     elif 'antmaze' in dataset_name: image = image[110:-70, 20:-20, :]
+    elif dataset_name in meta_world_envs and metaworld_cam_name == 'corner': 
+        image = np.rot90(image, k=2)    # Metaworld corner images are upside down
+    elif dataset_name in meta_world_envs and metaworld_cam_name == 'behindGripper':
+        pass 
     else: pass
+
     image = torch.from_numpy(image.copy()).permute(2, 0, 1)  # Get image tensor into (C, H, W)
 
     # Image processing
     normalized = image.unsqueeze(0).float() / 255.0 # Normalize to [0,1]
-    if 'mountaincar' in dataset_name:
-        image_resized = torchvision.transforms.Resize(size=image_shape[0:2], antialias=True)(normalized)
-        image_resized = image_resized.clamp(0.0, 1.0)
-    else:
-        image_resized = torchvision.transforms.functional.resize(normalized, image_shape[0:2], interpolation=torchvision.transforms.functional.InterpolationMode.NEAREST)   # Downscaling
+    # if 'mountaincar' in dataset_name:
+    image_resized = torchvision.transforms.Resize(size=image_shape[0:2], antialias=True)(normalized)
+    image_resized = image_resized.clamp(0.0, 1.0)
+    # else:
+        # image_resized = torchvision.transforms.functional.resize(normalized, image_shape[0:2], interpolation=torchvision.transforms.functional.InterpolationMode.NEAREST)   # Downscaling
     
     return image_resized.permute(0, 2, 3, 1) # Permute back to raw shape
 
@@ -123,21 +153,22 @@ def main():
     if not env_name == 'cartpole' and new_xml_filename is not None:
         env = gym.make(name_to_env[env_name], render_mode="rgb_array",
                     xml_file=new_xml_filename if new_xml_filename else None)
+    elif env_name in meta_world_envs:
+        # Camera mode: https://metaworld.farama.org/rendering/rendering/
+        env = gym.make('Meta-World/MT1', env_name=name_to_env[env_name], render_mode='rgb_array', camera_name=metaworld_cam_name)
     else:
         env = gym.make(name_to_env[env_name], render_mode="rgb_array")
     obs, _ = env.reset()
-    continuous = (env_to_aspace[env_name] == 'continuous')
+    continuous = (env_to_aspace.get(env_name, 'continuous') == 'continuous')
     prev_img = torch.zeros((dataset_size, past_length, *image_shape))
     next_img = torch.zeros((dataset_size, pred_length, *image_shape))
     if continuous: control = torch.zeros((dataset_size, pred_length, env.action_space.shape[0]))
     else: control = torch.zeros((dataset_size, pred_length, 1))     # Discrete action space
-    done = False
+    terminated = False; truncated = False
     
     # Collect n_samples trajectories
     idx = 0
     pbar = tqdm(total=dataset_size)
-    plt.imshow(process_image(env.render(), env_name).squeeze().numpy())
-    plt.savefig('test.png')
     while idx < dataset_size:
         if len(frame_buffer) == 0:
             frame_buffer.append(process_image(env.render(), env_name))
@@ -145,12 +176,12 @@ def main():
         # Sample and take action
         act = env.action_space.sample()
         act_buffer.append(act)
-        next_obs, rew, done, _, _ = env.step(act)
+        next_obs, rew, terminated, truncated, _ = env.step(act)
 
         # If done reset env, otherwise add sample to dataset
-        if done:
+        if terminated or truncated:
             obs, _ = env.reset()
-            done = False
+            terminated = False; truncated = False
             frame_buffer = []
             act_buffer = []
             continue
@@ -160,6 +191,7 @@ def main():
                 frame_buffer.pop(0)
                 act_buffer.pop(0)
             next_image = process_image(env.render(), env_name)
+            # debug_render(next_image)
             frame_buffer.append(next_image)
 
             # Add obs history buffer to dataset
