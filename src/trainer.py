@@ -778,6 +778,7 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
 
     def rollout_info_gain_decoded_batch(self, window, action_samples, t0_dist):
         with torch.no_grad(), torch.cuda.amp.autocast():
+            # TODO: Compare how learning architecture has changed, since mcar performace has decreased.
             B, T, A = action_samples.shape
             if t0_dist is None:
                 mu_q, log_var_q, zs = self.model.encode_posterior(window)
@@ -786,19 +787,27 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
             total_kl = torch.zeros(B, device=self.device)
 
             h = torch.zeros(self.model.num_layers, B, self.model.deterministic_size, device=self.device)
-            z = zs[:, -1].repeat(B, 1)
-            mu_q = mu_q[:, -1].repeat(B, 1)
-            log_var_q = log_var_q[:, -1].repeat(B, 1)
+            # z = zs[:, -1].repeat(B, 1)
+            # mu_q = mu_q[:, -1].repeat(B, 1)
+            # log_var_q = log_var_q[:, -1].repeat(B, 1)
+            # old way, preserves past_length of zs?
+            # z = zs.repeat(B, 1, 1)
+            # mu_q = mu_q.repeat(B, 1, 1)
+            # log_var_q = log_var_q.repeat(B, 1, 1)
+            mu_t0 = mu_q[:, -1] # take last timestep
+            log_var_t0 = log_var_q[:, -1] # take last timestep
 
             for t in range(T):
                 action = action_samples[:, t]
                 # Prior from dynamics
                 h, z_prior, mu_p, log_var_p = self.model.rssm_step(
-                    h, z.unsqueeze(1), action
+                    # h, z.unsqueeze(1), action
+                    h, zs, action
                 )
                 if self.obj_fun == 'maxdyn':
                     # Encourage dynamics change
-                    total_kl += self._kl_diag_gaussian(mu_p, log_var_p, mu_q, log_var_q).mean().item()
+                    total_kl += self._kl_diag_gaussian(mu_p, log_var_p, mu_t0, log_var_t0).mean().item()
+                    # total_kl += self._kl_diag_gaussian(mu_p, log_var_p, mu_q, log_var_q).mean().item()
                     mu_q = mu_p
                     log_var_q = log_var_p
                     z_prior = self.model.reparameterize(mu_q, log_var_q)
@@ -809,18 +818,26 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
                     else:
                         x_pred = self.model.decoder(z_prior)
 
-                    # Posterior from updated observation window
-                    enc = self.model.encoder(x_pred)
-                    stats = self.model.post(enc)
-                    mu_post, log_var_post = stats.chunk(2, dim=-1)
+                    if self.past_length > 1:
+                        window_frames = window[:, 1:]   # drop first frame
+                        window = torch.cat([window_frames, x_pred.unsqueeze(1).detach()], dim=1)
+                    else:
+                        window = x_pred.detach()  # past_length==1, just use pred image
+                    mu_post, log_var_post, zs = self.model.encode_posterior(window)
+
+                    # # Posterior from updated observation window
+                    # enc = self.model.encoder(x_pred)
+                    # stats = self.model.post(enc)
+                    # mu_post, log_var_post = stats.chunk(2, dim=-1)
 
                     # expected information gain - KL(q || p)
                     # total_kl += self._kl_diag_gaussian(mu_post, log_var_post, mu_p, log_var_p).mean(dim=-1)
                     # TODO: try doing KLD over t0 z, instead of t_prev
-                    total_kl += self._kl_diag_gaussian(mu_q, log_var_q, mu_p, log_var_p).mean(dim=-1)
+                    # total_kl += self._kl_diag_gaussian(mu_q, log_var_q, mu_p, log_var_p).mean(dim=-1)
+                    total_kl += self._kl_diag_gaussian(mu_post[:, -1], log_var_post[:, -1], mu_p, log_var_p).mean(dim=-1)
 
                     # update belief
-                    z = self.model.reparameterize(mu_post, log_var_post)
+                    zs = self.model.reparameterize(mu_post, log_var_post)
 
             return total_kl / T # Average info gain per step
     
@@ -845,7 +862,8 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
             action_samples = torch.clamp(action_samples, act_low, act_high)
             
             # Evaluate information gain for each sequence
-            window = torch.stack(frame_buffer[-self.past_length:], dim=0).unsqueeze(0).to(self.device)
+            # window = torch.stack(frame_buffer[-self.past_length:], dim=0).unsqueeze(0).to(self.device)
+            window = torch.stack(frame_buffer[-self.past_length:], dim=0).unsqueeze(0).to(self.device).repeat(self.num_action_samples, 1, 1, 1, 1)
             mu_prior, log_var_prior, z_prior = self.model.encode_posterior(window)
             costs = self.rollout_info_gain_decoded_batch(window, action_samples, t0_dist=(mu_prior, log_var_prior, z_prior))
 

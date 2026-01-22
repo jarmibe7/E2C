@@ -47,7 +47,8 @@ def main():
     )
     args = parser.parse_args()
     config_name = args.config
-    with open(CONFIG_PATH / f'{config_name}.yaml', "r") as f:
+    config_file = config_name if config_name.endswith('.yaml') else f"{config_name}.yaml"
+    with open(CONFIG_PATH / config_file, "r") as f:
         config = yaml.safe_load(f)
     config['config_name'] = config_name
     config_save = copy.deepcopy(config)
