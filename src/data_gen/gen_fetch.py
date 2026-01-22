@@ -29,7 +29,7 @@ import gymnasium_robotics
 gym.register_envs(gymnasium_robotics)
 
 # Parameters for dataset
-env_name = 'window'                                           # Gym environment name
+env_name = 'plate'                                           # Gym environment name
 dataset_size = int(1e3)                                     # Number of samples: (img, next_img, control) tuple
 OUTPUT_NAME = env_name + f'_{dataset_size // 1000}k'        # Output name of dataset
 image_shape = (64, 64, 3)                                   # Downsampled image shape
@@ -70,7 +70,7 @@ name_to_env = {'reacher': 'Reacher-v5',
                 'assembly': 'assembly-v3', 
                 'plate': 'plate-slide-v3',
                 'button': 'button-press-v3',
-                'door': 'door-open-v3',
+                'door': 'door-close-v3',
                 'drawer': 'drawer-close-v3',
                 'window': 'window-open-v3'
                }
@@ -166,7 +166,7 @@ def main():
     next_img = torch.zeros((dataset_size, pred_length, *image_shape))
     if continuous: control = torch.zeros((dataset_size, pred_length, env.action_space.shape[0]))
     else: control = torch.zeros((dataset_size, pred_length, 1))     # Discrete action space
-    done = False
+    terminated = False; truncated = False
     
     # Collect n_samples trajectories
     idx = 0
@@ -178,12 +178,12 @@ def main():
         # Sample and take action
         act = env.action_space.sample()
         act_buffer.append(act)
-        next_obs, rew, done, _, _ = env.step(act)
+        next_obs, rew, terminated, truncated, _ = env.step(act)
 
         # If done reset env, otherwise add sample to dataset
-        if done:
+        if terminated or truncated:
             obs, _ = env.reset()
-            done = False
+            terminated = False; truncated = False
             frame_buffer = []
             act_buffer = []
             continue
@@ -193,7 +193,7 @@ def main():
                 frame_buffer.pop(0)
                 act_buffer.pop(0)
             next_image = process_image(env.render(), env_name)
-            # debug_render(next_image)
+            debug_render(next_image)
             # breakpoint()
             frame_buffer.append(next_image)
 
