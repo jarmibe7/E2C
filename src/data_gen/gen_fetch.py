@@ -28,7 +28,7 @@ gym.register_envs(gymnasium_robotics)
 
 # Parameters for dataset
 env_name = 'button'                                           # Gym environment name
-dataset_size = int(1e3)                                     # Number of samples: (img, next_img, control) tuple
+dataset_size = int(2e3)                                     # Number of samples: (img, next_img, control) tuple
 OUTPUT_NAME = env_name + f'_{dataset_size // 1000}k'        # Output name of dataset
 image_shape = (64, 64, 3)                                   # Downsampled image shape
 past_length = 3                                             # Number of previous observations to use for training
@@ -155,6 +155,7 @@ def main():
                     xml_file=new_xml_filename if new_xml_filename else None)
     elif env_name in meta_world_envs:
         # Camera mode: https://metaworld.farama.org/rendering/rendering/
+        meta_ts = 4
         env = gym.make('Meta-World/MT1', env_name=name_to_env[env_name], render_mode='rgb_array', camera_name=metaworld_cam_name)
     else:
         env = gym.make(name_to_env[env_name], render_mode="rgb_array")
@@ -176,7 +177,11 @@ def main():
         # Sample and take action
         act = env.action_space.sample()
         act_buffer.append(act)
-        next_obs, rew, terminated, truncated, _ = env.step(act)
+        if env_name in meta_world_envs:
+            for _ in range(meta_ts):
+                next_obs, rew, terminated, truncated, _ = env.step(act)
+        else:
+            next_obs, rew, terminated, truncated, _ = env.step(act)
 
         # If done reset env, otherwise add sample to dataset
         if terminated or truncated:

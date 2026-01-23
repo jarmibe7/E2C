@@ -144,7 +144,7 @@ class RSSME2C(nn.Module):
         
         h = torch.zeros(self.num_layers, x.size(0), self.deterministic_size, device=self.device)
         # Take last belief state as start
-        # z = zs[:, -1]
+        z = zs[:, -1]
 
         # reconstruct current observation
         if self.output_uncertainty:
@@ -162,10 +162,10 @@ class RSSME2C(nn.Module):
         window = x
         for t in range(x_next.size(1)):
             # prior
-            # h, z_prior, mu_p, log_var_p = self.rssm_step(h, z.unsqueeze(1), u[:, t])
+            h, z_prior, mu_p, log_var_p = self.rssm_step(h, z.unsqueeze(1), u[:, t])
             
             # old way (takes into account past_length)
-            h, z_prior, mu_p, log_var_p = self.rssm_step(h, zs, u[:, t])
+            # h, z_prior, mu_p, log_var_p = self.rssm_step(h, zs, u[:, t])
             mu_priors.append(mu_p)
             log_var_priors.append(log_var_p)
 

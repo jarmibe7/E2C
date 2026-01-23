@@ -194,7 +194,11 @@ class Evaluator():
             #     env_act = int(env_act.item())
 
             # Step env
-            _, rew, done, _, _ = env.step(env_act)
+            for _ in range(trainer.meta_ts):
+                _, rew, done, trunc, _ = env.step(env_act)
+                if trunc:
+                    print("forced to reset", step_idx)
+                    obs, _ = env.reset()
             env_rew.append(rew)
             next_img_true = process_image(env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1)
 
@@ -211,8 +215,8 @@ class Evaluator():
                 x_recon_next = []
                 for act in action_seq:
                     act_batch = act.view(1, -1).to(trainer.device)
-                    # h, z_prior, mu_p, log_var_p = trainer.model.rssm_step(h, z.unsqueeze(1), act_batch)
-                    h, z_prior, mu_p, log_var_p = trainer.model.rssm_step(h, zs, act_batch)
+                    h, z_prior, mu_p, log_var_p = trainer.model.rssm_step(h, z.unsqueeze(1), act_batch)
+                    # h, z_prior, mu_p, log_var_p = trainer.model.rssm_step(h, zs, act_batch)
                     # Decode prior to observation space
                     if self.model.output_uncertainty:
                         x_pred, x_pred_uncertainty = trainer.model.decoder(z_prior)
@@ -226,6 +230,7 @@ class Evaluator():
                     else:
                         window = x_pred.detach()  # past_length==1, just use pred image
                     mu_q, log_var_q, zs = self.model.encode_posterior(window)
+                    z = zs[:, -1]
 
                     # Posterior from updated observation window
                     # enc = trainer.model.encoder(x_pred)
@@ -246,10 +251,10 @@ class Evaluator():
             recon_frames.append(x_recon.detach().cpu())
             pred_sequences.append(x_recon_next)
 
-            if (step_idx + 1) % trainer.config['closed_loop']['num_rollout_steps'] == 0:
-                env.reset()
-                done = False
-                frame_buffer = [process_image(env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1) for _ in range(past_len)]
+            # if (step_idx + 1) % trainer.config['closed_loop']['num_rollout_steps'] == 0:
+            #     env.reset()
+            #     done = False
+            #     frame_buffer = [process_image(env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1) for _ in range(past_len)]
 
         # Build visualization grid: 2 rows, (pred_len + 1) columns
         cols = pred_len + 1

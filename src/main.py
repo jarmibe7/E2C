@@ -20,7 +20,7 @@ from src.model.rssm import RSSME2C
 from src.dataset import E2CDataset
 from src.utils import set_seed, anim_frames, format_time
 from src.model.policy import ConvPolicy
-from src.trainer import E2CPretrainer, RSSMPretrainer, ClosedLoopPolicyTrainer, ClosedLoopRandomTrainer, ClosedLoopInformativeTrainer
+from src.trainer import E2CPretrainer, RSSMPretrainer, ClosedLoopPolicyTrainer, ClosedLoopRandomTrainer, ClosedLoopInformativeTrainer, ClosedLoopHardwareTrainer
 import argparse
 
 # Set random seed globally
@@ -60,6 +60,7 @@ def main():
     device = torch.device(config['train']['device'])
 
     # Make E2CDataset object
+    # TODO: Make temp dataset for hardware experiments
     print(f"Loading dataset: {config['train']['dataset']}\n")
     dataset = E2CDataset(config)
     config['vae']['in_image_shape'] = dataset.in_img_shape
@@ -120,6 +121,8 @@ def main():
             trainer = ClosedLoopInformativeTrainer(dataset, model, config, device)
         elif policy_type == 'maxdyn':
             trainer = ClosedLoopInformativeTrainer(dataset, model, config, device)
+        elif policy_type == "hardware":
+            trainer = ClosedLoopHardwareTrainer(dataset, model, config, device)
         elif policy_type == "direct_reward":
             # TODO: Implement shallow reward-based closed loop trainer
             pass
