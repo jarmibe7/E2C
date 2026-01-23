@@ -310,6 +310,8 @@ class ClosedLoopRandomTrainer(BaseTrainer):
         self.num_batches = config['closed_loop']['num_batches']
         self.pred_length = config['trans'].get('pred_length', 3)   # How long to predict ahead in network
         self.plan_horizon = config['closed_loop'].get('plan_horizon', self.pred_length)   # How long to imagine rollouts
+        self.hardware = config['closed_loop'].get('hardware', False)
+        self.meta_ts = 1
         # assert self.num_rollout_steps > self.batch_size, 'Steps per rollout must be > batch_size!'
         assert self.batch_size < config['closed_loop']['buffer_capacity'], 'Batch size must be < buffer capacity!'
         if self.num_rollout_steps <= self.num_batches * self.batch_size:
@@ -324,10 +326,15 @@ class ClosedLoopRandomTrainer(BaseTrainer):
         disp = Display(visible=0, size=(480, 480))
         disp.start()
         env_name = config['train']['dataset'].split('_')[0]
+        self.env_name = env_name
         if env_name in meta_world_envs:
-            self.env = gym.make('Meta-World/MT1', env_name=name_to_env[env_name], render_mode='rgb_array', camera_name='corner')
+            self.env = gym.make('Meta-World/MT1', env_name=name_to_env[env_name], render_mode='rgb_array', camera_name='corner', max_episode_steps=2000)
+            print("made steps 2000?")
+            if config['train']['dataset'].split('_')[1][:-1] == '2':
+                self.meta_ts = 4
         else:
-            self.env = gym.make(name_to_env[env_name], render_mode="rgb_array")
+            self.env = gym.make(name_to_env[env_name], render_mode="rgb_array") if not self.hardware else HardwareEnv()
+            self.meta_ts = 1
         self.env_continuous = (env_to_aspace.get(env_name, 'continuous') == 'continuous')
         self.past_length = config['trans']['past_length']
         self.obj_fun = config['closed_loop'].get('policy', None)
@@ -398,48 +405,56 @@ class ClosedLoopRandomTrainer(BaseTrainer):
                 frame_buffer.append(curr_img)
 
             # Sample and take action
-            act = torch.from_numpy(self.env.action_space.sample()).to(self.device)
-            env_act = act.cpu().detach().numpy()
+            if self.env_name in meta_world_envs:
+                act = np.random.uniform(
+                            low=5.0 * self.env.action_space.low,
+                            high=5.0 * self.env.action_space.high,
+                            size=self.env.action_space.shape).astype(self.env.action_space.dtype)
+            else:
+                act = self.env.action_space.sample()
+            env_act = act
             if not self.env_continuous:
                 env_act = int(env_act.item())
-            act_buffer.append(act)
-            next_obs, rew, done, _, _ = self.env.step(env_act)
-            max_rollout_reward = max(rew, max_rollout_reward)
+            act_buffer.append(torch.from_numpy(act).to(self.device))
+            for _ in range(self.meta_ts):
+                next_obs, rew, done, _, _ = self.env.step(env_act)
+                max_rollout_reward = max(rew, max_rollout_reward)
 
             # If done reset env, otherwise add sample to dataset
-            if done:
-                obs, _ = self.env.reset()
-                done = False
-                frame_buffer = []
-                act_buffer = []
-                continue
-            else:
-                # Slide frame obs history frame buffer to next image
-                if len(frame_buffer) == self.past_length + self.pred_length:
-                    frame_buffer.pop(0)
-                    act_buffer.pop(0)
-                next_image = process_image(self.env.render(), self.evaluator.dataset_name).squeeze(0).permute(2, 0, 1)
-                frame_buffer.append(next_image)
+            # if done:
+            #     obs, _ = self.env.reset()
+            #     done = False
+            #     frame_buffer = []
+            #     act_buffer = []
+            #     continue
+            # else:
+            # Slide frame obs history frame buffer to next image
+            if len(frame_buffer) == self.past_length + self.pred_length:
+                frame_buffer.pop(0)
+                act_buffer.pop(0)
+            next_image = process_image(self.env.render(), self.evaluator.dataset_name).squeeze(0).permute(2, 0, 1)
+            frame_buffer.append(next_image)
 
-                # Add sample to replay buffer
-                if len(frame_buffer) == self.past_length + self.pred_length:
-                    # Compute action and img windows
-                    if self.env_continuous:
-                        act_add = torch.stack(
-                            [a for a in act_buffer[self.past_length-1:self.past_length-1+self.pred_length]]
-                        )
-                    else:
-                        act_add = act_buffer[self.past_length-1:self.past_length-1+self.pred_length].unsqueeze(-1)
-
-                    self.replay_buffer.add(
-                        img = torch.stack(frame_buffer[0:self.past_length], dim=0),
-                        action = act_add,
-                        reward = rew,
-                        next_img = torch.stack(frame_buffer[self.past_length:(self.past_length+self.pred_length)], dim=0),
-                        done = done
+            # Add sample to replay buffer
+            if len(frame_buffer) == self.past_length + self.pred_length:
+                # Compute action and img windows
+                if self.env_continuous:
+                    act_add = torch.stack(
+                        [a for a in act_buffer[self.past_length-1:self.past_length-1+self.pred_length]]
                     )
-                    idx += 1
-        self.plotter.log_value('Max Rollout Reward', max_rollout_reward)
+                else:
+                    act_add = act_buffer[self.past_length-1:self.past_length-1+self.pred_length].unsqueeze(-1)
+
+                self.replay_buffer.add(
+                    img = torch.stack(frame_buffer[0:self.past_length], dim=0),
+                    action = act_add,
+                    reward = rew,
+                    next_img = torch.stack(frame_buffer[self.past_length:(self.past_length+self.pred_length)], dim=0),
+                    done = done
+                )
+                idx += 1
+        
+        self.plotter.log_value("Max Rollout Reward", max_rollout_reward)
         self.model.train()
 
     def train(self, epoch):
@@ -720,6 +735,9 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
             self.init_control = torch.stack([torch.from_numpy(self.env.action_space.sample()).to(self.device) for _ in range(self.plan_horizon)], dim=0)
         elif cfg_val == 'random':
             self.init_control = torch.stack([torch.from_numpy(self.env.action_space.sample()).to(self.device) for _ in range(self.plan_horizon)], dim=0)
+            if self.env_name in meta_world_envs:
+                # Scale to reasonable range for Meta-World envs
+                self.init_control *= 2.5
         else:
             self.init_control = torch.zeros(self.plan_horizon, len(self.env.action_space.sample()), device=self.device)
 
@@ -787,6 +805,7 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
 
     def rollout_info_gain_decoded_batch(self, window, action_samples, t0_dist):
         with torch.no_grad(), torch.cuda.amp.autocast():
+            # TODO: Compare how learning architecture has changed, since mcar performace has decreased.
             B, T, A = action_samples.shape
             if t0_dist is None:
                 mu_q, log_var_q, zs = self.model.encode_posterior(window)
@@ -795,18 +814,30 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
             total_kl = torch.zeros(B, device=self.device)
 
             h = torch.zeros(self.model.num_layers, B, self.model.deterministic_size, device=self.device)
-            z = zs[:, -1].repeat(B, 1)
-            mu_q = mu_q[:, -1].repeat(B, 1)
-            log_var_q = log_var_q[:, -1].repeat(B, 1)
+            # only need to repeat if don't broadcast window across batch
+            # z = zs[:, -1].repeat(B, 1)
+            # mu_q = mu_q[:, -1].repeat(B, 1)
+            # log_var_q = log_var_q[:, -1].repeat(B, 1)
+            # old way, preserves past_length of zs?
+            # z = zs.repeat(B, 1, 1)
+            # mu_q = mu_q.repeat(B, 1, 1)
+            # log_var_q = log_var_q.repeat(B, 1, 1)
+            z = zs[:, -1] # take last timestep
+            mu_q = mu_q[:, -1] # take last timestep
+            log_var_q = log_var_q[:, -1] # take last timestep
+            # mu_t0 = mu_q[:, -1] # take last timestep
+            # log_var_t0 = log_var_q[:, -1] # take last timestep
 
             for t in range(T):
                 action = action_samples[:, t]
                 # Prior from dynamics
                 h, z_prior, mu_p, log_var_p = self.model.rssm_step(
                     h, z.unsqueeze(1), action
+                    # h, zs, action
                 )
                 if self.obj_fun == 'maxdyn':
                     # Encourage dynamics change
+                    # total_kl += self._kl_diag_gaussian(mu_p, log_var_p, mu_t0, log_var_t0).mean().item()
                     total_kl += self._kl_diag_gaussian(mu_p, log_var_p, mu_q, log_var_q).mean().item()
                     mu_q = mu_p
                     log_var_q = log_var_p
@@ -818,20 +849,35 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
                     else:
                         x_pred = self.model.decoder(z_prior)
 
-                    # Posterior from updated observation window
-                    enc = self.model.encoder(x_pred)
-                    stats = self.model.post(enc)
-                    mu_post, log_var_post = stats.chunk(2, dim=-1)
+                    if self.past_length > 1:
+                        window_frames = window[:, 1:]   # drop first frame
+                        window = torch.cat([window_frames, x_pred.unsqueeze(1).detach()], dim=1)
+                    else:
+                        window = x_pred.detach()  # past_length==1, just use pred image
+                    mu_post, log_var_post, zs = self.model.encode_posterior(window)
+                    z = zs[:, -1]
+                    mu_post = mu_post[:, -1]
+                    log_var_post = log_var_post[:, -1]
+
+                    # # Posterior from updated observation window
+                    # enc = self.model.encoder(x_pred)
+                    # stats = self.model.post(enc)
+                    # mu_post, log_var_post = stats.chunk(2, dim=-1)
 
                     # expected information gain - KL(q || p)
                     # total_kl += self._kl_diag_gaussian(mu_post, log_var_post, mu_p, log_var_p).mean(dim=-1)
                     # TODO: try doing KLD over t0 z, instead of t_prev
-                    total_kl += self._kl_diag_gaussian(mu_q, log_var_q, mu_p, log_var_p).mean(dim=-1)
+                    # total_kl += self._kl_diag_gaussian(mu_q, log_var_q, mu_p, log_var_p).mean(dim=-1)
+                    total_kl += self._kl_diag_gaussian(mu_post, log_var_post, mu_q, log_var_q).mean(dim=-1)
+                    
+                    # to compare over t0, comment this out
+                    mu_q = mu_post
+                    log_var_q = log_var_post
 
-                    # update belief
-                    z = self.model.reparameterize(mu_post, log_var_post)
+                    # update belief <-- happens inherently with model.encode_posterior
+                    # zs = self.model.reparameterize(mu_post, log_var_post)
 
-            return total_kl / T # Average info gain per step
+            return total_kl # / T # Average info gain per step
     
     def _sample_cem(self, frame_buffer):
         # Initialize CEM distribution
@@ -846,6 +892,9 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
         elif self.evaluator.dataset_name == 'mountaincar':
             act_low *= 1.5
             act_high *= 1.5
+        elif self.env_name in meta_world_envs:
+            act_low *= 5.0
+            act_high *= 5.0
         for _ in range(self.cem_iters):
             costs = torch.zeros(self.num_action_samples, device=self.device)
             # Sample action sequences from current distribution
@@ -854,7 +903,8 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
             action_samples = torch.clamp(action_samples, act_low, act_high)
             
             # Evaluate information gain for each sequence
-            window = torch.stack(frame_buffer[-self.past_length:], dim=0).unsqueeze(0).to(self.device)
+            # window = torch.stack(frame_buffer[-self.past_length:], dim=0).unsqueeze(0).to(self.device)
+            window = torch.stack(frame_buffer[-self.past_length:], dim=0).unsqueeze(0).to(self.device).repeat(self.num_action_samples, 1, 1, 1, 1)
             mu_prior, log_var_prior, z_prior = self.model.encode_posterior(window)
             costs = self.rollout_info_gain_decoded_batch(window, action_samples, t0_dist=(mu_prior, log_var_prior, z_prior))
 
@@ -891,7 +941,10 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
         max_rollout_reward = 0.0
         while idx < self.num_rollout_steps:
             self._init_cem_mu_sig()
-            curr_img = process_image(self.env.render(), self.evaluator.dataset_name).squeeze(0).permute(2, 0, 1)
+            if self.hardware:
+                curr_image = self.env.process_image(self.env.render()).permute(2, 0, 1)
+            else:
+                curr_img = process_image(self.env.render(), self.evaluator.dataset_name).squeeze(0).permute(2, 0, 1)
             if len(frame_buffer) == 0:
                 frame_buffer.append(curr_img)
 
@@ -914,43 +967,63 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
                 env_act = torch.round(act)
                 env_act = env_act.item()
             act_buffer.append(act)
-            next_obs, rew, done, _, _ = self.env.step(env_act)
-            max_rollout_reward = max(rew, max_rollout_reward)
+            for _ in range(self.meta_ts):
+                next_obs, rew, done, _, _ = self.env.step(env_act)
+                max_rollout_reward = max(max_rollout_reward, rew)
 
-            if done:
-                obs, _ = self.env.reset()
-                done = False
-                frame_buffer = []
-                act_buffer = []
-                continue
-            else:
-                # Slide frame obs history frame buffer to next image
-                if len(frame_buffer) == self.past_length + self.pred_length:
-                    frame_buffer.pop(0)
-                    act_buffer.pop(0)
-                next_image = process_image(self.env.render(), self.evaluator.dataset_name).squeeze(0).permute(2, 0, 1)
-                frame_buffer.append(next_image)
+            # all tasks are continuous now, no need to reset
+            # if done:
+            #     obs, _ = self.env.reset()
+            #     done = False
+            #     frame_buffer = []
+            #     act_buffer = []
+            #     continue
+            # else:
+            # Slide frame obs history frame buffer to next image
+            if len(frame_buffer) == self.past_length + self.pred_length:
+                frame_buffer.pop(0)
+                act_buffer.pop(0)
+            next_image = process_image(self.env.render(), self.evaluator.dataset_name).squeeze(0).permute(2, 0, 1)
+            frame_buffer.append(next_image)
 
-                # Add sample to replay buffer
-                if len(frame_buffer) == self.past_length + self.pred_length:
-                    # Compute action and img windows
-                    if self.env_continuous:
-                        act_add = torch.stack(
-                            [a for a in act_buffer[self.past_length-1:self.past_length-1+self.pred_length]]
-                        )
-                    else:
-                        act_add = act_buffer[self.past_length-1:self.past_length-1+self.pred_length].unsqueeze(-1)
-
-                    self.replay_buffer.add(
-                        img = torch.stack(frame_buffer[0:self.past_length], dim=0),
-                        action = act_add,
-                        reward = rew,
-                        next_img = torch.stack(frame_buffer[self.past_length:(self.past_length+self.pred_length)], dim=0),
-                        done = done
+            # Add sample to replay buffer
+            if len(frame_buffer) == self.past_length + self.pred_length:
+                # Compute action and img windows
+                if self.env_continuous:
+                    act_add = torch.stack(
+                        [a for a in act_buffer[self.past_length-1:self.past_length-1+self.pred_length]]
                     )
-                    idx += 1
-        self.plotter.log_value('Max Rollout Reward', max_rollout_reward)
+                else:
+                    act_add = act_buffer[self.past_length-1:self.past_length-1+self.pred_length].unsqueeze(-1)
+
+                self.replay_buffer.add(
+                    img = torch.stack(frame_buffer[0:self.past_length], dim=0),
+                    action = act_add,
+                    reward = rew,
+                    next_img = torch.stack(frame_buffer[self.past_length:(self.past_length+self.pred_length)], dim=0),
+                    done = done
+                )
+                idx += 1
+
+        self.plotter.log_value("Max Rollout Reward", max_rollout_reward)
         self.model.train()
+
+class ClosedLoopHardwareTrainer(ClosedLoopInformativeTrainer):
+    """
+    Closed-loop trainer for real-world hardware experiments that selects actions
+    by maximizing expected information gain over candidate action sequences.
+    """
+    def __init__(self, dataset, model, config, device):
+        super().__init__(dataset, model, config, device)
+    
+    def reward_planner(self, frame_buffer):
+        pass
+    
+    def collect_rollouts(self, epoch):
+        """
+        Collect observations and save them to replay buffer
+        """
+        pass
     
 class ClosedLoopRewardTrainer(ClosedLoopInformativeTrainer):
     """
@@ -1027,3 +1100,130 @@ class ClosedLoopRewardTrainer(ClosedLoopInformativeTrainer):
                     idx += 1
         self.model.train()
 
+class HardwareEnv():
+    """
+    Placeholder class for real-world hardware environments on the Sawyer robot.
+    The action space will always only be continuous, with controls being [dx, dy] of the end-effector.
+    The lag between sending actions over git would be horrendous, since we won't be able to execute in real time at high frequency.
+    """
+    def __init__(self):
+        import rospy
+        from my_sawyer.msg import RelativeMove
+        from sensor_msgs.msg import JointState
+        from intera_core_msgs.msg import EndpointState
+        from std_srvs.srv import Trigger
+        import cv2
+
+        device = '/dev/video0'
+        self.camera = cv2.VideoCapture(device)
+        self.save_path = "/media/ayush/Extreme Pro/sawyer_images/"  #TODO: change this path as needed
+        self.idx = 0
+        if not self.camera.isOpened():
+            # TODO: add functionality to loop/try again
+            print("Failed to open camera device: {}".format(device))
+            self.camera.release()
+        
+        if not rospy.core.is_initialized():
+            rospy.init_node('hardware_env', anonymous=True)
+        
+        # Action space: [dx, dy] end-effector velocity - force only 2D planar
+        self.action_space = type('', (), {})()
+        self.action_space.low = np.array([-0.1, -0.1])
+        self.action_space.high = np.array([0.1, 0.1])
+        self.action_space.sample = lambda: np.random.uniform(self.action_space.low, self.action_space.high)
+        
+        # Publishers/Subscribers
+        self.rel_move_pub = rospy.Publisher('/relative_move', RelativeMove, queue_size=1)
+        self.last_joint_state = None
+        self.last_endpoint_state = None
+        
+        rospy.Subscriber('/robot/joint_states', JointState, self._joint_state_callback)
+        rospy.Subscriber('/robot/limb/right/endpoint_state', EndpointState, self._endpoint_state_callback)
+        
+        # Reset service proxy
+        rospy.wait_for_service('/ee_vel_ctrl/reset', timeout=10.0)
+        self.reset_service = rospy.ServiceProxy('/ee_vel_ctrl/reset', Trigger)
+        
+        # Wait for first state message
+        rospy.sleep(0.5)
+    
+    def _joint_state_callback(self, msg):
+        self.last_joint_state = msg
+    
+    def _endpoint_state_callback(self, msg):
+        self.last_endpoint_state = msg
+
+    def process_image(self, image):
+        """Process raw image from camera if needed. [H, W, C] -> [64, 64, C] tensor"""
+        # image = image[100:-100, 200:-200, :]  # Crop if needed
+        processed = cv2.resize(image, (64, 64))
+        processed = torch.as_tensor(processed.astype(np.float32) / 255.0, dtype=torch.float32)
+        return processed.permute(1, 2, 0)
+    
+    def reset(self):
+        """Reset arm to home position"""
+        try:
+            self.reset_service()
+            rospy.sleep(3.0)  # Wait for arm to settle
+            obs = self._get_observation()
+            return obs, {}
+        except rospy.ServiceException as e:
+            rospy.logerr(f"Reset service call failed: {e}")
+            raise
+
+    def render(self):
+        """Read from camera, and save to path."""
+        ret, frame = self.camera.read()
+        if ret:
+            filename = self.save_path + "captured_image_{:04d}.jpg".format(self.idx)
+            ok = cv2.imwrite(filename, frame)
+            if ok:
+                print("Image saved to {}".format(filename))
+                self.idx += 1
+            else:
+                print("Failed to write to {}".format(filename))
+        else:
+            print("Failed to read frame from camera")
+    
+    def step(self, action):
+        """
+        Publish action to /relative_move topic.
+        Args:
+            action: [dx, dy] end-effector velocity
+        Returns:
+            obs, reward, done, truncated, info
+        """        
+        # Clamp action to bounds
+        action = np.clip(action, self.action_space.low, self.action_space.high)
+        
+        # Create and publish RelativeMove command
+        rel_move = RelativeMove()
+        rel_move.dx = float(action[0])
+        rel_move.dy = float(action[1])
+        self.rel_move_pub.publish(rel_move)
+        
+        # Small delay to let command execute
+        rospy.sleep(0.1)
+        
+        # Get observation (you can modify this to extract meaningful state)
+        obs = self._get_observation()
+        
+        # Placeholder return values
+        reward = 0.0
+        done = False
+        truncated = False
+        info = {}
+        
+        return obs, reward, done, truncated, info
+    
+    def _get_observation(self):
+        """
+        Extract observation from robot state.
+        Could be endpoint pose, joint angles, or rendered image.
+        """
+        if self.last_endpoint_state is not None:
+            # Return endpoint position as observation
+            pose = self.last_endpoint_state.pose.position
+            return np.array([pose.x, pose.y, pose.z])
+        else:
+            return np.zeros(3)

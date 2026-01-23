@@ -148,20 +148,24 @@ class RSSME2C(nn.Module):
 
         # reconstruct current observation
         if self.output_uncertainty:
-            x_recon, x_recon_uncertainty = self.decoder(z)
+            x_recon, x_recon_uncertainty = self.decoder(zs[:, -1])
         else:
-            x_recon = self.decoder(z)
+            x_recon = self.decoder(zs[:, -1])
 
         # Iterate over pred_length
         mu_priors, log_var_priors = [], []
-        mu_posts, log_var_posts = [], []
+        mu_posts, log_var_posts = [], [] # old version - i added encoded t0 mu in post? why...
         x_preds = []
         if self.output_uncertainty:
             x_pred_uncerts = []
 
+        window = x
         for t in range(x_next.size(1)):
             # prior
             h, z_prior, mu_p, log_var_p = self.rssm_step(h, z.unsqueeze(1), u[:, t])
+            
+            # old way (takes into account past_length)
+            # h, z_prior, mu_p, log_var_p = self.rssm_step(h, zs, u[:, t])
             mu_priors.append(mu_p)
             log_var_priors.append(log_var_p)
 
@@ -173,14 +177,21 @@ class RSSME2C(nn.Module):
                 x_pred = self.decoder(z_prior)
             x_preds.append(x_pred)
 
-            # posterior update using real next frame
-            enc = self.encoder(x_next[:, t])
-            stats = self.post(enc)
-            mu_q, log_var_q = stats.chunk(2, dim=-1)
-            z = self.reparameterize(mu_q, log_var_q)
+            if self.past_length > 1:
+                window_frames = window[:, 1:]   # drop first frame
+                window = torch.cat([window_frames, x_pred.unsqueeze(1).detach()], dim=1)
+            else:
+                window = x_pred.detach()  # past_length==1, just use pred image
+            mu_q, log_var_q, zs = self.encode_posterior(window)
 
-            mu_posts.append(mu_q)
-            log_var_posts.append(log_var_q)
+            # # posterior update using real next frame
+            # enc = self.encoder(x_next[:, t])
+            # stats = self.post(enc)
+            # mu_q, log_var_q = stats.chunk(2, dim=-1)
+            # z = self.reparameterize(mu_q, log_var_q)
+
+            mu_posts.append(mu_q[:, -1])
+            log_var_posts.append(log_var_q[:, -1])
 
         # Stack accumulated priors + posteriors
         outputs = {

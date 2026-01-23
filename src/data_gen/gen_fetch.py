@@ -21,16 +21,14 @@ import yaml
 from datetime import datetime
 from PIL import Image
 import metaworld
-# from metaworld.envs.sawyer_shelf_place_v3 import SawyerShelfPlaceEnvV3
-# from metaworld.envs.sawyer_sweep_into_goal_v3 import SawyerSweepIntoGoalEnvV3 
 
 from src.utils import set_seed, format_time
 import gymnasium_robotics
 gym.register_envs(gymnasium_robotics)
 
 # Parameters for dataset
-env_name = 'plate'                                           # Gym environment name
-dataset_size = int(1e3)                                     # Number of samples: (img, next_img, control) tuple
+env_name = 'button'                                           # Gym environment name
+dataset_size = int(2e3)                                     # Number of samples: (img, next_img, control) tuple
 OUTPUT_NAME = env_name + f'_{dataset_size // 1000}k'        # Output name of dataset
 image_shape = (64, 64, 3)                                   # Downsampled image shape
 past_length = 3                                             # Number of previous observations to use for training
@@ -130,11 +128,11 @@ def process_image(image, dataset_name, image_shape=image_shape):
 
     # Image processing
     normalized = image.unsqueeze(0).float() / 255.0 # Normalize to [0,1]
-    if 'mountaincar' in dataset_name:
-        image_resized = torchvision.transforms.Resize(size=image_shape[0:2], antialias=True)(normalized)
-        image_resized = image_resized.clamp(0.0, 1.0)
-    else:
-        image_resized = torchvision.transforms.functional.resize(normalized, image_shape[0:2], interpolation=torchvision.transforms.functional.InterpolationMode.NEAREST)   # Downscaling
+    # if 'mountaincar' in dataset_name:
+    image_resized = torchvision.transforms.Resize(size=image_shape[0:2], antialias=True)(normalized)
+    image_resized = image_resized.clamp(0.0, 1.0)
+    # else:
+        # image_resized = torchvision.transforms.functional.resize(normalized, image_shape[0:2], interpolation=torchvision.transforms.functional.InterpolationMode.NEAREST)   # Downscaling
     
     return image_resized.permute(0, 2, 3, 1) # Permute back to raw shape
 
@@ -157,6 +155,7 @@ def main():
                     xml_file=new_xml_filename if new_xml_filename else None)
     elif env_name in meta_world_envs:
         # Camera mode: https://metaworld.farama.org/rendering/rendering/
+        meta_ts = 4
         env = gym.make('Meta-World/MT1', env_name=name_to_env[env_name], render_mode='rgb_array', camera_name=metaworld_cam_name)
     else:
         env = gym.make(name_to_env[env_name], render_mode="rgb_array")
@@ -178,7 +177,11 @@ def main():
         # Sample and take action
         act = env.action_space.sample()
         act_buffer.append(act)
-        next_obs, rew, terminated, truncated, _ = env.step(act)
+        if env_name in meta_world_envs:
+            for _ in range(meta_ts):
+                next_obs, rew, terminated, truncated, _ = env.step(act)
+        else:
+            next_obs, rew, terminated, truncated, _ = env.step(act)
 
         # If done reset env, otherwise add sample to dataset
         if terminated or truncated:

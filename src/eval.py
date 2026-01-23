@@ -446,7 +446,7 @@ class Evaluator():
             frame_buffer.append(first_img)
 
         step_idx = 0
-        for step_idx in tqdm(range(max_steps), desc="Visualizing Planner timesteps"):
+        for step_idx in range(max_steps): #tqdm(range(max_steps), desc="Visualizing Planner timesteps"):
             # Current frame (ground truth)
             curr_img = process_image(env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1)
 
@@ -466,7 +466,11 @@ class Evaluator():
             #     env_act = int(env_act.item())
 
             # Step env
-            _, rew, done, _, _ = env.step(env_act)
+            for _ in range(trainer.meta_ts):
+                _, rew, done, trunc, _ = env.step(env_act)
+                if trunc:
+                    print("forced to reset", step_idx)
+                    obs, _ = env.reset()
             env_rew.append(rew)
             next_img_true = process_image(env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1)
 
@@ -484,18 +488,28 @@ class Evaluator():
                 for act in action_seq:
                     act_batch = act.view(1, -1).to(trainer.device)
                     h, z_prior, mu_p, log_var_p = trainer.model.rssm_step(h, z.unsqueeze(1), act_batch)
+                    # h, z_prior, mu_p, log_var_p = trainer.model.rssm_step(h, zs, act_batch)
                     # Decode prior to observation space
                     if self.model.output_uncertainty:
                         x_pred, x_pred_uncertainty = trainer.model.decoder(z_prior)
                     else:
                         x_pred = trainer.model.decoder(z_prior)
                     x_recon_next.append(x_pred.detach().cpu())
+                    
+                    if trainer.past_length > 1:
+                        window_frames = window[:, 1:]   # drop first frame
+                        window = torch.cat([window_frames, x_pred.unsqueeze(1).detach()], dim=1)
+                    else:
+                        window = x_pred.detach()  # past_length==1, just use pred image
+                    mu_q, log_var_q, zs = self.model.encode_posterior(window)
+                    z = zs[:, -1]
+
                     # Posterior from updated observation window
-                    enc = trainer.model.encoder(x_pred)
-                    # stats = trainer.model.post(torch.cat([enc, h[-1]], dim=-1))
-                    stats = trainer.model.post(enc)
-                    mu_q, log_var_q = stats.chunk(2, dim=-1)
-                    z = trainer.model.reparameterize(mu_q, log_var_q)
+                    # enc = trainer.model.encoder(x_pred)
+                    # # stats = trainer.model.post(torch.cat([enc, h[-1]], dim=-1))
+                    # stats = trainer.model.post(enc)
+                    # mu_q, log_var_q = stats.chunk(2, dim=-1)
+                    # z = trainer.model.reparameterize(mu_q, log_var_q)
 
             # Feed next frame based on loop type
             next_for_buffer = next_img_true if closed_loop else x_recon_next[-1].detach().cpu()
@@ -509,10 +523,10 @@ class Evaluator():
             recon_frames.append(x_recon.detach().cpu())
             pred_sequences.append(x_recon_next)
 
-            if (step_idx + 1) % trainer.config['closed_loop']['num_rollout_steps'] == 0:
-                env.reset()
-                done = False
-                frame_buffer = [process_image(env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1) for _ in range(past_len)]
+            # if (step_idx + 1) % trainer.config['closed_loop']['num_rollout_steps'] == 0:
+            #     env.reset()
+            #     done = False
+            #     frame_buffer = [process_image(env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1) for _ in range(past_len)]
 
         # Build visualization grid: 2 rows, (pred_len + 1) columns
         cols = pred_len + 1
@@ -559,7 +573,7 @@ class Evaluator():
         vid_name = 'planner_CL_' + closed_loop_policy + f'_{trainer.curr_epoch}.mp4' if closed_loop else 'planner_vis_OL_' + closed_loop_policy + f'_{trainer.curr_epoch}.mp4'
         try:
             filepath = run_path / vid_name
-            print(f'Saved planner visualization to {filepath}\n\n')
+            print(f'Saved planner visualization to {filepath}\n')
             ani.save(filepath, writer=writer)
         except Exception as e:
             print(e)
