@@ -169,14 +169,16 @@ class Evaluator():
         env_rew = []        # env rewards [blind during training]
 
         # Prime buffer with the first observation
-        first_img = process_image(env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1)
+        first_render_raw = env.render()  # numpy array (H, W, C) [0-255]
+        first_img = process_image(first_render_raw, self.dataset_name, downscale=False).squeeze(0).permute(2, 0, 1)
         for _ in range(past_len):
-            frame_buffer.append(first_img)
+            frame_buffer.append(process_image(first_render_raw, self.dataset_name, downscale=True).squeeze(0).permute(2, 0, 1))
 
         step_idx = 0
         for step_idx in range(max_steps): #tqdm(range(max_steps), desc="Visualizing Planner timesteps"):
             # Current frame (ground truth)
-            curr_img = process_image(env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1)
+            curr_render_raw = env.render()  # Store raw render
+            curr_img = process_image(curr_render_raw, self.dataset_name, downscale=False).squeeze(0).permute(2, 0, 1)
 
             # Action: reuse trainer.collect_rollouts logic
             if closed_loop_policy in ['informative', 'maxdyn']:
@@ -200,7 +202,8 @@ class Evaluator():
                     print("forced to reset", step_idx)
                     obs, _ = env.reset()
             env_rew.append(rew)
-            next_img_true = process_image(env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1)
+            next_render_raw = env.render()
+            next_img_true = process_image(next_render_raw, self.dataset_name, downscale=False).squeeze(0).permute(2, 0, 1)
 
             # Model inputs
             with torch.no_grad():
@@ -240,7 +243,7 @@ class Evaluator():
                     # z = trainer.model.reparameterize(mu_q, log_var_q)
 
             # Feed next frame based on loop type
-            next_for_buffer = next_img_true if closed_loop else x_recon_next[-1].detach().cpu()
+            next_for_buffer = process_image(next_render_raw, self.dataset_name, downscale=True).squeeze(0).permute(2, 0, 1) if closed_loop else x_recon_next[-1].detach().cpu()
 
             # Update buffers/logs
             frame_buffer.append(next_for_buffer)
@@ -258,7 +261,7 @@ class Evaluator():
 
         # Build visualization grid: 2 rows, (pred_len + 1) columns
         cols = pred_len + 1
-        fig, ax = plt.subplots(2, cols, figsize=(3 * cols, 10))
+        fig, ax = plt.subplots(2, cols, figsize=(3 * cols, 8))
         ax = np.atleast_2d(ax)
         ax[0, 0].set_title(f"Pred t=0; {plan_obj_vals[0]:.2f}")
         ax[1, 0].set_title(f"True t=0; {env_rew[0]:.2f}")

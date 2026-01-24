@@ -99,6 +99,7 @@ def main():
         config_save['load_path'] = config['run_path']
     else:
         # Load existing model to train from checkpoint
+        load_path = load_path.split("model.pt")[0] if load_path.endswith('model.pt') else load_path
         model_path = load_path + '/model.pt'
         print(f'Loading model from checkpoint: {model_path}\n')
         model.load_state_dict(torch.load(model_path))
@@ -140,7 +141,7 @@ def main():
             print('*** EVAL ONLY ***')
             # trainer.evaluate(config['run_path'])
             # trainer.evaluator.eval_traj(config['run_path'], max_frames=25)
-            trainer.evaluator.visualize_planner(trainer, config['run_path'], max_steps=150, closed_loop=True)
+            trainer.evaluator.visualize_planner(trainer, config['run_path'], max_steps=100, closed_loop=True)
             print('\n*** DONE ***')
             return
     
