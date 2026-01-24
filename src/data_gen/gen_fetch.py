@@ -27,7 +27,7 @@ import gymnasium_robotics
 gym.register_envs(gymnasium_robotics)
 
 # Parameters for dataset
-env_name = 'button'                                           # Gym environment name
+env_name = 'drawer'                                           # Gym environment name
 dataset_size = int(2e3)                                     # Number of samples: (img, next_img, control) tuple
 OUTPUT_NAME = env_name + f'_{dataset_size // 1000}k'        # Output name of dataset
 image_shape = (64, 64, 3)                                   # Downsampled image shape
@@ -69,7 +69,7 @@ name_to_env = {'reacher': 'Reacher-v5',
                 'plate': 'plate-slide-v3',
                 'button': 'button-press-v3',
                 'door': 'door-close-v3',
-                'drawer': 'drawer-close-v3',
+                'drawer': 'drawer-open-v3',
                 'window': 'window-open-v3'
                }
 env_to_aspace = {'reacher': 'continuous', 'cartpole': 'discrete', 'push': 'continuous', 

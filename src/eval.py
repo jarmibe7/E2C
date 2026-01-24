@@ -142,7 +142,7 @@ class Evaluator():
 
         # Load state rep model
         try:
-            sr_run_path = PROJECT_ROOT / 'runs' / self.dataset_name.split('_')[0] / 'state_rep' / 'trained2'
+            sr_run_path = PROJECT_ROOT / 'runs' / self.dataset_name.split('_')[0] / 'state_rep' / 'trained'
             with open(sr_run_path / f'config.yaml', "r") as f:
                 sr_config = yaml.safe_load(f)
             self.sr_model = StateRepresentationModel(
