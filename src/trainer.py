@@ -396,7 +396,7 @@ class ClosedLoopRandomTrainer(BaseTrainer):
         
         while idx < self.num_rollout_steps:
             # Render current frame
-            curr_img = process_image(self.env.render(), self.evaluator.dataset_name).squeeze(0).permute(2, 0, 1)
+            curr_img = process_image(self.env.render(), self.evaluator.dataset_name).permute(2, 0, 1)
             if len(frame_buffer) == 0:
                 frame_buffer.append(curr_img)
 
@@ -427,7 +427,7 @@ class ClosedLoopRandomTrainer(BaseTrainer):
             if len(frame_buffer) == self.past_length + self.pred_length:
                 frame_buffer.pop(0)
                 act_buffer.pop(0)
-            next_image = process_image(self.env.render(), self.evaluator.dataset_name).squeeze(0).permute(2, 0, 1)
+            next_image = process_image(self.env.render(), self.evaluator.dataset_name).permute(2, 0, 1)
             frame_buffer.append(next_image)
 
             # Add sample to replay buffer
@@ -565,7 +565,7 @@ class ClosedLoopPolicyTrainer(BaseTrainer):
         idx = 0
         while idx < self.num_rollout_steps:
             # Render current frame
-            curr_img = process_image(self.env.render(), self.evaluator.dataset_name).squeeze(0).permute(2, 0, 1)
+            curr_img = process_image(self.env.render(), self.evaluator.dataset_name).permute(2, 0, 1)
             if len(frame_buffer) == 0:
                 frame_buffer.append(curr_img)
 
@@ -587,7 +587,7 @@ class ClosedLoopPolicyTrainer(BaseTrainer):
                 if len(frame_buffer) == self.past_length + 1:
                     frame_buffer.pop(0)
                     act_buffer.pop(0)
-                next_image = process_image(self.env.render(), self.evaluator.dataset_name).squeeze(0).permute(2, 0, 1)
+                next_image = process_image(self.env.render(), self.evaluator.dataset_name).permute(2, 0, 1)
                 frame_buffer.append(next_image)
 
                 # Add sample to replay buffer
@@ -938,7 +938,7 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
             if self.hardware:
                 curr_image = self.env.process_image(self.env.render()).permute(2, 0, 1)
             else:
-                curr_img = process_image(self.env.render(), self.evaluator.dataset_name).squeeze(0).permute(2, 0, 1)
+                curr_img = process_image(self.env.render(), self.evaluator.dataset_name).permute(2, 0, 1)
             if len(frame_buffer) == 0:
                 frame_buffer.append(curr_img)
 
@@ -976,7 +976,7 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
             if len(frame_buffer) == self.past_length + self.pred_length:
                 frame_buffer.pop(0)
                 act_buffer.pop(0)
-            next_image = process_image(self.env.render(), self.evaluator.dataset_name).squeeze(0).permute(2, 0, 1)
+            next_image = process_image(self.env.render(), self.evaluator.dataset_name).permute(2, 0, 1)
             frame_buffer.append(next_image)
 
             # Add sample to replay buffer
@@ -1040,7 +1040,7 @@ class ClosedLoopRewardTrainer(ClosedLoopInformativeTrainer):
         
         while idx < self.num_rollout_steps:
             # Render current frame
-            curr_img = process_image(self.env.render(), self.evaluator.dataset_name).squeeze(0).permute(2, 0, 1)
+            curr_img = process_image(self.env.render(), self.evaluator.dataset_name).permute(2, 0, 1)
             if len(frame_buffer) == 0:
                 frame_buffer.append(curr_img)
 
@@ -1068,7 +1068,7 @@ class ClosedLoopRewardTrainer(ClosedLoopInformativeTrainer):
                 if len(frame_buffer) == self.past_length + self.pred_length:
                     frame_buffer.pop(0)
                     act_buffer.pop(0)
-                next_image = process_image(self.env.render(), self.evaluator.dataset_name).squeeze(0).permute(2, 0, 1)
+                next_image = process_image(self.env.render(), self.evaluator.dataset_name).permute(2, 0, 1)
                 frame_buffer.append(next_image)
 
                 # Add sample to replay buffer

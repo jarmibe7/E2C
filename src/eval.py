@@ -170,15 +170,15 @@ class Evaluator():
 
         # Prime buffer with the first observation
         first_render_raw = env.render()  # numpy array (H, W, C) [0-255]
-        first_img = process_image(first_render_raw, self.dataset_name, downscale=False).squeeze(0).permute(2, 0, 1)
+        first_img = process_image(first_render_raw, self.dataset_name, downscale=False).permute(2, 0, 1)
         for _ in range(past_len):
-            frame_buffer.append(process_image(first_render_raw, self.dataset_name, downscale=True).squeeze(0).permute(2, 0, 1))
+            frame_buffer.append(process_image(first_render_raw, self.dataset_name, downscale=True).permute(2, 0, 1))
 
         step_idx = 0
         for step_idx in range(max_steps): #tqdm(range(max_steps), desc="Visualizing Planner timesteps"):
             # Current frame (ground truth)
             curr_render_raw = env.render()  # Store raw render
-            curr_img = process_image(curr_render_raw, self.dataset_name, downscale=False).squeeze(0).permute(2, 0, 1)
+            curr_img = process_image(curr_render_raw, self.dataset_name, downscale=False).permute(2, 0, 1)
 
             # Action: reuse trainer.collect_rollouts logic
             if closed_loop_policy in ['informative', 'maxdyn']:
@@ -203,7 +203,7 @@ class Evaluator():
                     obs, _ = env.reset()
             env_rew.append(rew)
             next_render_raw = env.render()
-            next_img_true = process_image(next_render_raw, self.dataset_name, downscale=False).squeeze(0).permute(2, 0, 1)
+            next_img_true = process_image(next_render_raw, self.dataset_name, downscale=False).permute(2, 0, 1)
 
             # Model inputs
             with torch.no_grad():
@@ -243,7 +243,7 @@ class Evaluator():
                     # z = trainer.model.reparameterize(mu_q, log_var_q)
 
             # Feed next frame based on loop type
-            next_for_buffer = process_image(next_render_raw, self.dataset_name, downscale=True).squeeze(0).permute(2, 0, 1) if closed_loop else x_recon_next[-1].detach().cpu()
+            next_for_buffer = process_image(next_render_raw, self.dataset_name, downscale=True).permute(2, 0, 1) if closed_loop else x_recon_next[-1].detach().cpu()
 
             # Update buffers/logs
             frame_buffer.append(next_for_buffer)

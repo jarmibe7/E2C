@@ -28,7 +28,7 @@ gym.register_envs(gymnasium_robotics)
 
 # Parameters for dataset
 env_name = 'lever'                                           # Gym environment name
-dataset_size = int(2e3)                                     # Number of samples: (img, next_img, control) tuple
+dataset_size = int(1e3)                                     # Number of samples: (img, next_img, control) tuple
 OUTPUT_NAME = env_name + f'_{dataset_size // 1000}k'        # Output name of dataset
 image_shape = (64, 64, 3)                                   # Downsampled image shape
 past_length = 3                                             # Number of previous observations to use for training
@@ -129,7 +129,7 @@ def process_image(image, dataset_name, image_shape=image_shape, downscale=True):
     image = torch.from_numpy(image.copy()).permute(2, 0, 1)  # Get image tensor into (C, H, W)
 
     # Image processing
-    normalized = image.unsqueeze(0).float() / 255.0 # Normalize to [0,1]
+    normalized = image.float() / 255.0 # Normalize to [0,1]
     # if 'mountaincar' in dataset_name:
     if downscale:
         image_resized = torchvision.transforms.Resize(size=image_shape[0:2], antialias=True)(normalized)
@@ -139,7 +139,7 @@ def process_image(image, dataset_name, image_shape=image_shape, downscale=True):
     # else:
         # image_resized = torchvision.transforms.functional.resize(normalized, image_shape[0:2], interpolation=torchvision.transforms.functional.InterpolationMode.NEAREST)   # Downscaling
     
-    return image_resized.permute(0, 2, 3, 1) # Permute back to raw shape
+    return image_resized.permute(1, 2, 0) # Permute back to raw shape
 
 
 def main():
@@ -206,8 +206,8 @@ def main():
 
             # Add obs history buffer to dataset
             if len(frame_buffer) == past_length + pred_length:
-                prev_img[idx] = torch.cat(frame_buffer[0:past_length], dim=0)
-                next_img[idx] = torch.cat(frame_buffer[past_length:(past_length+pred_length)], dim=0)
+                prev_img[idx] = torch.stack(frame_buffer[0:past_length], dim=0)
+                next_img[idx] = torch.stack(frame_buffer[past_length:(past_length+pred_length)], dim=0)
 
                 # Get controls for entire pred_length
                 if continuous:
