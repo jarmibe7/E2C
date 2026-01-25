@@ -1,15 +1,7 @@
 import subprocess
 
-# for i in range(0, 2):
-#     config = f"push_eig_{i}"
-"""TODO: 
-run maxdyn for mcar
-pmaze is catastopic collapsing -- check with previous config
-run maxdyn for push
-"""
-to_run = ['button_eig', 'button_maxdyn', 'button_random',
-          'door_eig', 'door_maxdyn', 'door_random']
-for config in to_run:
+# for config in ['drawer_eig_0', 'door_eig_0', 'coffee_eig_0', 'lever_eig_0']:
+for config in ['drawer_maxdyn_0', 'door_maxdyn_0', 'coffee_maxdyn_0', 'lever_maxdyn_0', 'button_maxdyn_0']:
     print(f"Running config: {config}")
     subprocess.run(
         ["python3.10", "-m", "src.main", "--config", config],

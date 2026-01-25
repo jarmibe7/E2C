@@ -27,8 +27,13 @@ import gymnasium_robotics
 gym.register_envs(gymnasium_robotics)
 
 # Parameters for dataset
+<<<<<<< HEAD
 env_name = 'drawer'                                           # Gym environment name
 dataset_size = int(2e3)                                     # Number of samples: (img, next_img, control) tuple
+=======
+env_name = 'lever'                                           # Gym environment name
+dataset_size = int(1e3)                                     # Number of samples: (img, next_img, control) tuple
+>>>>>>> ayush
 OUTPUT_NAME = env_name + f'_{dataset_size // 1000}k'        # Output name of dataset
 image_shape = (64, 64, 3)                                   # Downsampled image shape
 past_length = 3                                             # Number of previous observations to use for training
@@ -56,7 +61,7 @@ DATA_PATH = PROJECT_ROOT / "data"
 
 seed = 42
 set_seed(seed)
-meta_world_envs = ['shelf', 'sweep', 'assembly', 'test', 'plate', 'button', 'door', 'drawer', 'window']
+meta_world_envs = ['shelf', 'sweep', 'assembly', 'test', 'plate', 'button', 'door', 'drawer', 'window', 'lever', 'coffee']
 name_to_env = {'reacher': 'Reacher-v5', 
                 'cartpole': 'CartPole-v1', 
                 'push': 'FetchPushDense-v4', 
@@ -68,9 +73,11 @@ name_to_env = {'reacher': 'Reacher-v5',
                 'assembly': 'assembly-v3', 
                 'plate': 'plate-slide-v3',
                 'button': 'button-press-v3',
-                'door': 'door-close-v3',
+                'door': 'door-open-v3',
                 'drawer': 'drawer-open-v3',
-                'window': 'window-open-v3'
+                'window': 'window-open-v3',
+                'lever': 'lever-pull-v3',
+                'coffee': 'coffee-button-v3'
                }
 env_to_aspace = {'reacher': 'continuous', 'cartpole': 'discrete', 'push': 'continuous', 
                  'pointmaze': 'continuous', 'antmaze': 'continuous', 'mountaincar': 'continuous',
@@ -108,7 +115,7 @@ def debug_render(img):
     else: plt.imshow(img)
     plt.savefig('debug.png')
 
-def process_image(image, dataset_name, image_shape=image_shape):
+def process_image(image, dataset_name, image_shape=image_shape, downscale=True):
     """
     Image processing
     """
@@ -127,14 +134,17 @@ def process_image(image, dataset_name, image_shape=image_shape):
     image = torch.from_numpy(image.copy()).permute(2, 0, 1)  # Get image tensor into (C, H, W)
 
     # Image processing
-    normalized = image.unsqueeze(0).float() / 255.0 # Normalize to [0,1]
+    normalized = image.float() / 255.0 # Normalize to [0,1]
     # if 'mountaincar' in dataset_name:
-    image_resized = torchvision.transforms.Resize(size=image_shape[0:2], antialias=True)(normalized)
-    image_resized = image_resized.clamp(0.0, 1.0)
+    if downscale:
+        image_resized = torchvision.transforms.Resize(size=image_shape[0:2], antialias=True)(normalized)
+        image_resized = image_resized.clamp(0.0, 1.0)
+    else:
+        image_resized = normalized
     # else:
         # image_resized = torchvision.transforms.functional.resize(normalized, image_shape[0:2], interpolation=torchvision.transforms.functional.InterpolationMode.NEAREST)   # Downscaling
     
-    return image_resized.permute(0, 2, 3, 1) # Permute back to raw shape
+    return image_resized.permute(1, 2, 0) # Permute back to raw shape
 
 
 def main():
@@ -201,8 +211,8 @@ def main():
 
             # Add obs history buffer to dataset
             if len(frame_buffer) == past_length + pred_length:
-                prev_img[idx] = torch.cat(frame_buffer[0:past_length], dim=0)
-                next_img[idx] = torch.cat(frame_buffer[past_length:(past_length+pred_length)], dim=0)
+                prev_img[idx] = torch.stack(frame_buffer[0:past_length], dim=0)
+                next_img[idx] = torch.stack(frame_buffer[past_length:(past_length+pred_length)], dim=0)
 
                 # Get controls for entire pred_length
                 if continuous:

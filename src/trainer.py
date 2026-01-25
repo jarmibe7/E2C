@@ -333,7 +333,7 @@ class ClosedLoopRandomTrainer(BaseTrainer):
             if config['train']['dataset'].split('_')[1][:-1] == '2':
                 self.meta_ts = 4
         else:
-            self.env = gym.make(name_to_env[env_name], render_mode="rgb_array") if not self.hardware else HardwareEnv()
+            self.env = gym.make(name_to_env[env_name], render_mode="rgb_array") if not self.hardware else None
             self.meta_ts = 1
         self.env_continuous = (env_to_aspace.get(env_name, 'continuous') == 'continuous')
         self.past_length = config['trans']['past_length']
@@ -400,7 +400,7 @@ class ClosedLoopRandomTrainer(BaseTrainer):
         max_rollout_reward = 0.0
         while idx < self.num_rollout_steps:
             # Render current frame
-            curr_img = process_image(self.env.render(), self.evaluator.dataset_name).squeeze(0).permute(2, 0, 1)
+            curr_img = process_image(self.env.render(), self.evaluator.dataset_name).permute(2, 0, 1)
             if len(frame_buffer) == 0:
                 frame_buffer.append(curr_img)
 
@@ -432,7 +432,7 @@ class ClosedLoopRandomTrainer(BaseTrainer):
             if len(frame_buffer) == self.past_length + self.pred_length:
                 frame_buffer.pop(0)
                 act_buffer.pop(0)
-            next_image = process_image(self.env.render(), self.evaluator.dataset_name).squeeze(0).permute(2, 0, 1)
+            next_image = process_image(self.env.render(), self.evaluator.dataset_name).permute(2, 0, 1)
             frame_buffer.append(next_image)
 
             # Add sample to replay buffer
@@ -572,7 +572,7 @@ class ClosedLoopPolicyTrainer(BaseTrainer):
         idx = 0
         while idx < self.num_rollout_steps:
             # Render current frame
-            curr_img = process_image(self.env.render(), self.evaluator.dataset_name).squeeze(0).permute(2, 0, 1)
+            curr_img = process_image(self.env.render(), self.evaluator.dataset_name).permute(2, 0, 1)
             if len(frame_buffer) == 0:
                 frame_buffer.append(curr_img)
 
@@ -594,7 +594,7 @@ class ClosedLoopPolicyTrainer(BaseTrainer):
                 if len(frame_buffer) == self.past_length + 1:
                     frame_buffer.pop(0)
                     act_buffer.pop(0)
-                next_image = process_image(self.env.render(), self.evaluator.dataset_name).squeeze(0).permute(2, 0, 1)
+                next_image = process_image(self.env.render(), self.evaluator.dataset_name).permute(2, 0, 1)
                 frame_buffer.append(next_image)
 
                 # Add sample to replay buffer
@@ -842,6 +842,8 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
                     mu_q = mu_p
                     log_var_q = log_var_p
                     z_prior = self.model.reparameterize(mu_q, log_var_q)
+                    # compare with previous --> would expect more dramatic results
+                    # z = self.model.reparameterize(mu_q, log_var_q)
                 else:
                     # Decode prior to observation space
                     if self.model.output_uncertainty:
@@ -944,7 +946,7 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
             if self.hardware:
                 curr_image = self.env.process_image(self.env.render()).permute(2, 0, 1)
             else:
-                curr_img = process_image(self.env.render(), self.evaluator.dataset_name).squeeze(0).permute(2, 0, 1)
+                curr_img = process_image(self.env.render(), self.evaluator.dataset_name).permute(2, 0, 1)
             if len(frame_buffer) == 0:
                 frame_buffer.append(curr_img)
 
@@ -983,7 +985,7 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
             if len(frame_buffer) == self.past_length + self.pred_length:
                 frame_buffer.pop(0)
                 act_buffer.pop(0)
-            next_image = process_image(self.env.render(), self.evaluator.dataset_name).squeeze(0).permute(2, 0, 1)
+            next_image = process_image(self.env.render(), self.evaluator.dataset_name).permute(2, 0, 1)
             frame_buffer.append(next_image)
 
             # Add sample to replay buffer
@@ -1049,7 +1051,7 @@ class ClosedLoopRewardTrainer(ClosedLoopInformativeTrainer):
         
         while idx < self.num_rollout_steps:
             # Render current frame
-            curr_img = process_image(self.env.render(), self.evaluator.dataset_name).squeeze(0).permute(2, 0, 1)
+            curr_img = process_image(self.env.render(), self.evaluator.dataset_name).permute(2, 0, 1)
             if len(frame_buffer) == 0:
                 frame_buffer.append(curr_img)
 
@@ -1077,7 +1079,7 @@ class ClosedLoopRewardTrainer(ClosedLoopInformativeTrainer):
                 if len(frame_buffer) == self.past_length + self.pred_length:
                     frame_buffer.pop(0)
                     act_buffer.pop(0)
-                next_image = process_image(self.env.render(), self.evaluator.dataset_name).squeeze(0).permute(2, 0, 1)
+                next_image = process_image(self.env.render(), self.evaluator.dataset_name).permute(2, 0, 1)
                 frame_buffer.append(next_image)
 
                 # Add sample to replay buffer
@@ -1099,131 +1101,3 @@ class ClosedLoopRewardTrainer(ClosedLoopInformativeTrainer):
                     )
                     idx += 1
         self.model.train()
-
-class HardwareEnv():
-    """
-    Placeholder class for real-world hardware environments on the Sawyer robot.
-    The action space will always only be continuous, with controls being [dx, dy] of the end-effector.
-    The lag between sending actions over git would be horrendous, since we won't be able to execute in real time at high frequency.
-    """
-    def __init__(self):
-        import rospy
-        from my_sawyer.msg import RelativeMove
-        from sensor_msgs.msg import JointState
-        from intera_core_msgs.msg import EndpointState
-        from std_srvs.srv import Trigger
-        import cv2
-
-        device = '/dev/video0'
-        self.camera = cv2.VideoCapture(device)
-        self.save_path = "/media/ayush/Extreme Pro/sawyer_images/"  #TODO: change this path as needed
-        self.idx = 0
-        if not self.camera.isOpened():
-            # TODO: add functionality to loop/try again
-            print("Failed to open camera device: {}".format(device))
-            self.camera.release()
-        
-        if not rospy.core.is_initialized():
-            rospy.init_node('hardware_env', anonymous=True)
-        
-        # Action space: [dx, dy] end-effector velocity - force only 2D planar
-        self.action_space = type('', (), {})()
-        self.action_space.low = np.array([-0.1, -0.1])
-        self.action_space.high = np.array([0.1, 0.1])
-        self.action_space.sample = lambda: np.random.uniform(self.action_space.low, self.action_space.high)
-        
-        # Publishers/Subscribers
-        self.rel_move_pub = rospy.Publisher('/relative_move', RelativeMove, queue_size=1)
-        self.last_joint_state = None
-        self.last_endpoint_state = None
-        
-        rospy.Subscriber('/robot/joint_states', JointState, self._joint_state_callback)
-        rospy.Subscriber('/robot/limb/right/endpoint_state', EndpointState, self._endpoint_state_callback)
-        
-        # Reset service proxy
-        rospy.wait_for_service('/ee_vel_ctrl/reset', timeout=10.0)
-        self.reset_service = rospy.ServiceProxy('/ee_vel_ctrl/reset', Trigger)
-        
-        # Wait for first state message
-        rospy.sleep(0.5)
-    
-    def _joint_state_callback(self, msg):
-        self.last_joint_state = msg
-    
-    def _endpoint_state_callback(self, msg):
-        self.last_endpoint_state = msg
-
-    def process_image(self, image):
-        """Process raw image from camera if needed. [H, W, C] -> [64, 64, C] tensor"""
-        # image = image[100:-100, 200:-200, :]  # Crop if needed
-        processed = cv2.resize(image, (64, 64))
-        processed = torch.as_tensor(processed.astype(np.float32) / 255.0, dtype=torch.float32)
-        return processed.permute(1, 2, 0)
-    
-    def reset(self):
-        """Reset arm to home position"""
-        try:
-            self.reset_service()
-            rospy.sleep(3.0)  # Wait for arm to settle
-            obs = self._get_observation()
-            return obs, {}
-        except rospy.ServiceException as e:
-            rospy.logerr(f"Reset service call failed: {e}")
-            raise
-
-    def render(self):
-        """Read from camera, and save to path."""
-        ret, frame = self.camera.read()
-        if ret:
-            filename = self.save_path + "captured_image_{:04d}.jpg".format(self.idx)
-            ok = cv2.imwrite(filename, frame)
-            if ok:
-                print("Image saved to {}".format(filename))
-                self.idx += 1
-            else:
-                print("Failed to write to {}".format(filename))
-        else:
-            print("Failed to read frame from camera")
-    
-    def step(self, action):
-        """
-        Publish action to /relative_move topic.
-        Args:
-            action: [dx, dy] end-effector velocity
-        Returns:
-            obs, reward, done, truncated, info
-        """        
-        # Clamp action to bounds
-        action = np.clip(action, self.action_space.low, self.action_space.high)
-        
-        # Create and publish RelativeMove command
-        rel_move = RelativeMove()
-        rel_move.dx = float(action[0])
-        rel_move.dy = float(action[1])
-        self.rel_move_pub.publish(rel_move)
-        
-        # Small delay to let command execute
-        rospy.sleep(0.1)
-        
-        # Get observation (you can modify this to extract meaningful state)
-        obs = self._get_observation()
-        
-        # Placeholder return values
-        reward = 0.0
-        done = False
-        truncated = False
-        info = {}
-        
-        return obs, reward, done, truncated, info
-    
-    def _get_observation(self):
-        """
-        Extract observation from robot state.
-        Could be endpoint pose, joint angles, or rendered image.
-        """
-        if self.last_endpoint_state is not None:
-            # Return endpoint position as observation
-            pose = self.last_endpoint_state.pose.position
-            return np.array([pose.x, pose.y, pose.z])
-        else:
-            return np.zeros(3)
