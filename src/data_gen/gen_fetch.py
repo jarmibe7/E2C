@@ -78,6 +78,10 @@ env_to_aspace = {'reacher': 'continuous', 'cartpole': 'discrete', 'push': 'conti
                  'pointmaze': 'continuous', 'antmaze': 'continuous', 'mountaincar': 'continuous',
                  'shelf': 'continuous', 'sweep': 'continuous', 'assembly': 'continuous', 'test': 'continuous'}
 
+def get_obj_site_id(dataset_name, mj_model):
+    if 'button' in dataset_name:
+        return mj_model.site("buttonStart").id
+
 def get_mujoco_geom_keys_index(dataset_name):
     """
     Return dicts with collision geometry geom_index -> geom_name for both robot and obj

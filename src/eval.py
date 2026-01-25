@@ -21,7 +21,7 @@ from src.model.e2c import ConvE2C
 from src.model.rssm import RSSME2C
 from src.dataset import E2CDataset
 from src.utils import set_seed, anim_frames, shoulder_mass, excess_kurtosis, central_mass_ratio
-from src.data_gen.gen_fetch import process_image, get_mujoco_geom_keys_index, is_robot_contact_geometry
+from src.data_gen.gen_fetch import process_image, get_mujoco_geom_keys_index, is_robot_contact_geometry, get_obj_site_id
 from src.data_gen.gen_state_rep import get_env_state
 from src.model.state_rep import StateRepresentationModel
 
@@ -473,6 +473,7 @@ class Evaluator():
         plan_obj_vals = []  # objective function values per step
         env_rew = []        # env rewards [blind during training]
         contacts = []       # Robot contacting task objects
+        saved_state = []
 
         # Counting contacts
         # for i in range(mj_model.ngeom): print(i, mujoco.mj_id2name(mj_model, mujoco.mjtObj.mjOBJ_GEOM, i))
@@ -516,7 +517,20 @@ class Evaluator():
                     mj_data = env.unwrapped.data
             env_rew.append(rew)
             mj_data = env.unwrapped.data
+            site_id = mj_model.site("endEffector").id
+            ee_pos = torch.from_numpy(env.unwrapped.data.site_xpos[site_id].copy())
+            
+            vel6 = np.zeros((6, 1), dtype=np.float64, order='C')
+            mujoco.mj_objectVelocity(mj_model, mj_data, mujoco.mjtObj.mjOBJ_SITE, site_id, vel6, 0)
+            ee_vel = torch.from_numpy(vel6[:3, 0].copy())
+
+            obj_site_id = get_obj_site_id(self.dataset_name, mj_model)
+            obj_pos = torch.from_numpy(env.unwrapped.data.site_xpos[obj_site_id].copy())
+
+            saved_state.append(torch.concat([ee_pos, ee_vel, obj_pos]))
+
             contacts.append(int(is_robot_contact_geometry(mj_data, robot_geom, obj_geom)))
+
             next_render_raw = env.render()
             next_img_true = process_image(next_render_raw, self.dataset_name, downscale=False).permute(2, 0, 1)
 
@@ -628,6 +642,17 @@ class Evaluator():
             print('Exception occurred, saved planner visualization to current directory')
             ani.save(vid_name, writer=writer)
         plt.close(fig)
+
+        # Saved states coverage
+        saved_state_tensor = torch.stack(saved_state, dim=0)
+        try:
+            filepath = run_path / 'eval_state.pt'
+            print(f'Saved eval state tensor to {filepath}')
+            torch.save(saved_state_tensor, filepath)
+        except Exception as e:
+            print(e)
+            print('Exception occured, saved eval state tensor to current directory')
+            torch.save(saved_state_tensor, 'eval_state.pt')
         return
         
     def eval_traj(self, run_path, max_frames=50):
