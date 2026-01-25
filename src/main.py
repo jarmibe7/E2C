@@ -5,6 +5,9 @@ Main training script for E2C
 
 Authors: Jared Berry, Ayush Gaggar
 """
+# import os
+# os.environ["DISPLAY"] = ":99" 
+# os.environ["MUJOCO_GL"] = "glfw"
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
@@ -29,7 +32,7 @@ set_seed(42)
 # Paths
 PROJECT_ROOT = Path(__file__).parent.parent
 DATA_PATH = PROJECT_ROOT / "data"
-CONFIG_PATH = PROJECT_ROOT / "config"
+CONFIG_PATH = PROJECT_ROOT / "config" / "final"
 RUNS_PATH = PROJECT_ROOT / "runs"
 
 def main():

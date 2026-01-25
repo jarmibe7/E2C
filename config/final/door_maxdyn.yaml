@@ -1,0 +1,60 @@
+# 
+# Encoder/Decoder
+vae:
+  enc_latent_size: 256
+  enc_kernel_size: 3
+  dec_kernel_size: 4
+  stride: 2
+  pad: 1
+# Loss hyperparams
+loss:
+  loss_type: rssm         # Loss type to use: mse | uncertainty  # TODO: Change this setup for rssm
+  image_loss: mse                   # Image reconstruction loss type: mse | nll
+  recon_mult: !!float 1e3           # MSE Reconstruction loss multiplier
+  beta: !!float 1e-4                # Standard Gaussian KL multiplier
+  lambda: !!float 1e-3              # Transition KL multiplier
+  kld_anneal_mode: linear           # Beta annealing mode: const | linear
+# Transition model hyperparams
+trans:
+  stochastic_size: 16                # Stochastic state model latent dim
+  deterministic_size: 256             # Deterministic state model latent dim
+  past_length: 3                    # Length of image history passed into encoder
+  pred_length: 3                    # Length of image prediction horizon
+  alpha: !!float 2e-4               # Learning rate
+  weight_decay: !!float 1e-4        # Adam optimizer weight decay
+# Training settings
+train:
+  dataset: door_2k      # Which dataset to use for training (in data/)
+  batch_size: 128
+  num_epochs: 500
+  device: cuda:2             # cpu | cuda:0 | cuda:1 | cuda:2
+  render: False              # Whether to render live interactive training plot, or simply save after training is finished
+  save: True                 # Whether to save final trained model and training plot
+  eval: True                 # Whether to eval model performance immediately after training
+  plot_freq: 10000           # Frequency to update the plot, in timesteps
+  train_ratio: 0.9           # Ratio of dataset to use for training
+  load_path: # runs/button/2026-01-22_13-21-28                # Path to load model from (for resuming training or eval only)    
+  eval_only: False           # Whether to only eval the model without training
+# Policy settings for training closed loop
+closed_loop: 
+  closed_loop: True                 # Whether to use closed loop training
+  policy: maxdyn                    # What type of policy to use: conv | random | uncertainty | informative
+  epochs_warmup: 0                  # Number of epochs to train on random actions before informative training
+  num_rollout_steps: 100           # Number of timesteps to collect in a rollout
+  plan_horizon: 12                   # Planning horizon for CEM MPC
+  num_batches: 100                    # Number of batches to train on per gradient update
+  buffer_capacity: 2000             # Replay buffer capacity - keeping it small just to debug
+  samples: 100                      # Number of action sequences to sample for MPC
+  elite_frac: 0.1                   # Fraction of action sequences to use as elites for CEM
+  iters: 4                          # Number of CEM iterations
+  init_control: random              # Initial control sequence: zero | random | from_txt
+  sigma_init: 2.0                   # Initial stddev for sampling actions
+  sigma_min: 0.05                   # Minimum stddev for sampling actions
+  alpha: 0.4                        # Smoothing factor for updating action distribution
+
+# env_inters = num_epochs * num_rollout_steps - # interactions collected from environment
+    # 500 * 100 = 50,000
+# training_inters = num_batches * batch_size * num_epochs - # interactions agents trained on
+    # 100 * 128 * 500 = 6,400,000, ~6.4M
+# num_rollout_steps * num_epochs * cem_iters * samples - # iteractions collected and imagined
+    # 100 * 500 * 4 * 100 = 20,000,000, ~20M
