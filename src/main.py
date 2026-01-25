@@ -151,7 +151,7 @@ def main():
         # Save and evaluate
         config_save['runtime'] = format_time(time.perf_counter() - start_time)
         if config['train']['save']: trainer.save(config_save, config['run_path'])
-        if config['train']['eval']: trainer.evaluate(config['run_path'])
+        # if config['train']['eval']: trainer.evaluate(config['run_path'])
         trainer.evaluator.visualize_planner(trainer, config['run_path'], max_steps=150, closed_loop=True)
     except Exception:
         print('\n\n'); traceback.print_exc(); print('\n\n')
@@ -166,7 +166,7 @@ def main():
         if config['train']['save']:
             config_save['runtime'] = format_time(time.perf_counter() - start_time)
             trainer.save(config_save, config['run_path'])
-            if config['train']['eval']: trainer.evaluate(config['run_path'])    
+            # if config['train']['eval']: trainer.evaluate(config['run_path'])    
             print(f'\nManual interrupt occured, saving current checkpoint')
         else: 
             print('Manual interrupt occured, ending training')

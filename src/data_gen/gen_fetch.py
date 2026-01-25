@@ -20,15 +20,14 @@ from tqdm import tqdm
 import yaml
 from datetime import datetime
 from PIL import Image
-import metaworld
 
 from src.utils import set_seed, format_time
 import gymnasium_robotics
 gym.register_envs(gymnasium_robotics)
 
 # Parameters for dataset
-env_name = 'button'                                           # Gym environment name
-dataset_size = int(2e3)                                     # Number of samples: (img, next_img, control) tuple
+env_name = 'push'                                           # Gym environment name
+dataset_size = int(1e3)                                     # Number of samples: (img, next_img, control) tuple
 OUTPUT_NAME = env_name + f'_{dataset_size // 1000}k'        # Output name of dataset
 image_shape = (64, 64, 3)                                   # Downsampled image shape
 past_length = 3                                             # Number of previous observations to use for training
@@ -59,7 +58,7 @@ set_seed(seed)
 meta_world_envs = ['shelf', 'sweep', 'assembly', 'test', 'plate', 'button', 'door', 'drawer', 'window']
 name_to_env = {'reacher': 'Reacher-v5', 
                 'cartpole': 'CartPole-v1', 
-                'push': 'FetchPushDense-v4', 
+                'push': 'FetchPushDense-v3', 
                 'pointmaze': 'PointMaze_UMaze-v3', 
                 'antmaze': 'AntMaze_UMaze-v5', 
                 'mountaincar': 'MountainCarContinuous-v0',
@@ -139,11 +138,11 @@ def process_image(image, dataset_name, image_shape=image_shape):
 
 def main():
     start_time = time.perf_counter()
-    import os
-    os.environ['MUJOCO_GL'] = 'egl'
+    # import os
+    # os.environ['MUJOCO_GL'] = 'glx'
     # Create virtual display for running on server
-    # disp = Display(visible=0, size=(480, 480))
-    # disp.start()
+    disp = Display(visible=0, size=(480, 480))
+    disp.start()
     
     # Buffers
     frame_buffer = []

@@ -20,6 +20,13 @@ from src.dataset import E2CDataset
 from src.utils import set_seed, anim_frames, shoulder_mass, excess_kurtosis, central_mass_ratio
 from src.data_gen.gen_fetch import process_image
 
+import sys
+import time
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / "sawyer_move" / "scripts"))
+
+from hardware_test import HardwareEnv
+
 class Plotter():
     """
     Simple class for visualizing training progress
@@ -148,9 +155,19 @@ class Evaluator():
             closed_loop: If True, feed ground-truth observations back into the model window.
                          If False, feed the model's predicted next frame (open-loop rollout).
         """
-        model = trainer.model
+        # Unwrap DataParallel if needed
+        model = trainer.model.module if isinstance(trainer.model, torch.nn.DataParallel) else trainer.model
         device = trainer.device
         env = trainer.env
+        try: 
+            if env.render() is None:
+                env = HardwareEnv(
+                    frame_width=trainer.config['vae']['in_image_shape'][1],
+                    frame_height=trainer.config['vae']['in_image_shape'][2]
+                )
+                time.sleep(0.1)
+        except:
+            print("Hardware env dead :(")
         past_len = model.past_length if hasattr(model, 'past_length') else 3
         pred_len = model.pred_length if hasattr(model, 'pred_length') else 3
         try:
@@ -159,6 +176,7 @@ class Evaluator():
             print('No closed loop policy found in trainer config, defaulting to random')
             closed_loop_policy = 'random'
 
+        dtype = next(self.model.parameters()).dtype
         model.eval()
         obs, _ = env.reset()
         frame_buffer = []   # frames used as model input window
@@ -169,17 +187,21 @@ class Evaluator():
         env_rew = []        # env rewards [blind during training]
 
         # Prime buffer with the first observation
-        first_img = process_image(env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1)
+        if trainer.hardware:
+            first_img = trainer.env.render()
+        else:
+            first_img = process_image(env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1)
         for _ in range(past_len):
-            frame_buffer.append(first_img)
+            frame_buffer.append(first_img.to(torch.float32))
 
         step_idx = 0
-        for step_idx in range(max_steps): #tqdm(range(max_steps), desc="Visualizing Planner timesteps"):
-            # Current frame (ground truth)
-            curr_img = process_image(env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1)
+        for step_idx in tqdm(range(max_steps), desc="Visualizing Planner timesteps"):
+            # Current frame (ground truth) - modifying for hardware
+            curr_img = trainer.env.render()
+            # process_image(env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1)
 
             # Action: reuse trainer.collect_rollouts logic
-            if closed_loop_policy in ['informative', 'maxdyn']:
+            if closed_loop_policy in ['informative', 'maxdyn', 'hardware']:
                 trainer._init_cem_mu_sig()
                 mu, costs = trainer._sample_cem(frame_buffer[-past_len:]) # pred_len, act_size
                 action_seq = mu.clone()
@@ -190,8 +212,6 @@ class Evaluator():
                 action_seq = torch.from_numpy(np.array(act)).to(device)
                 plan_obj_vals.append(0.0)   # no cost info for random policy
             env_act = action_seq.cpu().detach().numpy()[0]
-            # if not getattr(trainer, 'env_continuous', True):
-            #     env_act = int(env_act.item())
 
             # Step env
             for _ in range(trainer.meta_ts):
@@ -200,36 +220,37 @@ class Evaluator():
                     print("forced to reset", step_idx)
                     obs, _ = env.reset()
             env_rew.append(rew)
-            next_img_true = process_image(env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1)
+            next_img_true = trainer.env.render()
+            # next_img_true = process_image(env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1)
 
             # Model inputs
             with torch.no_grad():
-                window = torch.stack(frame_buffer[-trainer.model.past_length:], dim=0).unsqueeze(0).to(trainer.device)
-                mu_prior, log_var_prior, zs = self.model.encode_posterior(window)
-                h = torch.zeros(model.num_layers, 1, model.deterministic_size, device=trainer.device)
+                window = torch.stack(frame_buffer[-trainer.model.past_length:], dim=0).unsqueeze(0).to(trainer.device, dtype=dtype)
+                mu_prior, log_var_prior, zs = model.encode_posterior(window)
+                h = torch.zeros(model.num_layers, 1, model.deterministic_size, device=trainer.device, dtype=dtype)
                 z = zs[:, -1]
-                if self.model.output_uncertainty:
-                    x_recon, x_pred_uncertainty = self.model.decoder(z)
+                if model.output_uncertainty:
+                    x_recon, x_pred_uncertainty = model.decoder(z)
                 else:
-                    x_recon = self.model.decoder(z)
+                    x_recon = model.decoder(z)
                 x_recon_next = []
                 for act in action_seq:
-                    act_batch = act.view(1, -1).to(trainer.device)
+                    act_batch = act.view(1, -1).to(trainer.device, dtype=dtype)
                     h, z_prior, mu_p, log_var_p = trainer.model.rssm_step(h, z.unsqueeze(1), act_batch)
                     # h, z_prior, mu_p, log_var_p = trainer.model.rssm_step(h, zs, act_batch)
                     # Decode prior to observation space
-                    if self.model.output_uncertainty:
+                    if model.output_uncertainty:
                         x_pred, x_pred_uncertainty = trainer.model.decoder(z_prior)
                     else:
                         x_pred = trainer.model.decoder(z_prior)
-                    x_recon_next.append(x_pred.detach().cpu())
+                    x_recon_next.append(x_pred.detach().cpu().to(torch.float32))
                     
                     if trainer.past_length > 1:
                         window_frames = window[:, 1:]   # drop first frame
                         window = torch.cat([window_frames, x_pred.unsqueeze(1).detach()], dim=1)
                     else:
                         window = x_pred.detach()  # past_length==1, just use pred image
-                    mu_q, log_var_q, zs = self.model.encode_posterior(window)
+                    mu_q, log_var_q, zs = model.encode_posterior(window)
                     z = zs[:, -1]
 
                     # Posterior from updated observation window
@@ -243,12 +264,12 @@ class Evaluator():
             next_for_buffer = next_img_true if closed_loop else x_recon_next[-1].detach().cpu()
 
             # Update buffers/logs
-            frame_buffer.append(next_for_buffer)
+            frame_buffer.append(next_for_buffer.to(torch.float32))
             # if len(frame_buffer) > past_len:
             #     frame_buffer = frame_buffer[-past_len:]
 
-            true_frames.append(curr_img)
-            recon_frames.append(x_recon.detach().cpu())
+            true_frames.append(curr_img.to(torch.float32))
+            recon_frames.append(x_recon.detach().cpu().to(torch.float32))
             pred_sequences.append(x_recon_next)
 
             # if (step_idx + 1) % trainer.config['closed_loop']['num_rollout_steps'] == 0:
@@ -256,6 +277,9 @@ class Evaluator():
             #     done = False
             #     frame_buffer = [process_image(env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1) for _ in range(past_len)]
 
+        trainer.env.step(np.array([0.0, 0.0]))
+        trainer.env.step(np.array([0.0, 0.0]))
+        obs, _ = trainer.env.reset()
         # Build visualization grid: 2 rows, (pred_len + 1) columns
         cols = pred_len + 1
         fig, ax = plt.subplots(2, cols, figsize=(3 * cols, 10))
