@@ -60,7 +60,6 @@ def get_env_state(env, obs, env_name):
     elif 'mountain' in env_name:
         state = obs
     elif env_name in meta_world_envs:
-        breakpoint()
         gripper = obs[0:3]      # Gripper xyz
         first_obj = obs[4:7]    # First object
     else:

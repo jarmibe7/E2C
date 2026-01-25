@@ -21,7 +21,7 @@ from src.model.e2c import ConvE2C
 from src.model.rssm import RSSME2C
 from src.dataset import E2CDataset
 from src.utils import set_seed, anim_frames, shoulder_mass, excess_kurtosis, central_mass_ratio
-from src.data_gen.gen_fetch import process_image
+from src.data_gen.gen_fetch import process_image, get_mujoco_geom_keys_index, is_robot_contact_geometry
 from src.data_gen.gen_state_rep import get_env_state
 from src.model.state_rep import StateRepresentationModel
 
@@ -294,8 +294,6 @@ class Evaluator():
 
                 mj_model = env.unwrapped.model
                 data  = env.unwrapped.data
-                # for i in range(mj_model.ngeom): print(i, mujoco.mj_id2name(mj_model, mujoco.mjtObj.mjOBJ_GEOM, i))
-                breakpoint()
                 spec = (
                     mujoco.mjtState.mjSTATE_INTEGRATION |
                     mujoco.mjtState.mjSTATE_PHYSICS |
@@ -474,6 +472,13 @@ class Evaluator():
         pred_sequences = [] # list of predicted sequences per step
         plan_obj_vals = []  # objective function values per step
         env_rew = []        # env rewards [blind during training]
+        contacts = []       # Robot contacting task objects
+
+        # Counting contacts
+        # for i in range(mj_model.ngeom): print(i, mujoco.mj_id2name(mj_model, mujoco.mjtObj.mjOBJ_GEOM, i))
+        mj_model = env.unwrapped.model
+        mj_data = env.unwrapped.data
+        robot_geom, obj_geom = get_mujoco_geom_keys_index(self.dataset_name)
 
         # Prime buffer with the first observation
         first_render_raw = env.render()  # numpy array (H, W, C) [0-255]
@@ -508,7 +513,10 @@ class Evaluator():
                 if trunc:
                     print("forced to reset", step_idx)
                     obs, _ = env.reset()
+                    mj_data = env.unwrapped.data
             env_rew.append(rew)
+            mj_data = env.unwrapped.data
+            contacts.append(int(is_robot_contact_geometry(mj_data, robot_geom, obj_geom)))
             next_render_raw = env.render()
             next_img_true = process_image(next_render_raw, self.dataset_name, downscale=False).permute(2, 0, 1)
 
@@ -576,6 +584,7 @@ class Evaluator():
             ax[0, j].set_title(f"Pred t={j}")
             ax[1, j].set_title(f"True t={j}")
 
+        ax[1, 1].set_title(f"True t=1; Contact? {contacts[0]}")
         ims = []
         # Initialize cells
         ims.clear()
@@ -595,6 +604,7 @@ class Evaluator():
             # Pred current recon
             ax[0, 0].set_title(f"Pred t=0; {plan_obj_vals[frame_idx]:.2f}")
             ax[1, 0].set_title(f"True t=0; {env_rew[frame_idx]:.2f}")
+            ax[1, 1].set_title(f"True t=1; Contact? {contacts[frame_idx]}")
             ims[0].set_data(recon[:3].permute(1, 2, 0).detach().cpu().numpy())
             ims[1].set_data(true_curr[:3].permute(1, 2, 0).detach().cpu().numpy())
 

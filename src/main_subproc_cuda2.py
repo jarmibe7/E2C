@@ -7,9 +7,10 @@ run maxdyn for mcar
 pmaze is catastopic collapsing -- check with previous config
 run maxdyn for push
 """
-to_run = ['drawer_eig', 'drawer_maxdyn', 'drawer_random',
-          'window_eig', 'window_maxdyn', 'window_random',
-          'plate_eig', 'plate_maxdyn', 'plate_random']
+to_run = [
+    'door_eig', 'door_maxdyn', 'door_random',
+    'drawer_eig', 'drawer_maxdyn', 'drawer_random',
+    'plate_eig', 'plate_maxdyn', 'plate_random']
 for config in to_run:
     print(f"Running config: {config}")
     subprocess.run(
