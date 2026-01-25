@@ -188,16 +188,20 @@ class Evaluator():
 
         # Prime buffer with the first observation
         if trainer.hardware:
-            first_img = trainer.env.render()
+            trainer.env.downsize = False
+            first_img = trainer.env.render().to(torch.float32)
         else:
             first_img = process_image(env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1)
         for _ in range(past_len):
-            frame_buffer.append(first_img.to(torch.float32))
+            trainer.env.downsize = True
+            frame_buffer.append(trainer.env.render().to(torch.float32))
 
         step_idx = 0
         for step_idx in tqdm(range(max_steps), desc="Visualizing Planner timesteps"):
             # Current frame (ground truth) - modifying for hardware
-            curr_img = trainer.env.render()
+            trainer.env.downsize = False
+            curr_img = trainer.env.render().to(torch.float32)
+            trainer.env.downsize = True
             # process_image(env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1)
 
             # Action: reuse trainer.collect_rollouts logic
@@ -220,7 +224,10 @@ class Evaluator():
                     print("forced to reset", step_idx)
                     obs, _ = env.reset()
             env_rew.append(rew)
-            next_img_true = trainer.env.render()
+            # trainer.env.downsize = False
+            # next_img_true = trainer.env.render().to(torch.float32)
+            trainer.env.downsize = True
+            next_img_true_buffer = trainer.env.render().to(torch.float32)
             # next_img_true = process_image(env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1)
 
             # Model inputs
@@ -261,10 +268,10 @@ class Evaluator():
                     # z = trainer.model.reparameterize(mu_q, log_var_q)
 
             # Feed next frame based on loop type
-            next_for_buffer = next_img_true if closed_loop else x_recon_next[-1].detach().cpu()
+            # next_for_buffer = next_img_true if closed_loop else x_recon_next[-1].detach().cpu()
 
             # Update buffers/logs
-            frame_buffer.append(next_for_buffer.to(torch.float32))
+            frame_buffer.append(next_img_true_buffer.to(torch.float32))
             # if len(frame_buffer) > past_len:
             #     frame_buffer = frame_buffer[-past_len:]
 
