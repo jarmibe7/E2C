@@ -20,17 +20,19 @@ import yaml
 import gymnasium_robotics
 import matplotlib.pyplot as plt
 gym.register_envs(gymnasium_robotics)
+import metaworld
 
 from src.utils import set_seed, format_time
-from src.data_gen.gen_fetch import process_image, name_to_env
+from src.data_gen.gen_fetch import process_image, name_to_env, meta_world_envs
 
 # ------------------------
 # Configuration
 # ------------------------
-ENV_NAME = "mountaincar"
+ENV_NAME = "button"
 DATASET_SIZE = int(5e5)
 IMAGE_SHAPE = (64, 64, 3)
 SEED = 42
+METAWORLD_CAM_NAME = 'corner'                  # Camera angle for metaworld environments: corner | behindGripper
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 DATA_PATH = PROJECT_ROOT / "data"
@@ -57,6 +59,10 @@ def get_env_state(env, obs, env_name):
         state = obs['observation'][0:6]    # [0:3] == end effector pose, [3:6] == block pose
     elif 'mountain' in env_name:
         state = obs
+    elif env_name in meta_world_envs:
+        breakpoint()
+        gripper = obs[0:3]      # Gripper xyz
+        first_obj = obs[4:7]    # First object
     else:
         # Fallback to observation
         raise ValueError(f'Gym environment {env_name} is not specified in get_env_state()')
@@ -91,7 +97,12 @@ def main():
     # disp = Display(visible=0, size=(480, 480))
     # disp.start()
 
-    env = gym.make(name_to_env[ENV_NAME], render_mode="rgb_array")
+    if ENV_NAME in meta_world_envs:
+        # Camera mode: https://metaworld.farama.org/rendering/rendering/
+        meta_ts = 4
+        env = gym.make('Meta-World/MT1', env_name=name_to_env[ENV_NAME], render_mode='rgb_array', camera_name=METAWORLD_CAM_NAME)
+    else:
+        env = gym.make(name_to_env[ENV_NAME], render_mode="rgb_array")
     obs, _ = env.reset(seed=SEED)
 
     # Infer state dimension
@@ -114,7 +125,11 @@ def main():
 
         # Step environment
         action = env.action_space.sample()
-        obs, _, terminated, truncated, _ = env.step(action)
+        if ENV_NAME in meta_world_envs:
+            for _ in range(meta_ts):
+                next_obs, rew, terminated, truncated, _ = env.step(action)
+        else:
+            next_obs, rew, terminated, truncated, _ = env.step(action)
 
         if terminated or truncated:
             obs, _ = env.reset()

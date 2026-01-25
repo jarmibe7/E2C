@@ -865,10 +865,10 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
                     # mu_post, log_var_post = stats.chunk(2, dim=-1)
 
                     # expected information gain - KL(q || p)
-                    # total_kl += self._kl_diag_gaussian(mu_post, log_var_post, mu_p, log_var_p).mean(dim=-1)
+                    total_kl += self._kl_diag_gaussian(mu_post, log_var_post, mu_p, log_var_p).mean(dim=-1)
                     # TODO: try doing KLD over t0 z, instead of t_prev
                     # total_kl += self._kl_diag_gaussian(mu_q, log_var_q, mu_p, log_var_p).mean(dim=-1)
-                    total_kl += self._kl_diag_gaussian(mu_post, log_var_post, mu_q, log_var_q).mean(dim=-1)
+                    # total_kl += self._kl_diag_gaussian(mu_post, log_var_post, mu_q, log_var_q).mean(dim=-1)
                     
                     # to compare over t0, comment this out
                     mu_q = mu_post

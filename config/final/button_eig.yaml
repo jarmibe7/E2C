@@ -27,14 +27,14 @@ train:
   dataset: button_2k      # Which dataset to use for training (in data/)
   batch_size: 128
   num_epochs: 500
-  device: cuda:1             # cpu | cuda:0 | cuda:1 | cuda:2
+  device: cuda:2             # cpu | cuda:0 | cuda:1 | cuda:2
   render: False              # Whether to render live interactive training plot, or simply save after training is finished
   save: True                 # Whether to save final trained model and training plot
   eval: True                 # Whether to eval model performance immediately after training
   plot_freq: 10000           # Frequency to update the plot, in timesteps
   train_ratio: 0.9           # Ratio of dataset to use for training
-  load_path: # runs/button/2026-01-22_13-21-28                # Path to load model from (for resuming training or eval only)    
-  eval_only: False           # Whether to only eval the model without training
+  load_path: runs/button/2026-01-23_00-09-31                # Path to load model from (for resuming training or eval only)    
+  eval_only: True           # Whether to only eval the model without training
 # Policy settings for training closed loop
 closed_loop: 
   closed_loop: True                 # Whether to use closed loop training
