@@ -218,7 +218,8 @@ class Evaluator():
             # Action: reuse trainer.collect_rollouts logic (random sample)
             if closed_loop_policy == 'informative':
                 trainer._init_cem_mu_sig()
-                action_seq = trainer._sample_cem(frame_buffer[-past_len:])[0] # pred_len, act_size
+                mu, costs = trainer._sample_cem(frame_buffer[-past_len:]) # pred_len, act_size
+                action_seq = mu.clone()
             else:
                 # repeat pred len number of times for action horizon
                 act = [env.action_space.sample() for _ in range(pred_len)]
@@ -226,33 +227,62 @@ class Evaluator():
             env_act = action_seq.cpu().detach().numpy()[0]
 
             # Step env
-            obs, _, terminated, truncated, _ = env.step(env_act)
+            valid = True
+            for _ in range(trainer.meta_ts):
+                obs, rew, terminated, truncated, _ = env.step(env_act)
+                if terminated or truncated:
+                    valid = False
+                    break
+
+            # Can't evaluate state accuracy if temporal consistency is broken
+            if not valid:
+                obs, _ = env.reset()
+                frame_buffer = [
+                    process_image(env.render(), self.dataset_name)
+                        .squeeze(0).permute(2, 0, 1)
+                    for _ in range(past_len)
+                ]
+                print(f"Skipping timestep {step_idx}, had to truncate")
+                continue   # skip this timestep entirely
+
             next_img_true = process_image(env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1)
             state_true = get_env_state(env, obs, self.dataset_name)
 
             # Model forward pass
             with torch.no_grad():
-                # frames = [f.to(trainer.device) for f in frame_buffer[-past_len:]]
-                # window = trainer._frames_to_tensor(frames)
                 window = torch.stack(frame_buffer[-trainer.model.past_length:], dim=0).unsqueeze(0).to(trainer.device)
-                mu_q, log_var_q, z_q = trainer.model.encode_posterior(window)
-                x_recon = trainer._decode_latent(z_q[:, -1])
-                x_recon_next = []
+                _, _, zs = self.model.encode_posterior(window)
                 h = torch.zeros(model.num_layers, 1, model.deterministic_size, device=trainer.device)
+                z = zs[:, -1]
+                if self.model.output_uncertainty:
+                    x_recon, x_pred_uncertainty = self.model.decoder(z)
+                else:
+                    x_recon = self.model.decoder(z)
+                x_recon_next = []
                 for act in action_seq:
                     act_batch = act.view(1, -1).to(trainer.device)
-                    if len(z_q.shape) == 2:
-                        h, z_q, mu_p, log_var_p = trainer.model.rssm_step(h, z_q.unsqueeze(1), act_batch)
+                    h, z_prior, mu_p, log_var_p = trainer.model.rssm_step(h, z.unsqueeze(1), act_batch)
+                    # h, z_prior, mu_p, log_var_p = trainer.model.rssm_step(h, zs, act_batch)
+                    # Decode prior to observation space
+                    if self.model.output_uncertainty:
+                        x_pred, x_pred_uncertainty = trainer.model.decoder(z_prior)
                     else:
-                        h, z_q, mu_p, log_var_p = trainer.model.rssm_step(h, z_q, act_batch)
-                    # z_q = torch.normal(0.5*torch.ones_like(mu_q), 0.1*torch.ones_like(log_var_q))
-                    x_recon_next.append(trainer._decode_latent(z_q).detach().cpu())
+                        x_pred = trainer.model.decoder(z_prior)
+                    x_recon_next.append(x_pred.detach().cpu())
+                    
+                    if trainer.past_length > 1:
+                        window_frames = window[:, 1:]   # drop first frame
+                        window = torch.cat([window_frames, x_pred.unsqueeze(1).detach()], dim=1)
+                    else:
+                        window = x_pred.detach()  # past_length==1, just use pred image
+                    _, _, zs = self.model.encode_posterior(window)
+                    z = zs[:, -1]
 
             # State rep eval for error per dimension of state vec
             with torch.no_grad():
                 # Immediate error
                 s_true_t1 = torch.as_tensor(state_true)
-                s_pred_t1 = self.sr_model(x_recon_next[0].unsqueeze(0).to(device))['state_pred'].squeeze(0).detach().cpu()
+                s_pred_t1 = self.sr_model(x_recon_next[0].to(device))['state_pred'].squeeze(0).detach().cpu()
                 immediate_err = (s_pred_t1 - s_true_t1).abs().squeeze(0).numpy()
                 immediate_state_errors.append(immediate_err)
 
@@ -264,6 +294,8 @@ class Evaluator():
 
                 mj_model = env.unwrapped.model
                 data  = env.unwrapped.data
+                # for i in range(mj_model.ngeom): print(i, mujoco.mj_id2name(mj_model, mujoco.mjtObj.mjOBJ_GEOM, i))
+                breakpoint()
                 spec = (
                     mujoco.mjtState.mjSTATE_INTEGRATION |
                     mujoco.mjtState.mjSTATE_PHYSICS |
@@ -273,18 +305,24 @@ class Evaluator():
                 state_dim = mujoco.mj_stateSize(mj_model, spec)
                 mj_state = np.zeros(state_dim, dtype=np.float64)
                 mujoco.mj_getState(mj_model, data, mj_state, spec)
-                obs_k = obs
+                valid = True    # Ensure no breaks in temporal consistency
                 for k in range(pred_len):
                     # Rollout predicted actions to get ground truth next states
-                    if k > 0:
-                        obs_k, _, _, _, _ = env.step(action_seq[k].cpu().numpy())
+                    env_act_k = action_seq[k].cpu().numpy()
+                    for _ in range(trainer.meta_ts):
+                        obs_k, _, terminated, truncated, _ = env.step(env_act_k)
+                        if terminated or truncated:
+                            valid = False
+                            break
+                    if not valid:
+                        break
 
                     s_true_k = torch.as_tensor(get_env_state(env, obs_k, self.dataset_name))
-                    s_pred_k = self.sr_model(x_recon_next[k].unsqueeze(0).to(device))['state_pred'].squeeze(0).detach().cpu()
+                    s_pred_k = self.sr_model(x_recon_next[k].to(device))['state_pred'].squeeze(0).detach().cpu()
                     cum_err += (s_pred_k - s_true_k).abs().squeeze(0).numpy()
 
-                cum_err = (cum_err / pred_len)
-                cumulative_state_errors.append(cum_err)
+                if valid:
+                    cumulative_state_errors.append(cum_err / pred_len)  
 
                 # Restore env state
                 mujoco.mj_setState(mj_model, data, mj_state, spec)
@@ -294,16 +332,10 @@ class Evaluator():
                 print("Reconstruction shape:", x_recon.shape, "Next Reconstruction shape:", len(x_recon_next), x_recon_next[0].shape)
 
             # Feed next frame based on loop type
-            next_for_buffer = next_img_true if closed_loop else x_recon_next.detach().cpu()
+            next_for_buffer = next_img_true if closed_loop else x_recon_next[0]
 
             # Update buffers/logs
             frame_buffer.append(next_for_buffer)
-
-            if terminated or truncated:
-                env.reset()
-                done = False
-                frame_buffer = [process_image(env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1) for _ in range(past_len)]
-
 
         # ##### DEBUG #####
         # num_debug_frames = 5
@@ -373,25 +405,28 @@ class Evaluator():
             fig_name = f'sr_error_training.png'
         else:
             fig, axes = plt.subplots(1, 2, figsize=(12, 5), dpi=150, tight_layout=True)
+            tick_positions = np.arange(1, state_dim + 1)
 
+            axes[0].set_xticks(tick_positions)
+            axes[0].set_xticklabels([f"Dim {i}" for i in range(state_dim)], rotation=45)
             _ = axes[0].violinplot(
                 [immediate_arr[:, i] for i in range(state_dim)], 
                 showmeans=False,
                 showmedians=True,
                 showextrema=True
             )
-            axes[0].set_xticklabels([f"Dim {i}" for i in range(state_dim)], rotation=45)
             axes[0].set_title("Immediate (1-step) Prediction Error per Dimension")
             axes[0].set_ylabel("Absolute Error")
             axes[0].grid(True)
 
+            axes[1].set_xticks(tick_positions)
+            axes[1].set_xticklabels([f"Dim {i}" for i in range(state_dim)], rotation=45)
             axes[1].violinplot(
                 [cumulative_arr[:, i] for i in range(state_dim)], 
                 showmeans=False,
                 showmedians=True,
                 showextrema=True
             )
-            axes[1].set_xticklabels([f"Dim {i}" for i in range(state_dim)], rotation=45)
             axes[1].set_title(f"Cumulative ({pred_len}-step) Prediction Error per Dimension")
             axes[1].set_ylabel("Absolute Error")
             axes[1].grid(True)
