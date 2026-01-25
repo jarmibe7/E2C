@@ -27,13 +27,8 @@ import gymnasium_robotics
 gym.register_envs(gymnasium_robotics)
 
 # Parameters for dataset
-<<<<<<< HEAD
-env_name = 'drawer'                                           # Gym environment name
-dataset_size = int(2e3)                                     # Number of samples: (img, next_img, control) tuple
-=======
 env_name = 'lever'                                           # Gym environment name
 dataset_size = int(1e3)                                     # Number of samples: (img, next_img, control) tuple
->>>>>>> ayush
 OUTPUT_NAME = env_name + f'_{dataset_size // 1000}k'        # Output name of dataset
 image_shape = (64, 64, 3)                                   # Downsampled image shape
 past_length = 3                                             # Number of previous observations to use for training
