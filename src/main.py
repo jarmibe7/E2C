@@ -27,7 +27,7 @@ from src.trainer import E2CPretrainer, RSSMPretrainer, ClosedLoopPolicyTrainer, 
 import argparse
 
 # Set random seed globally
-set_seed(42)
+# set_seed(42)
 
 # Paths
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -61,6 +61,9 @@ def main():
     if 'cuda' in config['train']['device']: 
         assert torch.cuda.is_available(), f"{config['train']['device']} selected in {config_name}, but is unavailable!"
     device = torch.device(config['train']['device'])
+
+    # Set random seed
+    set_seed(config['train'].get('seed', 42))
 
     # Make E2CDataset object
     # TODO: Make temp dataset for hardware experiments

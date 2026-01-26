@@ -35,6 +35,7 @@ train:
   train_ratio: 0.9           # Ratio of dataset to use for training
   load_path: runs/coffee/2026-01-25_16-47-23                # Path to load model from (for resuming training or eval only)    
   eval_only: False           # Whether to only eval the model without training
+  seed: 42
 # Policy settings for training closed loop
 closed_loop: 
   closed_loop: True                 # Whether to use closed loop training
