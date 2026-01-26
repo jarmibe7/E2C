@@ -27,8 +27,8 @@ import gymnasium_robotics
 gym.register_envs(gymnasium_robotics)
 
 # Parameters for dataset
-env_name = 'lever'                                           # Gym environment name
-dataset_size = int(1e3)                                     # Number of samples: (img, next_img, control) tuple
+env_name = 'faucet'                                           # Gym environment name
+dataset_size = int(2e3)                                     # Number of samples: (img, next_img, control) tuple
 OUTPUT_NAME = env_name + f'_{dataset_size // 1000}k'        # Output name of dataset
 image_shape = (64, 64, 3)                                   # Downsampled image shape
 past_length = 3                                             # Number of previous observations to use for training
@@ -56,7 +56,7 @@ DATA_PATH = PROJECT_ROOT / "data"
 
 seed = 42
 set_seed(seed)
-meta_world_envs = ['shelf', 'sweep', 'assembly', 'test', 'plate', 'button', 'door', 'drawer', 'window', 'lever', 'coffee']
+meta_world_envs = ['shelf', 'sweep', 'assembly', 'test', 'plate', 'button', 'door', 'drawer', 'window', 'lever', 'coffee', 'faucet']
 name_to_env = {'reacher': 'Reacher-v5', 
                 'cartpole': 'CartPole-v1', 
                 'push': 'FetchPushDense-v4', 
@@ -72,7 +72,8 @@ name_to_env = {'reacher': 'Reacher-v5',
                 'drawer': 'drawer-open-v3',
                 'window': 'window-open-v3',
                 'lever': 'lever-pull-v3',
-                'coffee': 'coffee-button-v3'
+                'coffee': 'coffee-button-v3',
+                'faucet': 'faucet-open-v3'
                }
 env_to_aspace = {'reacher': 'continuous', 'cartpole': 'discrete', 'push': 'continuous', 
                  'pointmaze': 'continuous', 'antmaze': 'continuous', 'mountaincar': 'continuous',

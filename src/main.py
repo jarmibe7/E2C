@@ -23,9 +23,6 @@ from src.model.policy import ConvPolicy
 from src.trainer import E2CPretrainer, RSSMPretrainer, ClosedLoopPolicyTrainer, ClosedLoopRandomTrainer, ClosedLoopInformativeTrainer, ClosedLoopHardwareTrainer
 import argparse
 
-# Set random seed globally
-set_seed(42)
-
 # Paths
 PROJECT_ROOT = Path(__file__).parent.parent
 DATA_PATH = PROJECT_ROOT / "data"
@@ -51,6 +48,8 @@ def main():
     with open(CONFIG_PATH / config_file, "r") as f:
         config = yaml.safe_load(f)
     config['config_name'] = config_name
+    # Set random seed globally
+    set_seed(config.get('seed', 0))
     config_save = copy.deepcopy(config)
     timestamp = datetime.fromtimestamp(time.time()).strftime("%Y-%m-%d_%H-%M-%S")
     run_path = RUNS_PATH / Path(config['train']['dataset'].split('_')[0]) / timestamp
