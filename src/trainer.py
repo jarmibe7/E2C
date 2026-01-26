@@ -527,8 +527,9 @@ class ClosedLoopRandomTrainer(BaseTrainer):
                 # show model video every 50 epochs
                 self.model.eval()
                 if self.config['train']['eval']: self.evaluate(self.config['run_path'])
-                if self.config['train']['save']: super().save(self.config['run_path'], model_name=f'model_epoch{epoch+1}.pt')
                 self.model.train()
+            if (epoch + 1) % 100 == 0:
+                if self.config['train']['save']: super().save(self.config['run_path'], model_name=f'model_epoch{epoch+1}.pt')
             
         pbar.close()
 
