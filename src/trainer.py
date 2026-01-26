@@ -25,6 +25,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "sawyer_move" / "scripts"))
 
 from hardware_test import HardwareEnv
+from std_msgs.msg import String as ros_string
+import cv2
 
 from src.model.loss import E2CLoss, UncertaintyE2CLoss, RSSMLoss
 from src.eval import Plotter, Evaluator
@@ -134,14 +136,16 @@ class BaseTrainer():
     def learn(self, *args, **kwargs):
         pass
 
-    def evaluate(self, run_path):
+    def evaluate(self, run_path, max_steps=50):
         """
         Evaluate model and output figures to run directory
         """
-        print('\n*** EVAL ***\n')
+        print('\n*** EVAL w/ reset ***\n')
+        obs, _ = self.env.reset()
+        time.sleep(5.0)
         self.model.eval()
         # self.evaluator.eval(run_path)
-        self.evaluator.visualize_planner(self, run_path, max_steps=50, closed_loop=True)
+        self.evaluator.visualize_planner(self, run_path, max_steps=max_steps, closed_loop=True)
         self.env.step(np.array([0.0, 0.0]))
         self.env.step(np.array([0.0, 0.0]))
         obs, _ = self.env.reset()
@@ -160,7 +164,7 @@ class BaseTrainer():
             # torch.save(self.model.state_dict(), filepath)
             torch.save(
                 self.model.module.state_dict() if isinstance(self.model, torch.nn.DataParallel) else self.model.state_dict(),
-                model_name
+                filepath
             )
         except Exception as e:
             print(e)
@@ -541,195 +545,6 @@ class ClosedLoopRandomTrainer(BaseTrainer):
             
         pbar.close()
 
-
-class ClosedLoopPolicyTrainer(BaseTrainer):
-    """
-    Train a world model in closed loop, where actions are chosen based an asychronous
-    policy that is being trained concurrently.
-
-    Args:
-        dataset: Torch dataset object, from which test set is used during evaluation.
-        model: A world model class instance for training
-        config: Config dictionary with required params
-        device: Torch device object
-        policy: Asynchronous policy
-    """
-    def __init__(self, dataset, model, config, device, policy):
-        super().__init__(dataset, model, config, device, policy)
-        self.num_rollout_steps = config['closed_loop']['num_rollout_steps']
-        self.num_batches = config['closed_loop']['num_batches']
-        assert self.num_rollout_steps > self.batch_size, 'Steps per rollout must be > batch_size!'
-
-        # Initialize environment
-        disp = Display(visible=0, size=(480, 480))
-        disp.start()
-        env_name = config['train']['dataset'].split('_')[0]
-        self.env = gym.make(name_to_env[env_name], render_mode="rgb_array")
-        self.env_continuous = (env_to_aspace[env_name] == 'continuous')
-        self.past_length = config['trans']['past_length']
-
-        # Policy optimizer and loss (TODO)
-        self.policy_optimizer = torch.optim.Adam(
-            policy.parameters(), 
-            lr=config['closed_loop']['alpha'], 
-            weight_decay=config['closed_loop']['weight_decay']
-        )
-        self.policy_criterion = torch.nn.functional.mse_loss # TODO: Placeholder loss
-
-        # Initialize replay buffer
-        self.replay_buffer = ReplayBuffer(
-            self.in_image_shape, 
-            model.control_size, 
-            config['closed_loop']['buffer_capacity'],
-            device,
-            config
-        )
-        assert self.num_rollout_steps <= self.replay_buffer.capacity, 'Steps per rollout should be <= buffer_capacity!'
-
-    def collect_rollouts(self, epoch):
-        """
-        Collect observations and save them to replay buffer
-        """
-        # Initialize env and buffers
-        obs, _ = self.env.reset()
-        frame_buffer = []
-        act_buffer = []
-        idx = 0
-        while idx < self.num_rollout_steps:
-            # Render current frame
-            curr_img = process_image(self.env.render(), self.evaluator.dataset_name).squeeze(0).permute(2, 0, 1)
-            if len(frame_buffer) == 0:
-                frame_buffer.append(curr_img)
-
-            # Sample and take action
-            # act = self.policy(curr_img.unsqueeze(0).to(self.device)).flatten()
-            act = torch.from_numpy(self.env.action_space.sample()).to(self.device)
-            act_buffer.append(act)
-            next_obs, rew, done, _, _ = self.env.step(act.cpu().detach().numpy())
-
-            # If done reset env, otherwise add sample to dataset
-            if done:
-                obs, _ = self.env.reset()
-                done = False
-                frame_buffer = []
-                act_buffer = []
-                continue
-            else:
-                # Slide frame obs history frame buffer to next image
-                if len(frame_buffer) == self.past_length + 1:
-                    frame_buffer.pop(0)
-                    act_buffer.pop(0)
-                next_image = process_image(self.env.render(), self.evaluator.dataset_name).squeeze(0).permute(2, 0, 1)
-                frame_buffer.append(next_image)
-
-                # Add sample to replay buffer
-                if len(frame_buffer) == self.past_length + 1:
-                    self.replay_buffer.add(
-                        img = torch.stack(frame_buffer[0:self.past_length], dim=0),
-                        action = act_buffer[-1],
-                        reward = rew,
-                        next_img = frame_buffer[self.past_length],
-                        done = done
-                    )
-                    idx += 1
-
-    def train(self, epoch):
-        """
-        Gradient update for model and asychronous policy
-        """
-        # TODO: Where does policy update go, should be latent rollouts right?
-        # Sample batches
-        batches = []
-        for i in range(self.num_batches):
-            # Sampling
-            batches.append(self.replay_buffer.sample(self.batch_size))
-
-        # World model and policy update
-        total_model_loss, total_policy_loss = 0.0, 0.0
-        for i, batch in enumerate(batches):
-            # Unload batch
-            x, u, r, x_next, done  = batch
-            x, x_next, u = x.to(self.device), x_next.to(self.device), u.to(self.device)
-            x = x.reshape(x.shape[0], -1, *self.in_image_shape[1:])    # Stack obs history in channel dim
-            x_next = torch.hstack([x_next for i in range(self.model.past_length)]).to(self.device)
-
-            # Forward pass
-            train_return = self.model(x, x_next, u)
-            train_return['x'] = x
-            train_return['x_next'] = x_next
-
-            # Model loss and backprop
-            model_loss, loss_return = self.model_criterion(train_return, epoch)
-            self.plotter.log(loss_return)
-            self.model_optimizer.zero_grad()
-            model_loss.backward()
-            self.model_optimizer.step()
-
-            # TODO: Raise exception
-            if torch.isnan(model_loss):
-                print("NaN loss encountered, stopping training.")
-                break
-
-            total_model_loss += model_loss.item() * x.size(0)   # Aggregate total epoch loss
-
-            # Forward pass through policy
-            C = self.out_image_shape[0]
-            current_frame = x[:, -C:, :, :]  # Take only current frame
-            pred_action = self.policy(current_frame)
-
-            # Policy loss and backprop
-            policy_loss = self.policy_criterion(u, pred_action)
-            self.policy_optimizer.zero_grad()
-            policy_loss.backward()
-            self.policy_optimizer.step()
-
-            # TODO: Raise exception
-            if torch.isnan(policy_loss):
-                print("NaN loss encountered, stopping training.")
-                break
-
-            total_policy_loss += policy_loss.item() * x.size(0)
-
-        # Compute average model loss
-        avg_model_loss = total_model_loss / (self.batch_size*self.num_batches)
-
-        # # Policy update on same samples
-        # total_policy_loss = 0.0
-        # for i, batch in enumerate(batches):
-        #     x, u, r, x_next, done = batch
-        #     x = x.to(self.device).reshape(x.shape[0], -1, *self.in_image_shape[1:])
-
-        #     # Forward pass through policy
-        #     pred_action = self.policy(x)  
-
-        #     # Example policy loss: maximize expected reward in replay buffer
-        #     # You can replace this with SAC-style loss or any other RL objective
-        #     policy_loss = -torch.mean(pred_action)  
-
-        #     self.policy_optimizer.zero_grad()
-        #     policy_loss.backward()
-        #     self.policy_optimizer.step()
-
-        #     total_policy_loss += policy_loss.item() * x.size(0)
-
-        avg_policy_loss = total_policy_loss / (self.num_batches * self.batch_size)
-        return avg_model_loss, avg_policy_loss
-
-    def learn(self):
-        model_loss, policy_loss = 0.0, 0.0
-        pbar = tqdm(range(self.num_epochs), desc="Training")
-        for epoch in range(self.num_epochs):
-            self.collect_rollouts(epoch)
-            model_loss, policy_loss = self.train(epoch)
-
-            pbar.set_postfix({
-                'Epoch': epoch+1,
-                'Model Loss': f"{model_loss:.4f}",
-                'Policy Loss': f"{policy_loss:.4f}"})
-            pbar.update(1)
-            
-        pbar.close()
-
 class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
     """
     Closed-loop trainer that selects actions by maximizing expected information gain
@@ -1036,10 +851,15 @@ class ClosedLoopHardwareTrainer(ClosedLoopInformativeTrainer):
         # super().__init__(dataset, model, config, device)
         ClosedLoopRandomTrainer.__init__(self, dataset, model, config, device)
         # Override environment with real hardware
+        rospy.Subscriber("/bobcat/reset", ros_string, self.test_reset_cb)
         self.env = HardwareEnv(
             frame_width=config['vae']['in_image_shape'][1],
             frame_height=config['vae']['in_image_shape'][2]
         )
+        self.start_now = False
+        while not self.start_now and not rospy.is_shutdown():
+            rospy.loginfo_once("Waiting for hardware environment to be ready...")
+            rospy.sleep(1.0)
 
         # Re-init CEM Planning after env is set
         self.closed_cfg = config.get('closed_loop', {})
@@ -1053,20 +873,55 @@ class ClosedLoopHardwareTrainer(ClosedLoopInformativeTrainer):
         self.plan_horizon = self.closed_cfg.get('plan_horizon', self.pred_length)
 
         # Pre-populate replay buffer with hardware dataset
-        print(f"Pre-loading replay buffer with {len(self.dataset)} samples from hardware dataset...")
-        for i in range(len(self.dataset)):
-            x, x_next, u = self.dataset[i]  # Get sample from dataset
+        # Buffers for saving dataset from pre-populate
+        self._prepop_prev, self._prepop_next, self._prepop_act = [], [], []
+        # print(f"Pre-loading replay buffer with {len(self.dataset)} samples from hardware dataset...")
+        if config['train'].get('eval_only', False) == False:
+            print("Initializing buffer with random rollouts...")
+            _, _ = self.env.reset()
+            loop_steps = self.config['closed_loop']['buffer_capacity'] // 30
+            self.num_rollout_steps = loop_steps
+            for _ in tqdm(range(self.config['closed_loop']['buffer_capacity'] // loop_steps), desc="Initializing Replay Buffer"):
+                if self.stop_requested or rospy.is_shutdown():
+                    print("Stop requested, ending training loop.")
+                    break
+                self.collect_rollouts(-1)
+            if len(self._prepop_prev) > 0 or rospy.is_shutdown() or self.stop_requested:
+                run_path = self.config['run_path']
+                run_path = Path(run_path) if not isinstance(run_path, Path) else run_path
+                out_dir = run_path / "prepop_datasets"
+                out_dir.mkdir(parents=True, exist_ok=True)
+                ts = time.strftime("%Y%m%d_%H%M%S")
+                out_path = out_dir / f"prepop_{self.replay_buffer.size}_{ts}.pt"
+                torch.save({
+                    "prev_images": torch.stack(self._prepop_prev, dim=0),  # (N, past_length, H, W, C)
+                    "actions": torch.stack(self._prepop_act, dim=0),       # (N, pred_length, action_dim)
+                    "next_images": torch.stack(self._prepop_next, dim=0),  # (N, pred_length, H, W, C)
+                }, out_path)
+                print(f"Saved pre-populated dataset: {out_path}")
+
+            self.num_rollout_steps = config['closed_loop']['num_rollout_steps']
+            # for i in range(len(self.dataset)):
+            #     x, x_next, u = self.dataset[i]  # Get sample from dataset
+                
+            #     # Add to replay buffer (assuming reward=0, done=False for hardware data)
+            #     self.replay_buffer.add(
+            #         img = x,                    # (past_length, H, W, C)
+            #         action = u,                 # (pred_length, action_dim)
+            #         reward = 0.0,               # Placeholder reward
+            #         next_img = x_next,          # (pred_length, H, W, C)
+            #         done = False                # Placeholder done flag
+            #     )
             
-            # Add to replay buffer (assuming reward=0, done=False for hardware data)
-            self.replay_buffer.add(
-                img = x,                    # (past_length, H, W, C)
-                action = u,                 # (pred_length, action_dim)
-                reward = 0.0,               # Placeholder reward
-                next_img = x_next,          # (pred_length, H, W, C)
-                done = False                # Placeholder done flag
-            )
-        
-        print(f"Replay buffer initialized with {self.replay_buffer.size} samples")
+            print(f"Replay buffer initialized with {self.replay_buffer.size} samples")
+
+    def test_reset_cb(self, msg):
+        """
+        make sure can reset env before starting training
+        """
+        if msg.data == "":
+            self.start_now = True
+            
     
     def collect_rollouts(self, epoch):
         """
@@ -1074,11 +929,16 @@ class ClosedLoopHardwareTrainer(ClosedLoopInformativeTrainer):
         """
         self.model.eval()
         self.env.step(np.array([0.0, 0.0]))
-        self.env.reset() #Assume reset happens at the end
+        if epoch == self.epochs_warmup:
+            print("Already reset environment?")
+        else:
+            self.env.reset() #Assume reset happens at the end
         frame_buffer = []
         act_buffer = []
         idx = 0
         ctrl_freq = []
+        if epoch == self.epochs_warmup:
+            print("Random actions for warmup...")
 
         while idx < self.num_rollout_steps and not self.stop_requested and not rospy.is_shutdown():
             self._init_cem_mu_sig()
@@ -1089,22 +949,23 @@ class ClosedLoopHardwareTrainer(ClosedLoopInformativeTrainer):
                 rospy.logwarn("Failed to get image from robot")
                 continue
             
-            if len(frame_buffer) == 0:
-                frame_buffer.append(curr_img.to(torch.float32))
+            if len(frame_buffer) == 0 and epoch > self.epochs_warmup:
+                frame_buffer.append(*[self.env.render().to(torch.float32) for _ in range(self.past_length)])
 
             # Select action: random during warmup, informative after
             tic = time.time()
-            if epoch >= self.epochs_warmup and len(frame_buffer) >= self.past_length:
-                if epoch == self.epochs_warmup and len(frame_buffer) == self.past_length:
-                    print(f'Switching to informative action selection. \n')
+            if epoch == self.epochs_warmup or len(frame_buffer) < self.past_length:
+                if epoch > self.epochs_warmup:
+                    print(f'Initializing with random actions.')
+                else:
+                    rospy.loginfo_once(f'Using random action selection for warmup epoch {epoch}. \n')
+                act = torch.from_numpy(self.env.action_space.sample()).to(self.device)
+            else:
+                rospy.loginfo_once(f'Switching to informative action selection. \n')
                 act, cost = self._select_information_action(frame_buffer)
                 if idx == 0:
                     tic2 = time.time()
                     print(f"CEM planning took {(tic2 - tic):.3f}s per action")
-            else:
-                if epoch == 0 and len(frame_buffer) == 1:
-                    print(f'Initializing with random actions. \n')
-                act = torch.from_numpy(self.env.action_space.sample()).to(self.device)
             
             # Send action to robot
             env_act = act.cpu().detach().numpy()
@@ -1137,15 +998,27 @@ class ClosedLoopHardwareTrainer(ClosedLoopInformativeTrainer):
                     next_img = torch.stack(frame_buffer[self.past_length:(self.past_length+self.pred_length)], dim=0),
                     done = False
                 )
+                # Collect for saving when running the pre-populate phase
+                if epoch == -1:
+                    # Convert (C,H,W) → (H,W,C) per frame, and stack windows
+                    prev_win = torch.stack(frame_buffer[0:self.past_length], dim=0).permute(0, 2, 3, 1).cpu()
+                    next_win = torch.stack(frame_buffer[self.past_length:(self.past_length+self.pred_length)], dim=0).permute(0, 2, 3, 1).cpu()
+                    self._prepop_prev.append(prev_win)
+                    self._prepop_next.append(next_win)
+                    self._prepop_act.append(act_add.cpu())
                 idx += 1
             toc = time.time()
             ctrl_freq.append(toc - tic)
             if idx == (self.num_rollout_steps-1): # and epoch == self.epochs_warmup:
-                print(f"Average control frequency: {np.mean(ctrl_freq)}, Expect: {np.mean(ctrl_freq) * self.num_rollout_steps:.3f}s for data collect.")
+                print(f"Average control frequency: {(1. / np.mean(ctrl_freq)):.3f} Hz. \nDon't forget to move the cube!")
         
         self.env.step(np.array([0.0, 0.0]))
         self.env.step(np.array([0.0, 0.0]))
-        obs, _ = self.env.reset()
+        if epoch == self.epochs_warmup:
+            print("4 seconds to change cube position; don't reset position...")
+            time.sleep(4.0)
+        else:
+            obs, _ = self.env.reset()
         
         self.model.train()
 
@@ -1191,6 +1064,12 @@ class ClosedLoopHardwareTrainer(ClosedLoopInformativeTrainer):
 
         # Compute average model loss
         avg_model_loss = total_model_loss / (self.batch_size*self.num_batches)
+        fig, ax = plt.subplots(2, 1, figsize=(6, 8))
+        ax[0].imshow(cv2.cvtColor(train_return['x_pred'][0,-1].permute(1,2,0).detach().cpu().numpy(), cv2.COLOR_BGR2RGB))
+        ax[0].set_title("Model Prediction")
+        ax[1].set_title("Ground Truth")
+        ax[1].imshow(cv2.cvtColor(train_return['x_next'][0,-1].permute(1,2,0).cpu().numpy(), cv2.COLOR_BGR2RGB))
+        plt.savefig("/home/ayush/Desktop/sawyer_moveit_ws/src/E2C/runs/hardware/train_pred.png")
 
         return avg_model_loss
     
@@ -1198,6 +1077,9 @@ class ClosedLoopHardwareTrainer(ClosedLoopInformativeTrainer):
         try: 
             model_loss = 0.0
             pbar = tqdm(range(self.num_epochs), desc="Training")
+            if self.stop_requested or rospy.is_shutdown():
+                print("Stop requested, ending learning loop.")
+                return
             for epoch in range(self.num_epochs):
                 if self.stop_requested or rospy.is_shutdown():
                     print("Stop requested, ending learning loop.")
@@ -1215,8 +1097,8 @@ class ClosedLoopHardwareTrainer(ClosedLoopInformativeTrainer):
                 self.collect_rollouts(epoch)
                 if (epoch % 10) == 0:
                     print(f"Collected rollouts at {epoch}".format(epoch))
-                if (epoch+1) % 50 == 0:
-                    # show model video every 50 epochs
+                if (epoch+1) % 10 == 0:
+                    # show model video every 10 epochs
                     self.model.eval()
                     if self.config['train']['eval']: self.evaluate(self.config['run_path'])
                     self.model.train()

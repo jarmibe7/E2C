@@ -20,7 +20,7 @@ from src.model.rssm import RSSME2C
 from src.dataset import E2CDataset
 from src.utils import set_seed, anim_frames, format_time
 from src.model.policy import ConvPolicy
-from src.trainer import E2CPretrainer, RSSMPretrainer, ClosedLoopPolicyTrainer, ClosedLoopRandomTrainer, ClosedLoopInformativeTrainer, ClosedLoopHardwareTrainer
+from src.trainer import E2CPretrainer, RSSMPretrainer, ClosedLoopRandomTrainer, ClosedLoopInformativeTrainer, ClosedLoopHardwareTrainer
 import argparse
 
 # Set random seed globally
@@ -110,12 +110,7 @@ def main():
     if config.get('closed_loop', None) is not None and config['closed_loop']['closed_loop']:
         env = None
         policy_type = config['closed_loop'].get('policy', None)
-        if policy_type == 'conv':
-            policy = ConvPolicy(config['trans']['control_size'], 
-                                config['vae']['in_image_shape'][0] // config['trans']['past_length'],
-                                config['vae'])
-            trainer = ClosedLoopPolicyTrainer(dataset, model, config, device, policy)
-        elif policy_type == 'random':
+        if policy_type == 'random':
             trainer = ClosedLoopRandomTrainer(dataset, model, config, device)
         elif policy_type == 'informative':
             trainer = ClosedLoopInformativeTrainer(dataset, model, config, device)
@@ -123,6 +118,7 @@ def main():
             trainer = ClosedLoopInformativeTrainer(dataset, model, config, device)
         elif policy_type == "hardware":
             trainer = ClosedLoopHardwareTrainer(dataset, model, config, device)
+            time.sleep(1.0)
         elif policy_type == "direct_reward":
             # TODO: Implement shallow reward-based closed loop trainer
             pass
@@ -140,7 +136,8 @@ def main():
             print('*** EVAL ONLY ***')
             # trainer.evaluate(config['run_path'])
             # trainer.evaluator.eval_traj(config['run_path'], max_frames=25)
-            trainer.evaluator.visualize_planner(trainer, config['run_path'], max_steps=150, closed_loop=True)
+            trainer.epochs_warmup = 0
+            trainer.evaluate(config['run_path'], max_steps=150)
             print('\n*** DONE ***')
             return
     

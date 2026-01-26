@@ -19,6 +19,7 @@ from src.model.rssm import RSSME2C
 from src.dataset import E2CDataset
 from src.utils import set_seed, anim_frames, shoulder_mass, excess_kurtosis, central_mass_ratio
 from src.data_gen.gen_fetch import process_image
+import cv2
 
 import sys
 import time
@@ -178,7 +179,7 @@ class Evaluator():
 
         dtype = next(self.model.parameters()).dtype
         model.eval()
-        obs, _ = env.reset()
+        # obs, _ = env.reset() # reset in trainer.save()
         frame_buffer = []   # frames used as model input window
         true_frames = []    # ground-truth frames for visualization
         recon_frames = []   # model reconstructions
@@ -307,7 +308,6 @@ class Evaluator():
             a.axis('off')
 
         def update(frame_idx):
-            # TODO: Plot KLD value
             # TODO: somehow show "reward"/number of times interacted with object?
             true_curr = true_frames[frame_idx].squeeze(0)
             true_next = true_frames[frame_idx + 1].squeeze(0) if frame_idx + 1 < len(true_frames) else true_curr
@@ -316,20 +316,20 @@ class Evaluator():
             # Pred current recon
             ax[0, 0].set_title(f"Pred t=0; {plan_obj_vals[frame_idx]:.2f}")
             ax[1, 0].set_title(f"True t=0; {env_rew[frame_idx]:.2f}")
-            ims[0].set_data(recon[:3].permute(1, 2, 0).detach().cpu().numpy())
-            ims[1].set_data(true_curr[:3].permute(1, 2, 0).detach().cpu().numpy())
+            ims[0].set_data(cv2.cvtColor(recon[:3].permute(1, 2, 0).detach().cpu().numpy(), cv2.COLOR_BGR2RGB))
+            ims[1].set_data(cv2.cvtColor(true_curr[:3].permute(1, 2, 0).detach().cpu().numpy(), cv2.COLOR_BGR2RGB))
 
             # Predictions across horizon
             for j in range(1, cols):
                 pred_frame = pred_sequences[frame_idx][j-1].squeeze(0)
-                ims[2 * j].set_data(pred_frame.permute(1, 2, 0).detach().cpu().numpy())
+                ims[2 * j].set_data(cv2.cvtColor(pred_frame.permute(1, 2, 0).detach().cpu().numpy(), cv2.COLOR_BGR2RGB))
                 if j == 1:
                     true_frame = true_next  # reuse true_next for all future slots
-                    ims[2 * j + 1].set_data(true_frame[:3].permute(1, 2, 0).detach().cpu().numpy())
+                    ims[2 * j + 1].set_data(cv2.cvtColor(true_frame[:3].permute(1, 2, 0).detach().cpu().numpy(), cv2.COLOR_BGR2RGB))
 
         ani = FuncAnimation(fig, update, frames=len(true_frames), interval=5.)
         writer = FFMpegWriter(fps=2)
-        vid_name = 'planner_CL_' + closed_loop_policy + f'_{trainer.curr_epoch}.mp4' if closed_loop else 'planner_vis_OL_' + closed_loop_policy + f'_{trainer.curr_epoch}.mp4'
+        vid_name = 'hardware_RGB_' + closed_loop_policy + f'_{trainer.curr_epoch}.mp4' if closed_loop else 'planner_vis_OL_' + closed_loop_policy + f'_{trainer.curr_epoch}.mp4'
         try:
             filepath = run_path / vid_name
             print(f'Saved planner visualization to {filepath}\n')
