@@ -8,7 +8,6 @@ import matplotlib.animation as animation
 import random
 import numpy as np
 import torch
-from pathlib import Path
 import math
 
 def anim_frames(frames):
@@ -75,19 +74,6 @@ def wrapped_angle_error(pred, true):
     diff = pred - true
     wrapped = (diff + math.pi) % (2*math.pi) - math.pi
     return wrapped
-
-def make_yaml_serializable(obj):
-    """Recursively convert objects that YAML can't serialize safely."""
-    if isinstance(obj, dict):
-        return {k: make_yaml_serializable(v) for k, v in obj.items()}
-    elif isinstance(obj, list):
-        return [make_yaml_serializable(v) for v in obj]
-    elif isinstance(obj, Path):
-        return str(obj)
-    elif isinstance(obj, torch.Size):
-        return list(obj)
-    else:
-        return obj
 
 
 #

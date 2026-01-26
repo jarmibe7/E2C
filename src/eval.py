@@ -10,22 +10,15 @@ import torch
 import numpy as np
 import itertools
 from tqdm import tqdm
-from pathlib import Path
-import yaml
 from torchmetrics import PeakSignalNoiseRatio as psnr
 from torchmetrics import StructuralSimilarityIndexMeasure as ssim
 import lpips
-import mujoco
 
 from src.model.e2c import ConvE2C
 from src.model.rssm import RSSME2C
 from src.dataset import E2CDataset
 from src.utils import set_seed, anim_frames, shoulder_mass, excess_kurtosis, central_mass_ratio
-from src.data_gen.gen_fetch import process_image, get_mujoco_geom_keys_index, is_robot_contact_geometry
-from src.data_gen.gen_state_rep import get_env_state
-from src.model.state_rep import StateRepresentationModel
-
-PROJECT_ROOT = Path(__file__).parent.parent
+from src.data_gen.gen_fetch import process_image
 
 class Plotter():
     """
@@ -40,26 +33,22 @@ class Plotter():
         self.plot_freq = plot_freq
         self.plot_history = None
         self.fig = None
-        self.colors = ['blue', 'orange', 'green', 'red', 'purple', 'black', 'pink']
-        self.plot_history = {}
-
-    def log_value(self, key, value):
-        # Log value in plot history
-        if key not in self.plot_history:
-                self.plot_history[key] = []
-        self.plot_history[key].append(value)
-        return
+        self.colors = ['blue', 'orange', 'green', 'red', 'purple', 'black']
 
     def log(self, lr):
         """
         Update live training plot logs, and plot at frequency self.plot_freq
         """
         # Create plot history dictionary if none exists
-        self.num_steps += 1            
+        self.num_steps += 1
+        if self.plot_history is None:
+            self.plot_history = {}
+            for key in lr.keys():
+                self.plot_history[key] = []
 
         # Update plot history arrays
         for key in lr.keys():
-            self.log_value(key, lr[key])
+            self.plot_history[key].append(lr[key])
 
         # Replot
         if self.num_steps % self.plot_freq == 0: self.plot()
@@ -122,7 +111,7 @@ class Evaluator():
     """
     Class for evaluating model performance on a test set.
     """
-    def __init__(self, model, test_dataset, batch_size, device, dataset_name, num_epochs=None):
+    def __init__(self, model, test_dataset, batch_size, device, dataset_name):
         # Set model to eval mode
         self.model = model
         self.test_dataset = test_dataset
@@ -130,8 +119,6 @@ class Evaluator():
         # Params
         self.batch_size = batch_size
         self.device = device
-        # self.num_epochs = num_epochs
-        # if self.num_epochs is not None: self.epoch_idx = 0
 
         if 'particle_grav' in dataset_name: self.dataset_latent_func = self.eval_four_var_latent
         elif 'cartpole' in dataset_name: self.dataset_latent_func = self.eval_four_var_latent
@@ -139,30 +126,6 @@ class Evaluator():
         else: self.dataset_latent_func = self.eval_four_var_latent
             
         self.dataset_name = dataset_name
-
-        # Load state rep model
-        try:
-            sr_run_path = PROJECT_ROOT / 'runs' / self.dataset_name.split('_')[0] / 'state_rep' / 'trained'
-            with open(sr_run_path / f'config.yaml', "r") as f:
-                sr_config = yaml.safe_load(f)
-            self.sr_model = StateRepresentationModel(
-                state_size=sr_config['train']['state_size'],
-                conv_params=sr_config['conv'],
-                device=device
-            )
-            sr_model_path = sr_run_path / 'model.pt'
-            self.sr_model.load_state_dict(torch.load(sr_model_path))
-            self.sr_model.to(device)
-            self.sr_model.eval()
-            self.epoch_list = []
-            self.epoch_imm_mean = []
-            self.epoch_imm_std = []
-            self.epoch_cum_mean = []
-            self.epoch_cum_std = []
-            self.use_state_rep = True
-        except:
-            print('State rep model not detected, will not run state rep eval!')
-            self.use_state_rep = False
 
     def eval(self, run_path, vid_max_frames=50):
         self.model.eval()
@@ -173,274 +136,6 @@ class Evaluator():
         print("\nGenerating trajectory video...")
         self.eval_traj(run_path, max_frames=vid_max_frames)
         # self.eval_latent(run_path)
-
-    def eval_state_rep(self, trainer, run_path, max_steps=25, closed_loop=True, epoch=None):
-        """
-        Use a pretrained state representation model to evaluate prediction errors
-
-        Args:
-            trainer: Trainer instance (must expose env, model, device, past_length, pred_length/config).
-            run_path: Path to save the resulting video.
-            max_steps: Number of environment steps to visualize.
-            closed_loop: If True, feed ground-truth observations back into the model window.
-                         If False, feed the model's predicted next frame (open-loop rollout).
-        """
-        if not self.use_state_rep: return [], []
-
-        device = trainer.device
-        model = trainer.model
-        env = trainer.env
-        past_len = model.past_length if hasattr(model, 'past_length') else 3
-        pred_len = model.pred_length if hasattr(model, 'pred_length') else 3
-        try:
-            closed_loop_policy = trainer.config['closed_loop']['policy']
-        except:
-            print('No closed loop policy found in trainer config, defaulting to random')
-            closed_loop_policy = 'random'
-
-        model.eval()
-        obs, _ = env.reset()
-
-        frame_buffer = []   # frames used as model input window
-        immediate_state_errors = []         # Prediction error at timestep t+1
-        cumulative_state_errors = []        # cumulative pred error for entire pred_length
-
-        # Prime buffer with the first observation
-        first_img = process_image(env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1)
-        for _ in range(past_len):
-            frame_buffer.append(first_img)
-
-        step_idx = 0
-        for step_idx in tqdm(range(max_steps), desc="Eval with state representation model"):
-            # Current frame (ground truth)
-            curr_img = process_image(env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1)
-
-            # Action: reuse trainer.collect_rollouts logic (random sample)
-            if closed_loop_policy == 'informative':
-                trainer._init_cem_mu_sig()
-                mu, costs = trainer._sample_cem(frame_buffer[-past_len:]) # pred_len, act_size
-                action_seq = mu.clone()
-            else:
-                # repeat pred len number of times for action horizon
-                act = [env.action_space.sample() for _ in range(pred_len)]
-                action_seq = torch.from_numpy(np.array(act)).to(device)
-            env_act = action_seq.cpu().detach().numpy()[0]
-
-            # Step env
-            valid = True
-            for _ in range(trainer.meta_ts):
-                obs, rew, terminated, truncated, _ = env.step(env_act)
-                if terminated or truncated:
-                    valid = False
-                    break
-
-            # Can't evaluate state accuracy if temporal consistency is broken
-            if not valid:
-                obs, _ = env.reset()
-                frame_buffer = [
-                    process_image(env.render(), self.dataset_name)
-                        .squeeze(0).permute(2, 0, 1)
-                    for _ in range(past_len)
-                ]
-                print(f"Skipping timestep {step_idx}, had to truncate")
-                continue   # skip this timestep entirely
-
-            next_img_true = process_image(env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1)
-            state_true = get_env_state(env, obs, self.dataset_name)
-
-            # Model forward pass
-            with torch.no_grad():
-                window = torch.stack(frame_buffer[-trainer.model.past_length:], dim=0).unsqueeze(0).to(trainer.device)
-                _, _, zs = self.model.encode_posterior(window)
-                h = torch.zeros(model.num_layers, 1, model.deterministic_size, device=trainer.device)
-                z = zs[:, -1]
-                if self.model.output_uncertainty:
-                    x_recon, x_pred_uncertainty = self.model.decoder(z)
-                else:
-                    x_recon = self.model.decoder(z)
-                x_recon_next = []
-                for act in action_seq:
-                    act_batch = act.view(1, -1).to(trainer.device)
-                    h, z_prior, mu_p, log_var_p = trainer.model.rssm_step(h, z.unsqueeze(1), act_batch)
-                    # h, z_prior, mu_p, log_var_p = trainer.model.rssm_step(h, zs, act_batch)
-                    # Decode prior to observation space
-                    if self.model.output_uncertainty:
-                        x_pred, x_pred_uncertainty = trainer.model.decoder(z_prior)
-                    else:
-                        x_pred = trainer.model.decoder(z_prior)
-                    x_recon_next.append(x_pred.detach().cpu())
-                    
-                    if trainer.past_length > 1:
-                        window_frames = window[:, 1:]   # drop first frame
-                        window = torch.cat([window_frames, x_pred.unsqueeze(1).detach()], dim=1)
-                    else:
-                        window = x_pred.detach()  # past_length==1, just use pred image
-                    _, _, zs = self.model.encode_posterior(window)
-                    z = zs[:, -1]
-
-            # State rep eval for error per dimension of state vec
-            with torch.no_grad():
-                # Immediate error
-                s_true_t1 = torch.as_tensor(state_true)
-                s_pred_t1 = self.sr_model(x_recon_next[0].to(device))['state_pred'].squeeze(0).detach().cpu()
-                immediate_err = (s_pred_t1 - s_true_t1).abs().squeeze(0).numpy()
-                immediate_state_errors.append(immediate_err)
-
-                # Cumulative error
-                np.zeros_like(immediate_err)
-
-                # # Save env state for temporary rollout
-                cum_err = np.zeros_like(immediate_err)
-
-                mj_model = env.unwrapped.model
-                data  = env.unwrapped.data
-                spec = (
-                    mujoco.mjtState.mjSTATE_INTEGRATION |
-                    mujoco.mjtState.mjSTATE_PHYSICS |
-                    mujoco.mjtState.mjSTATE_CTRL
-                )
-
-                state_dim = mujoco.mj_stateSize(mj_model, spec)
-                mj_state = np.zeros(state_dim, dtype=np.float64)
-                mujoco.mj_getState(mj_model, data, mj_state, spec)
-                valid = True    # Ensure no breaks in temporal consistency
-                for k in range(pred_len):
-                    # Rollout predicted actions to get ground truth next states
-                    env_act_k = action_seq[k].cpu().numpy()
-                    for _ in range(trainer.meta_ts):
-                        obs_k, _, terminated, truncated, _ = env.step(env_act_k)
-                        if terminated or truncated:
-                            valid = False
-                            break
-                    if not valid:
-                        break
-
-                    s_true_k = torch.as_tensor(get_env_state(env, obs_k, self.dataset_name))
-                    s_pred_k = self.sr_model(x_recon_next[k].to(device))['state_pred'].squeeze(0).detach().cpu()
-                    cum_err += (s_pred_k - s_true_k).abs().squeeze(0).numpy()
-
-                if valid:
-                    cumulative_state_errors.append(cum_err / pred_len)  
-
-                # Restore env state
-                mujoco.mj_setState(mj_model, data, mj_state, spec)
-                mujoco.mj_forward(mj_model, data)
-
-            if step_idx == 0:
-                print("Reconstruction shape:", x_recon.shape, "Next Reconstruction shape:", len(x_recon_next), x_recon_next[0].shape)
-
-            # Feed next frame based on loop type
-            next_for_buffer = next_img_true if closed_loop else x_recon_next[0]
-
-            # Update buffers/logs
-            frame_buffer.append(next_for_buffer)
-
-        # ##### DEBUG #####
-        # num_debug_frames = 5
-        # debug_frames = x_recon_next[:num_debug_frames]  # list of [C,H,W] tensors
-
-        # fig, axes = plt.subplots(1, len(debug_frames), figsize=(15, 3), dpi=150)
-        # for i, frame in enumerate(debug_frames):
-        #     img = frame.permute(1, 2, 0).cpu().numpy()  # [C,H,W] -> [H,W,C]
-        #     img = (img - img.min()) / (img.max() - img.min() + 1e-8)  # normalize to [0,1]
-        #     axes[i].imshow(img)
-        #     axes[i].axis('off')
-        #     axes[i].set_title(f"Step {i}")
-
-        # plt.tight_layout()
-        # fig.savefig("debug.png")
-        # ##### DEBUG #####
-
-
-        # Convert to arrays
-        immediate_arr = np.stack(immediate_state_errors, axis=0)   # [num_steps, state_dim]
-        cumulative_arr = np.stack(cumulative_state_errors, axis=0) # [num_steps, state_dim]
-        state_dim = immediate_arr.shape[1]
-
-        # If epoch not given, use violin plot
-        if epoch is not None:
-            self.epoch_list.append(epoch)
-            # Immediate
-            imm_flat = immediate_arr.reshape(-1)
-            self.epoch_imm_mean.append(imm_flat.mean())
-            self.epoch_imm_std.append(imm_flat.std())
-
-            # Cumulative
-            cum_flat = cumulative_arr.reshape(-1)
-            self.epoch_cum_mean.append(cum_flat.mean())
-            self.epoch_cum_std.append(cum_flat.std())
-
-            fig, ax = plt.subplots(figsize=(6, 4), dpi=150, tight_layout=True)
-
-            epochs = np.array(self.epoch_list)
-
-            imm_mean = np.array(self.epoch_imm_mean)
-            imm_std  = np.array(self.epoch_imm_std)
-            cum_mean = np.array(self.epoch_cum_mean)
-            cum_std  = np.array(self.epoch_cum_std)
-
-            ax.plot(epochs, imm_mean, label="Immediate (1-step)")
-            ax.fill_between(
-                epochs,
-                imm_mean - imm_std,
-                imm_mean + imm_std,
-                alpha=0.2
-            )
-
-            ax.plot(epochs, cum_mean, label=f"Cumulative ({pred_len}-step)")
-            ax.fill_between(
-                epochs,
-                cum_mean - cum_std,
-                cum_mean + cum_std,
-                alpha=0.2
-            )
-
-            ax.set_xlabel("Epoch")
-            ax.set_ylabel("Mean Absolute Error")
-            ax.set_title("Prediction Error with Uncertainty Over Training")
-            ax.grid(True)
-            ax.legend()
-            fig_name = f'sr_error_training.png'
-        else:
-            fig, axes = plt.subplots(1, 2, figsize=(12, 5), dpi=150, tight_layout=True)
-            tick_positions = np.arange(1, state_dim + 1)
-
-            axes[0].set_xticks(tick_positions)
-            axes[0].set_xticklabels([f"Dim {i}" for i in range(state_dim)], rotation=45)
-            _ = axes[0].violinplot(
-                [immediate_arr[:, i] for i in range(state_dim)], 
-                showmeans=False,
-                showmedians=True,
-                showextrema=True
-            )
-            axes[0].set_title("Immediate (1-step) Prediction Error per Dimension")
-            axes[0].set_ylabel("Absolute Error")
-            axes[0].grid(True)
-
-            axes[1].set_xticks(tick_positions)
-            axes[1].set_xticklabels([f"Dim {i}" for i in range(state_dim)], rotation=45)
-            axes[1].violinplot(
-                [cumulative_arr[:, i] for i in range(state_dim)], 
-                showmeans=False,
-                showmedians=True,
-                showextrema=True
-            )
-            axes[1].set_title(f"Cumulative ({pred_len}-step) Prediction Error per Dimension")
-            axes[1].set_ylabel("Absolute Error")
-            axes[1].grid(True)
-            fig_name = f'sr_error_violin.png'
-
-        try:
-            filepath = run_path / fig_name
-            print(f'\nSaved state rep error figure to {filepath}')
-            fig.savefig(filepath)
-        except Exception as e:
-            print(e)
-            print('\nException occured, saved state rep error figure to current directory')
-            fig.savefig(fig_name)
-        plt.close(fig)
-        
-        return immediate_arr, cumulative_arr
 
     def visualize_planner(self, trainer, run_path, max_steps=25, closed_loop=True):
         """
@@ -472,13 +167,6 @@ class Evaluator():
         pred_sequences = [] # list of predicted sequences per step
         plan_obj_vals = []  # objective function values per step
         env_rew = []        # env rewards [blind during training]
-        contacts = []       # Robot contacting task objects
-
-        # Counting contacts
-        # for i in range(mj_model.ngeom): print(i, mujoco.mj_id2name(mj_model, mujoco.mjtObj.mjOBJ_GEOM, i))
-        mj_model = env.unwrapped.model
-        mj_data = env.unwrapped.data
-        robot_geom, obj_geom = get_mujoco_geom_keys_index(self.dataset_name)
 
         # Prime buffer with the first observation
         first_render_raw = env.render()  # numpy array (H, W, C) [0-255]
@@ -513,10 +201,7 @@ class Evaluator():
                 if trunc:
                     print("forced to reset", step_idx)
                     obs, _ = env.reset()
-                    mj_data = env.unwrapped.data
             env_rew.append(rew)
-            mj_data = env.unwrapped.data
-            contacts.append(int(is_robot_contact_geometry(mj_data, robot_geom, obj_geom)))
             next_render_raw = env.render()
             next_img_true = process_image(next_render_raw, self.dataset_name, downscale=False).permute(2, 0, 1)
 
@@ -584,7 +269,6 @@ class Evaluator():
             ax[0, j].set_title(f"Pred t={j}")
             ax[1, j].set_title(f"True t={j}")
 
-        ax[1, 1].set_title(f"True t=1; Contact? {contacts[0]}")
         ims = []
         # Initialize cells
         ims.clear()
@@ -604,7 +288,6 @@ class Evaluator():
             # Pred current recon
             ax[0, 0].set_title(f"Pred t=0; {plan_obj_vals[frame_idx]:.2f}")
             ax[1, 0].set_title(f"True t=0; {env_rew[frame_idx]:.2f}")
-            ax[1, 1].set_title(f"True t=1; Contact? {contacts[frame_idx]}")
             ims[0].set_data(recon[:3].permute(1, 2, 0).detach().cpu().numpy())
             ims[1].set_data(true_curr[:3].permute(1, 2, 0).detach().cpu().numpy())
 

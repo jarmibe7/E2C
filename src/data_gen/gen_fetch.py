@@ -27,8 +27,8 @@ import gymnasium_robotics
 gym.register_envs(gymnasium_robotics)
 
 # Parameters for dataset
-env_name = 'coffee'                                           # Gym environment name
-dataset_size = int(2e3)                                     # Number of samples: (img, next_img, control) tuple
+env_name = 'lever'                                           # Gym environment name
+dataset_size = int(1e3)                                     # Number of samples: (img, next_img, control) tuple
 OUTPUT_NAME = env_name + f'_{dataset_size // 1000}k'        # Output name of dataset
 image_shape = (64, 64, 3)                                   # Downsampled image shape
 past_length = 3                                             # Number of previous observations to use for training
@@ -77,46 +77,6 @@ name_to_env = {'reacher': 'Reacher-v5',
 env_to_aspace = {'reacher': 'continuous', 'cartpole': 'discrete', 'push': 'continuous', 
                  'pointmaze': 'continuous', 'antmaze': 'continuous', 'mountaincar': 'continuous',
                  'shelf': 'continuous', 'sweep': 'continuous', 'assembly': 'continuous', 'test': 'continuous'}
-
-def get_mujoco_geom_keys_index(dataset_name):
-    """
-    Return dicts with collision geometry geom_index -> geom_name for both robot and obj
-    """
-    robot_geom = {}
-    obj_geom = {}
-    if 'button' in dataset_name:
-        robot_geom = {
-            30: 'rightclaw_it',
-            31: 'rightpad_it',
-            32: 'leftclaw_it',
-            33: 'leftpad_geom'
-        }
-        obj_geom = {
-            43: 'btnGeom'
-        }
-    else:
-        print("Could not find env name in src.data_gen.gen_fetch:get_mujoco_geom_keys_index, will not check collisions\n")
-
-    return robot_geom, obj_geom
-
-def is_robot_contact_geometry(data, robot_geom, object_geom):
-    """
-    Determine whether robot contacting task object(s)
-    """
-    for i in range(data.ncon):
-        c = data.contact[i]
-        g1, g2 = c.geom1, c.geom2
-
-        robot_object = (
-            (g1 in robot_geom and g2 in object_geom) or
-            (g2 in robot_geom and g1 in object_geom)
-        )
-
-        if robot_object:
-            print(f"Robot collided with {object_geom.get(g1, object_geom.get(g2, 'unknown object...'))}")
-            return True
-
-    return False
 
 def update_dataset_metadata(dataset_dir, dataset_name, params):
     """

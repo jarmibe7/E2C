@@ -16,14 +16,12 @@ from tqdm import tqdm
 from pyvirtualdisplay import Display
 import time
 import os
-import metaworld
-import mujoco
 os.environ['MUJOCO_GL'] = 'egl'
 
 from src.model.loss import E2CLoss, UncertaintyE2CLoss, RSSMLoss
 from src.eval import Plotter, Evaluator
 from src.replay_buffer import ReplayBuffer
-from src.data_gen.gen_fetch import name_to_env, env_to_aspace, process_image, meta_world_envs, metaworld_cam_name, get_mujoco_geom_keys_index
+from src.data_gen.gen_fetch import name_to_env, env_to_aspace, process_image, meta_world_envs, metaworld_cam_name
 
 # Paths
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -104,8 +102,7 @@ class BaseTrainer():
                 test_dataset,
                 batch_size=config['train']['batch_size'], 
                 device=config['train']['device'],
-                dataset_name=config['train']['dataset'],
-                num_epochs=config['train']['num_epochs']
+                dataset_name=config['train']['dataset']
             )
         self.curr_epoch = 0
     
@@ -118,7 +115,7 @@ class BaseTrainer():
     def learn(self, *args, **kwargs):
         pass
 
-    def evaluate(self, run_path, epoch=None):
+    def evaluate(self, run_path):
         """
         Evaluate model and output figures to run directory
         """
@@ -126,7 +123,6 @@ class BaseTrainer():
         self.model.eval()
         # self.evaluator.eval(run_path)
         self.evaluator.visualize_planner(self, run_path, max_steps=50, closed_loop=True)
-        _, _ = self.evaluator.eval_state_rep(self, run_path, max_steps=50, closed_loop=True, epoch=epoch)
 
     def save(self, config_save, run_path):
         """
@@ -324,8 +320,8 @@ class ClosedLoopRandomTrainer(BaseTrainer):
             )
 
         # Initialize environment
-        disp = Display(visible=0, size=(480, 480))
-        disp.start()
+        # disp = Display(visible=0, size=(480, 480))
+        # disp.start()
         env_name = config['train']['dataset'].split('_')[0]
         self.env_name = env_name
         if env_name in meta_world_envs:
@@ -349,12 +345,6 @@ class ClosedLoopRandomTrainer(BaseTrainer):
             config
         )
         assert self.num_rollout_steps <= self.replay_buffer.capacity, 'Steps per rollout should be <= buffer_capacity!'
-
-        # Access underlying MuJoCo model state for recording env interactions
-        self.mj_model = self.env.unwrapped.model
-
-        # Saving robot end effector state
-        self.saved_state = []
 
     def _frames_to_tensor(self, frames):
         """
@@ -392,25 +382,6 @@ class ClosedLoopRandomTrainer(BaseTrainer):
         mu, log_var = post_stats.chunk(2, dim=-1)
         z = self.model.reparameterize(mu, log_var)
         return mu, log_var, z
-    
-    def save(self, config_save, run_path):
-        """
-        Save model, policy, and config to run directory
-        """
-        super().save(config_save, run_path)
-        if hasattr(self, 'saved_state'):
-            saved_state_tensor = torch.stack(self.saved_state, dim=0)
-
-            # Save logged states
-            try:
-                filepath = run_path / 'state.pt'
-                print(f'Saved state tensor to {filepath}')
-                torch.save(saved_state_tensor, filepath)
-            except Exception as e:
-                print(e)
-                print('Exception occured, saved state tensor to current directory')
-                torch.save(saved_state_tensor, 'state.pt')
-
 
     def collect_rollouts(self, epoch):
         """
@@ -423,7 +394,6 @@ class ClosedLoopRandomTrainer(BaseTrainer):
         act_buffer = []
         idx = 0
         
-        max_rollout_reward = 0.0
         while idx < self.num_rollout_steps:
             # Render current frame
             curr_img = process_image(self.env.render(), self.evaluator.dataset_name).permute(2, 0, 1)
@@ -443,19 +413,7 @@ class ClosedLoopRandomTrainer(BaseTrainer):
                 env_act = int(env_act.item())
             act_buffer.append(torch.from_numpy(act).to(self.device))
             for _ in range(self.meta_ts):
-                obs, rew, done, _, _ = self.env.step(env_act)
-                max_rollout_reward = max(rew, max_rollout_reward)
-
-            # Record ground truth env info for logging
-            mj_data = self.env.unwrapped.data
-            site_id = self.mj_model.site("endEffector").id
-            ee_pos = torch.from_numpy(self.env.unwrapped.data.site_xpos[site_id].copy())
-            
-            vel6 = np.zeros((6, 1), dtype=np.float64, order='C')
-            mujoco.mj_objectVelocity(self.mj_model, mj_data, mujoco.mjtObj.mjOBJ_SITE, site_id, vel6, 0)
-            ee_vel = torch.from_numpy(vel6[:3, 0].copy())
-
-            self.saved_state.append(torch.concat([ee_pos, ee_vel]))
+                next_obs, rew, done, _, _ = self.env.step(env_act)
 
             # If done reset env, otherwise add sample to dataset
             # if done:
@@ -490,8 +448,6 @@ class ClosedLoopRandomTrainer(BaseTrainer):
                     done = done
                 )
                 idx += 1
-        
-        self.plotter.log_value("Max Rollout Reward", max_rollout_reward)
         self.model.train()
 
     def train(self, epoch):
@@ -548,7 +504,7 @@ class ClosedLoopRandomTrainer(BaseTrainer):
             if (epoch + 1) % 50 == 0:
                 # show model video every 50 epochs
                 self.model.eval()
-                if self.config['train']['eval']: self.evaluate(self.config['run_path'], epoch=epoch+1)
+                if self.config['train']['eval']: self.evaluate(self.config['run_path'])
                 self.model.train()
             
         pbar.close()
@@ -976,10 +932,7 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
         frame_buffer = []
         act_buffer = []
         idx = 0
-
-        # for i in range(self.mj_model.ngeom): print(i, mujoco.mj_id2name(self.mj_model, mujoco.mjtObj.mjOBJ_GEOM, i))
         
-        max_rollout_reward = 0.0
         while idx < self.num_rollout_steps:
             self._init_cem_mu_sig()
             if self.hardware:
@@ -1009,19 +962,7 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
                 env_act = env_act.item()
             act_buffer.append(act)
             for _ in range(self.meta_ts):
-                obs, rew, done, _, _ = self.env.step(env_act)
-                max_rollout_reward = max(max_rollout_reward, rew)
-            
-            # Record ground truth env info for logging
-            mj_data = self.env.unwrapped.data
-            site_id = self.mj_model.site("endEffector").id
-            ee_pos = torch.from_numpy(self.env.unwrapped.data.site_xpos[site_id].copy())
-            
-            vel6 = np.zeros((6, 1), dtype=np.float64, order='C')
-            mujoco.mj_objectVelocity(self.mj_model, mj_data, mujoco.mjtObj.mjOBJ_SITE, site_id, vel6, 0)
-            ee_vel = torch.from_numpy(vel6[:3, 0].copy())
-
-            self.saved_state.append(torch.concat([ee_pos, ee_vel]))
+                next_obs, rew, done, _, _ = self.env.step(env_act)
 
             # all tasks are continuous now, no need to reset
             # if done:
@@ -1056,8 +997,6 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
                     done = done
                 )
                 idx += 1
-
-        self.plotter.log_value("Max Rollout Reward", max_rollout_reward)
         self.model.train()
 
 class ClosedLoopHardwareTrainer(ClosedLoopInformativeTrainer):
