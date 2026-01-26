@@ -8,8 +8,7 @@ pmaze is catastopic collapsing -- check with previous config
 run maxdyn for push
 """
 to_run = [
-    'button_eig', 'button_maxdyn', 'button_random',
-    'coffee_eig', 'coffee_maxdyn', 'coffee_random']
+    'coffee_maxdyn', 'coffee_random', 'plate_eig']
 for config in to_run:
     print(f"Running config: {config}")
     subprocess.run(

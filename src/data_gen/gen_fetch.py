@@ -81,6 +81,10 @@ env_to_aspace = {'reacher': 'continuous', 'cartpole': 'discrete', 'push': 'conti
 def get_obj_site_id(dataset_name, mj_model):
     if 'button' in dataset_name:
         return mj_model.site("buttonStart").id
+    elif 'coffee' in dataset_name:
+        return mj_model.site("objSite").id
+    elif 'door' in dataset_name or 'drawer' in dataset_name or 'plate' in dataset_name:
+        return mj_model.site("goal").id
 
 def get_mujoco_geom_keys_index(dataset_name):
     """
