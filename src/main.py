@@ -141,7 +141,8 @@ def main():
             print('*** EVAL ONLY ***')
             # trainer.evaluate(config['run_path'])
             # trainer.evaluator.eval_traj(config['run_path'], max_frames=25)
-            trainer.evaluator.visualize_planner(trainer, config['run_path'], max_steps=100, closed_loop=True)
+            saved_state = trainer.evaluator.visualize_planner(trainer, config['run_path'], max_steps=100, closed_loop=True)
+            torch.save(saved_state, config['run_path'] / 'eval_saved_state.pt')
             print('\n*** DONE ***')
             return
     
@@ -153,7 +154,8 @@ def main():
         config_save['runtime'] = format_time(time.perf_counter() - start_time)
         if config['train']['save']: trainer.save(config_save, config['run_path'])
         if config['train']['eval']: trainer.evaluate(config['run_path'])
-        trainer.evaluator.visualize_planner(trainer, config['run_path'], max_steps=150, closed_loop=True)
+        saved_state = trainer.evaluator.visualize_planner(trainer, config['run_path'], max_steps=150, closed_loop=True)
+        torch.save(saved_state, config['run_path'] / 'eval_saved_state.pt')
     except Exception:
         print('\n\n'); traceback.print_exc(); print('\n\n')
         if config['train']['save']:

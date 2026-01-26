@@ -33,7 +33,7 @@ class Plotter():
         self.plot_freq = plot_freq
         self.plot_history = None
         self.fig = None
-        self.colors = ['blue', 'orange', 'green', 'red', 'purple', 'black']
+        self.colors = ['blue', 'orange', 'green', 'red', 'purple', 'black', 'pink']
 
     def log(self, lr):
         """
@@ -52,6 +52,10 @@ class Plotter():
 
         # Replot
         if self.num_steps % self.plot_freq == 0: self.plot()
+
+    def log_value(self, key, value):
+        print("Not implemented yet")
+        pass
 
     def plot(self):
         """
@@ -159,6 +163,8 @@ class Evaluator():
             print('No closed loop policy found in trainer config, defaulting to random')
             closed_loop_policy = 'random'
 
+        saved_state = torch.zeros((trainer.num_rollout_steps, 12), device='cpu')
+
         model.eval()
         obs, _ = env.reset()
         frame_buffer = []   # frames used as model input window
@@ -167,6 +173,12 @@ class Evaluator():
         pred_sequences = [] # list of predicted sequences per step
         plan_obj_vals = []  # objective function values per step
         env_rew = []        # env rewards [blind during training]
+        contacts = []      # env contact info [blind during training], also doesn't work yet
+        # Counting contacts
+        # for i in range(mj_model.ngeom): print(i, mujoco.mj_id2name(mj_model, mujoco.mjtObj.mjOBJ_GEOM, i))
+        # mj_model = env.unwrapped.model
+        # mj_data = env.unwrapped.data
+        # robot_geom, obj_geom = get_mujoco_geom_keys_index(self.dataset_name)
 
         # Prime buffer with the first observation
         first_render_raw = env.render()  # numpy array (H, W, C) [0-255]
@@ -175,7 +187,7 @@ class Evaluator():
             frame_buffer.append(process_image(first_render_raw, self.dataset_name, downscale=True).permute(2, 0, 1))
 
         step_idx = 0
-        for step_idx in range(max_steps): #tqdm(range(max_steps), desc="Visualizing Planner timesteps"):
+        for step_idx in tqdm(range(max_steps), desc="Visualizing Planner timesteps"): # range(max_steps): #
             # Current frame (ground truth)
             curr_render_raw = env.render()  # Store raw render
             curr_img = process_image(curr_render_raw, self.dataset_name, downscale=False).permute(2, 0, 1)
@@ -197,10 +209,12 @@ class Evaluator():
 
             # Step env
             for _ in range(trainer.meta_ts):
-                _, rew, done, trunc, _ = env.step(env_act)
+                obs, rew, done, trunc, _ = env.step(env_act)
                 if trunc:
                     print("forced to reset", step_idx)
-                    obs, _ = env.reset()
+                    _, _ = env.reset()
+                    # TODO: would have to count contacts here
+            saved_state[step_idx] = torch.as_tensor([*obs[0:7], rew, *env_act], device='cpu')
             env_rew.append(rew)
             next_render_raw = env.render()
             next_img_true = process_image(next_render_raw, self.dataset_name, downscale=False).permute(2, 0, 1)
@@ -300,8 +314,8 @@ class Evaluator():
                     ims[2 * j + 1].set_data(true_frame[:3].permute(1, 2, 0).detach().cpu().numpy())
 
         ani = FuncAnimation(fig, update, frames=len(true_frames), interval=5.)
-        writer = FFMpegWriter(fps=2)
-        vid_name = 'planner_CL_' + closed_loop_policy + f'_{trainer.curr_epoch}.mp4' if closed_loop else 'planner_vis_OL_' + closed_loop_policy + f'_{trainer.curr_epoch}.mp4'
+        writer = FFMpegWriter(fps=20)
+        vid_name = 'CL_' + closed_loop_policy + f'_{trainer.curr_epoch}.mp4' if closed_loop else 'vis_OL_' + closed_loop_policy + f'_{trainer.curr_epoch}.mp4'
         try:
             filepath = run_path / vid_name
             print(f'Saved planner visualization to {filepath}\n')
@@ -311,7 +325,7 @@ class Evaluator():
             print('Exception occurred, saved planner visualization to current directory')
             ani.save(vid_name, writer=writer)
         plt.close(fig)
-        return
+        return saved_state
         
     def eval_traj(self, run_path, max_frames=50):
         # TODO: update eval_traj with model

@@ -346,6 +346,10 @@ class ClosedLoopRandomTrainer(BaseTrainer):
         )
         assert self.num_rollout_steps <= self.replay_buffer.capacity, 'Steps per rollout should be <= buffer_capacity!'
 
+        num_states_to_save = 12 # [x, y, z, gripper, x_obj, y_obj, z_obj, reward, xdot, ydot, zdot, gripper_vel]
+        # self.saved_state = torch.zeros((self.num_epochs * self.num_rollout_steps, num_states_to_save), device=self.device)
+        self.saved_state = torch.zeros((self.num_epochs * self.num_rollout_steps, num_states_to_save), device='cpu')
+
     def _frames_to_tensor(self, frames):
         """
         Stack a window of observation frames to tensor of shape [1, past_length*C, H, W]
@@ -382,6 +386,24 @@ class ClosedLoopRandomTrainer(BaseTrainer):
         mu, log_var = post_stats.chunk(2, dim=-1)
         z = self.model.reparameterize(mu, log_var)
         return mu, log_var, z
+    
+    def save(self, config_save, run_path):
+        """
+        Save model, policy, and config to run directory
+        """
+        super().save(config_save, run_path)
+        if hasattr(self, 'saved_state'):
+            # Save logged states
+            # take velocity as well?
+            # torch.diff(self.saved_state[:, :3], dim=0, prepend=self.saved_state[0:1, :3])
+            try:
+                filepath = run_path / 'training_states.pt'
+                print(f'Saved state tensor to {filepath}')
+                torch.save(self.saved_state, filepath)
+            except Exception as e:
+                print(e)
+                print('Exception occured, saved state tensor to current directory')
+                torch.save(self.saved_state, 'training_states.pt')
 
     def collect_rollouts(self, epoch):
         """
@@ -414,6 +436,7 @@ class ClosedLoopRandomTrainer(BaseTrainer):
             act_buffer.append(torch.from_numpy(act).to(self.device))
             for _ in range(self.meta_ts):
                 next_obs, rew, done, _, _ = self.env.step(env_act)
+            self.saved_state[idx] = torch.as_tensor([*next_obs[0:7], rew, *env_act], device='cpu')
 
             # If done reset env, otherwise add sample to dataset
             # if done:
@@ -963,6 +986,7 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
             act_buffer.append(act)
             for _ in range(self.meta_ts):
                 next_obs, rew, done, _, _ = self.env.step(env_act)
+            self.saved_state[idx] = torch.as_tensor([*next_obs[0:7], rew, *env_act], device='cpu')
 
             # all tasks are continuous now, no need to reset
             # if done:
@@ -1014,79 +1038,6 @@ class ClosedLoopHardwareTrainer(ClosedLoopInformativeTrainer):
         """
         Collect observations and save them to replay buffer
         """
+        # TODO: do some version of this: 
+        # self.saved_state[idx] = torch.as_tensor([*next_obs[0:7], rew, *env_act], device='cpu')
         pass
-    
-class ClosedLoopRewardTrainer(ClosedLoopInformativeTrainer):
-    """
-    Closed-loop trainer that selects actions by maximizing expected reward
-    over candidate action sequences.
-    """
-    def __init__(self, dataset, model, config, device):
-        super().__init__(dataset, model, config, device)
-    
-    def reward_planner(self, frame_buffer):
-        pass
-    
-    def collect_rollouts(self, epoch):
-        """
-        Collect observations and save them to replay buffer
-        """
-        # Initialize env and buffers
-        self.model.eval()
-        obs, _ = self.env.reset()
-        frame_buffer = []
-        act_buffer = []
-        idx = 0
-        
-        while idx < self.num_rollout_steps:
-            # Render current frame
-            curr_img = process_image(self.env.render(), self.evaluator.dataset_name).permute(2, 0, 1)
-            if len(frame_buffer) == 0:
-                frame_buffer.append(curr_img)
-
-            # Sample and take action
-            tic = time.time()
-            act = self.reward_planner(frame_buffer)
-            toc = time.time()
-            if idx == 0 and epoch == self.epochs_warmup:
-                print(f"Reward MPPI will take ~{((toc - tic)*self.num_rollout_steps/60):.3f} minutes.")
-            env_act = act.cpu().detach().numpy()
-            if not self.env_continuous:
-                env_act = int(env_act.item())
-            act_buffer.append(act)
-            next_obs, rew, done, _, _ = self.env.step(env_act)
-
-            # If done reset env, otherwise add sample to dataset
-            if done:
-                obs, _ = self.env.reset()
-                done = False
-                frame_buffer = []
-                act_buffer = []
-                continue
-            else:
-                # Slide frame obs history frame buffer to next image
-                if len(frame_buffer) == self.past_length + self.pred_length:
-                    frame_buffer.pop(0)
-                    act_buffer.pop(0)
-                next_image = process_image(self.env.render(), self.evaluator.dataset_name).permute(2, 0, 1)
-                frame_buffer.append(next_image)
-
-                # Add sample to replay buffer
-                if len(frame_buffer) == self.past_length + self.pred_length:
-                    # Compute action and img windows
-                    if self.env_continuous:
-                        act_add = torch.stack(
-                            [a for a in act_buffer[self.past_length-1:self.past_length-1+self.pred_length]]
-                        )
-                    else:
-                        act_add = act_buffer[self.past_length-1:self.past_length-1+self.pred_length].unsqueeze(-1)
-
-                    self.replay_buffer.add(
-                        img = torch.stack(frame_buffer[0:self.past_length], dim=0),
-                        action = act_add,
-                        reward = rew,
-                        next_img = torch.stack(frame_buffer[self.past_length:(self.past_length+self.pred_length)], dim=0),
-                        done = done
-                    )
-                    idx += 1
-        self.model.train()
