@@ -90,19 +90,107 @@ def get_mujoco_geom_keys_index(dataset_name):
     """
     Return dicts with collision geometry geom_index -> geom_name for both robot and obj
     """
-    robot_geom = {}
-    obj_geom = {}
+    robot_geom = {
+            25: 'right_l6',
+            26: 'right_l6',
+            27: 'right_hand',
+            28: 'right_hand',
+            29: 'hand',
+            30: 'rightclaw',
+            31: 'rightpad',
+            32: 'leftclaw',
+            33: 'leftpad',
+        }
     if 'button' in dataset_name:
+        obj_geom = {
+            36: 'buttonbox',
+            37: 'buttonbox',
+            38: 'buttonbox',
+            39: 'buttonbox',
+            40: 'buttonbox',
+            41: 'buttonbox',
+            42: 'buttonbox',
+            43: 'button',
+            44: 'button',
+            45: 'button',
+            46: 'button',
+            47: 'button',
+        }
+    elif 'drawer' in dataset_name:
+        obj_geom = {
+            36: 'drawercase_link',
+            37: 'drawercase_link',
+            38: 'drawercase_link',
+            39: 'drawercase_link',
+            40: 'drawercase_link',
+            41: 'drawercase_link',
+            42: 'drawer_link',
+            43: 'drawer_link',
+            44: 'drawer_link',
+            45: 'drawer_link',
+            46: 'drawer_link',
+            47: 'drawer_link',
+            48: 'drawer_link',
+            49: 'drawer_link',
+            50: 'drawer_link',
+            51: 'drawer_link',
+        }
+    elif 'coffee' in dataset_name:
         robot_geom = {
-            30: 'rightclaw_it',
-            31: 'rightpad_it',
-            32: 'leftclaw_it',
-            33: 'leftpad_geom'
+            29: 'right_l6',
+            30: 'right_l6',
+            31: 'right_hand',
+            32: 'right_hand',
+            33: 'hand',
+            34: 'rightclaw',
+            35: 'rightpad',
+            36: 'leftclaw',
+            37: 'leftpad',
         }
         obj_geom = {
-            43: 'btnGeom'
+            8: 'mug',
+            9: 'mug',
+            10: 'mug',
+            11: 'mug',
+            40: 'cm_link',
+            41: 'cm_link',
+            42: 'cm_link',
+            43: 'cm_link',
+            44: 'cm_link',
+            45: 'cm_link',
+            46: 'cm_link',
+            47: 'cm_link',
+            48: 'cm_link',
+            49: 'cm_link',
+            50: 'cm_link',
+            51: 'cm_link',
+            52: 'cm_link',
+            53: 'cm_link',
+            54: 'cmbutton',
+            55: 'cmbutton',
+        }
+    elif 'door' in dataset_name:
+        obj_geom = {
+            36: 'doorlockB',
+            37: 'doorlockB',
+            38: 'doorlockB',
+            39: 'doorlockB',
+            40: 'doorlockB',
+            41: 'doorlockB',
+            42: 'door_link',
+            43: 'door_link',
+            44: 'door_link',
+            45: 'door_link',
+            46: 'door_link',
+            47: 'door_link',
+            48: 'door_link',
+            49: 'door_link',
+            50: 'door_link',
+            51: 'door_link',
         }
     else:
+        robot_geom = {}
+        obj_geom = {}
         print("Could not find env name in src.data_gen.gen_fetch:get_mujoco_geom_keys_index, will not check collisions\n")
 
     return robot_geom, obj_geom

@@ -164,6 +164,20 @@ class Evaluator():
             print('State rep model not detected, will not run state rep eval!')
             self.use_state_rep = False
 
+    def _save_metrics(self, run_path):
+        if hasattr(self, 'metrics'):
+            # Save metrics as JSON
+            if run_path is not None:
+                metrics_path = run_path / "metrics.json"
+                try:
+                    with open(metrics_path, "w") as f:
+                        json.dump(self.metrics, f, indent=4)
+                    print(f"Saved evaluation metrics to {metrics_path}\n")
+                except Exception as e:
+                    print(f"Attempted and failed to save metrics.json: {e}\n")
+        else:
+            print("No metrics dictionary detected, will not save metrics\n")
+
     def eval(self, run_path, vid_max_frames=50):
         self.model.eval()
         print("\Calculating eval metrics...")
@@ -172,6 +186,7 @@ class Evaluator():
         self.dataset_latent_func(run_path)
         print("\nGenerating trajectory video...")
         self.eval_traj(run_path, max_frames=vid_max_frames)
+        self._save_metrics(run_path)
         # self.eval_latent(run_path)
 
     def eval_state_rep(self, trainer, run_path, max_steps=25, closed_loop=True, epoch=None):
@@ -480,6 +495,11 @@ class Evaluator():
         mj_model = env.unwrapped.model
         mj_data = env.unwrapped.data
         robot_geom, obj_geom = get_mujoco_geom_keys_index(self.dataset_name)
+        # for i in range(mj_model.ngeom):
+        #     geom_name = mujoco.mj_id2name(mj_model, mujoco.mjtObj.mjOBJ_GEOM, i)
+        #     body_id = mj_model.geom_bodyid[i]
+        #     body_name = mujoco.mj_id2name(mj_model, mujoco.mjtObj.mjOBJ_BODY, body_id)
+        #     print(i, geom_name, "-> body:", body_name)
 
         # Prime buffer with the first observation
         first_render_raw = env.render()  # numpy array (H, W, C) [0-255]
@@ -588,6 +608,15 @@ class Evaluator():
             #     done = False
             #     frame_buffer = [process_image(env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1) for _ in range(past_len)]
 
+        # Save any calculated metrics
+        results = {}
+        results['num_contacts'] = np.count_nonzero(np.array(contacts)) # Number of rendered timesteps with contact interaction
+        if hasattr(self, 'metrics'):
+            self.metrics.update(results)
+        else:
+            self.metrics = results
+
+
         # Build visualization grid: 2 rows, (pred_len + 1) columns
         cols = pred_len + 1
         fig, ax = plt.subplots(2, cols, figsize=(3 * cols, 8))
@@ -653,6 +682,9 @@ class Evaluator():
             print(e)
             print('Exception occured, saved eval state tensor to current directory')
             torch.save(saved_state_tensor, 'eval_state.pt')
+
+        # Save metrics
+        self._save_metrics(run_path)
         return
         
     def eval_traj(self, run_path, max_frames=50):
@@ -782,28 +814,22 @@ class Evaluator():
             pred_shoulder.append(shoulder_mass(mu_pred).mean().item())
 
         results = {
-            # "recon_psnr": np.mean(recon_psnr),
-            # "recon_ssim": np.mean(recon_ssim),
-            # "recon_lpips": np.mean(recon_lpips),
-            # "recon_mse": np.mean(recon_mse),
-            "pred_psnr": np.mean(pred_psnr),
-            "pred_ssim": np.mean(pred_ssim),
-            "pred_lpips": np.mean(pred_lpips),
-            # "pred_mse": np.mean(pred_mse),
-            "pred_cmr": np.mean(pred_cmr),
-            "pred_kurt": np.mean(pred_kurt),
-            "pred_shoulder": np.mean(pred_shoulder)
-        }
-
-        # Save metrics as JSON
-        if run_path is not None:
-            metrics_path = run_path / "metrics.json"
-            try:
-                with open(metrics_path, "w") as f:
-                    json.dump(results, f, indent=4)
-                print(f"Saved evaluation metrics to {metrics_path}")
-            except Exception as e:
-                print(f"Failed to save metrics.json: {e}")
+                # "recon_psnr": np.mean(recon_psnr),
+                # "recon_ssim": np.mean(recon_ssim),
+                # "recon_lpips": np.mean(recon_lpips),
+                # "recon_mse": np.mean(recon_mse),
+                "pred_psnr": np.mean(pred_psnr),
+                "pred_ssim": np.mean(pred_ssim),
+                "pred_lpips": np.mean(pred_lpips),
+                # "pred_mse": np.mean(pred_mse),
+                "pred_cmr": np.mean(pred_cmr),
+                "pred_kurt": np.mean(pred_kurt),
+                "pred_shoulder": np.mean(pred_shoulder)
+            }
+        if hasattr(self, 'metrics'):
+            self.metrics.update(results)
+        else:
+            self.metrics = results
 
         return results
     
