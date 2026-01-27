@@ -324,9 +324,10 @@ class ClosedLoopRandomTrainer(BaseTrainer):
         env_name = config['train']['dataset'].split('_')[0]
         self.env_name = env_name
         if env_name in meta_world_envs:
-            self.env = gym.make('Meta-World/MT1', env_name=name_to_env[env_name], render_mode='rgb_array', camera_name='corner', max_episode_steps=2000)
+            camera_name = 'corner3' if 'isom' in config['train']['dataset'] else 'corner'
+            self.env = gym.make('Meta-World/MT1', env_name=name_to_env[env_name], render_mode='rgb_array', camera_name=camera_name, max_episode_steps=2000)
             print("made steps 2000?")
-            if config['train']['dataset'].split('_')[1][:-1] == '2':
+            if config['train']['dataset'].split('_')[-1][:-1] == '2':
                 self.meta_ts = 4
         else:
             self.env = gym.make(name_to_env[env_name], render_mode="rgb_array") if not self.hardware else None
@@ -435,7 +436,7 @@ class ClosedLoopRandomTrainer(BaseTrainer):
             act_buffer.append(torch.from_numpy(act).to(self.device))
             for _ in range(self.meta_ts):
                 next_obs, rew, done, _, _ = self.env.step(env_act)
-            self.saved_state[idx] = torch.as_tensor([*next_obs[0:7], rew, *env_act], device='cpu')
+            self.saved_state[epoch*self.num_rollout_steps + idx] = torch.as_tensor([*next_obs[0:7], rew, *env_act], device='cpu')
 
             # If done reset env, otherwise add sample to dataset
             # if done:
@@ -529,7 +530,7 @@ class ClosedLoopRandomTrainer(BaseTrainer):
                 if self.config['train']['eval']: self.evaluate(self.config['run_path'])
                 self.model.train()
             if (epoch + 1) % 100 == 0:
-                if self.config['train']['save']: super().save(self.config['run_path'], model_name=f'model_epoch{epoch+1}.pt')
+                if self.config['train']['save']: super().save(self.config, self.config['run_path'], model_name=f'model_epoch{epoch+1}.pt')
             
         pbar.close()
 
@@ -799,7 +800,7 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
             act_buffer.append(act)
             for _ in range(self.meta_ts):
                 next_obs, rew, done, _, _ = self.env.step(env_act)
-            self.saved_state[idx] = torch.as_tensor([*next_obs[0:7], rew, *env_act], device='cpu')
+            self.saved_state[epoch*self.num_rollout_steps + idx] = torch.as_tensor([*next_obs[0:7], rew, *env_act], device='cpu')
 
             # all tasks are continuous now, no need to reset
             # if done:

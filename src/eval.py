@@ -18,7 +18,7 @@ from src.model.e2c import ConvE2C
 from src.model.rssm import RSSME2C
 from src.dataset import E2CDataset
 from src.utils import set_seed, anim_frames, shoulder_mass, excess_kurtosis, central_mass_ratio
-from src.data_gen.gen_fetch import process_image
+from src.data_gen.gen_fetch import process_image, get_mujoco_geom_keys_index, is_robot_contact_geometry
 
 class Plotter():
     """
@@ -163,7 +163,7 @@ class Evaluator():
             print('No closed loop policy found in trainer config, defaulting to random')
             closed_loop_policy = 'random'
 
-        saved_state = torch.zeros((trainer.num_rollout_steps, 12), device='cpu')
+        saved_state = torch.zeros((max_steps, 13), device='cpu')
 
         model.eval()
         obs, _ = env.reset()
@@ -175,10 +175,9 @@ class Evaluator():
         env_rew = []        # env rewards [blind during training]
         contacts = []      # env contact info [blind during training], also doesn't work yet
         # Counting contacts
-        # for i in range(mj_model.ngeom): print(i, mujoco.mj_id2name(mj_model, mujoco.mjtObj.mjOBJ_GEOM, i))
-        # mj_model = env.unwrapped.model
-        # mj_data = env.unwrapped.data
-        # robot_geom, obj_geom = get_mujoco_geom_keys_index(self.dataset_name)
+        mj_model = env.unwrapped.model
+        mj_data = env.unwrapped.data
+        robot_geom, obj_geom = get_mujoco_geom_keys_index(self.dataset_name)
 
         # Prime buffer with the first observation
         first_render_raw = env.render()  # numpy array (H, W, C) [0-255]
@@ -214,7 +213,8 @@ class Evaluator():
                     print("forced to reset", step_idx)
                     _, _ = env.reset()
                     # TODO: would have to count contacts here
-            saved_state[step_idx] = torch.as_tensor([*obs[0:7], rew, *env_act], device='cpu')
+            contact = int(is_robot_contact_geometry(mj_data, robot_geom, obj_geom))
+            saved_state[step_idx] = torch.as_tensor([*obs[0:7], rew, *env_act, contact], device='cpu')
             env_rew.append(rew)
             next_render_raw = env.render()
             next_img_true = process_image(next_render_raw, self.dataset_name, downscale=False).permute(2, 0, 1)
