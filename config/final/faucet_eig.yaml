@@ -39,7 +39,7 @@ train:
 # Policy settings for training closed loop
 closed_loop: 
   closed_loop: True                 # Whether to use closed loop training
-  policy: random                    # What type of policy to use: conv | random | uncertainty | informative
+  policy: informative                    # What type of policy to use: conv | random | uncertainty | informative
   epochs_warmup: 0                  # Number of epochs to train on random actions before informative training
   num_rollout_steps: 100           # Number of timesteps to collect in a rollout
   plan_horizon: 12                   # Planning horizon for CEM MPC
