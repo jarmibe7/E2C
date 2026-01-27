@@ -125,6 +125,10 @@ class BaseTrainer():
 
     def _handle_sigint(self, sig, frame):
         self.stop_requested = True
+        try:
+            self.save_dataset()
+        except Exception as e:
+            print("you don't want to save this data? :(", e)
         rospy.signal_shutdown("SIGINT received")
     
     def collect_rollouts(self, *args, **kwargs):
@@ -857,9 +861,14 @@ class ClosedLoopHardwareTrainer(ClosedLoopInformativeTrainer):
             frame_height=config['vae']['in_image_shape'][2]
         )
         self.start_now = False
+        tic = time.time()
         while not self.start_now and not rospy.is_shutdown():
             rospy.loginfo_once("Waiting for hardware environment to be ready...")
             rospy.sleep(1.0)
+            toc = time.time()
+            if toc - tic > 5:
+                print("I'm guessing we're at reset already...")
+                self.start_now = True
 
         # Re-init CEM Planning after env is set
         self.closed_cfg = config.get('closed_loop', {})
@@ -874,14 +883,19 @@ class ClosedLoopHardwareTrainer(ClosedLoopInformativeTrainer):
 
         # Pre-populate replay buffer with hardware dataset
         # Buffers for saving dataset from pre-populate
+        # predefine buffer size for computational efficiency
+        self.data_prev = torch.zeros((self.num_rollout_steps * self.num_epochs, self.past_length, 3, *self.in_image_shape[1:]), dtype=torch.float32)
+        self.data_act = torch.zeros((self.num_rollout_steps * self.num_epochs, self.pred_length, 2), dtype=torch.float32)
+        self.data_next = torch.zeros((self.num_rollout_steps * self.num_epochs, self.pred_length, 3, *self.in_image_shape[1:]), dtype=torch.float32)
         self._prepop_prev, self._prepop_next, self._prepop_act = [], [], []
         # print(f"Pre-loading replay buffer with {len(self.dataset)} samples from hardware dataset...")
-        if config['train'].get('eval_only', False) == False:
+        if config['train'].get('eval_only', False) == False and config['closed_loop']['epochs_warmup'] < 0:
             print("Initializing buffer with random rollouts...")
-            _, _ = self.env.reset()
-            loop_steps = self.config['closed_loop']['buffer_capacity'] // 30
+            loop_steps = self.config['closed_loop']['buffer_capacity'] // 40
             self.num_rollout_steps = loop_steps
-            for _ in tqdm(range(self.config['closed_loop']['buffer_capacity'] // loop_steps), desc="Initializing Replay Buffer"):
+            for reset_at_idx in tqdm(range(self.config['closed_loop']['buffer_capacity'] // loop_steps), desc="Initializing Replay Buffer"):
+                if (reset_at_idx + 1) % 1 == 0:
+                    obs, _ = self.env.reset()
                 if self.stop_requested or rospy.is_shutdown():
                     print("Stop requested, ending training loop.")
                     break
@@ -889,7 +903,7 @@ class ClosedLoopHardwareTrainer(ClosedLoopInformativeTrainer):
             if len(self._prepop_prev) > 0 or rospy.is_shutdown() or self.stop_requested:
                 run_path = self.config['run_path']
                 run_path = Path(run_path) if not isinstance(run_path, Path) else run_path
-                out_dir = run_path / "prepop_datasets"
+                out_dir = run_path
                 out_dir.mkdir(parents=True, exist_ok=True)
                 ts = time.strftime("%Y%m%d_%H%M%S")
                 out_path = out_dir / f"prepop_{self.replay_buffer.size}_{ts}.pt"
@@ -899,19 +913,20 @@ class ClosedLoopHardwareTrainer(ClosedLoopInformativeTrainer):
                     "next_images": torch.stack(self._prepop_next, dim=0),  # (N, pred_length, H, W, C)
                 }, out_path)
                 print(f"Saved pre-populated dataset: {out_path}")
-
+        else:
+            print("Load dataset into buffer")
             self.num_rollout_steps = config['closed_loop']['num_rollout_steps']
-            # for i in range(len(self.dataset)):
-            #     x, x_next, u = self.dataset[i]  # Get sample from dataset
+            for i in range(len(self.dataset)):
+                x, x_next, u = self.dataset[i]  # Get sample from dataset
                 
-            #     # Add to replay buffer (assuming reward=0, done=False for hardware data)
-            #     self.replay_buffer.add(
-            #         img = x,                    # (past_length, H, W, C)
-            #         action = u,                 # (pred_length, action_dim)
-            #         reward = 0.0,               # Placeholder reward
-            #         next_img = x_next,          # (pred_length, H, W, C)
-            #         done = False                # Placeholder done flag
-            #     )
+                # Add to replay buffer (assuming reward=0, done=False for hardware data)
+                self.replay_buffer.add(
+                    img = x,                    # (past_length, H, W, C)
+                    action = u,                 # (pred_length, action_dim)
+                    reward = 0.0,               # Placeholder reward
+                    next_img = x_next,          # (pred_length, H, W, C)
+                    done = False                # Placeholder done flag
+                )
             
             print(f"Replay buffer initialized with {self.replay_buffer.size} samples")
 
@@ -921,7 +936,19 @@ class ClosedLoopHardwareTrainer(ClosedLoopInformativeTrainer):
         """
         if msg.data == "":
             self.start_now = True
-            
+
+    def save_dataset(self):
+        run_path = self.config['run_path']
+        run_path = Path(run_path) if not isinstance(run_path, Path) else run_path
+        run_path.mkdir(parents=True, exist_ok=True)
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        out_path = run_path / f"train_data_{len(self.data_prev)}.pt"
+        torch.save({
+            "prev_images": self.data_prev,  # (N, past_length, C, H, W)
+            "actions": self.data_act,       # (N, pred_length, action_dim)
+            "next_images": self.data_next  # (N, pred_length, C, H, W)
+        }, out_path)
+        print(f"Saved training dataset: {out_path}")
     
     def collect_rollouts(self, epoch):
         """
@@ -950,7 +977,8 @@ class ClosedLoopHardwareTrainer(ClosedLoopInformativeTrainer):
                 continue
             
             if len(frame_buffer) == 0 and epoch > self.epochs_warmup:
-                frame_buffer.append(*[self.env.render().to(torch.float32) for _ in range(self.past_length)])
+                for _ in range(self.past_length):
+                    frame_buffer.append(self.env.render().to(torch.float32))
 
             # Select action: random during warmup, informative after
             tic = time.time()
@@ -991,13 +1019,18 @@ class ClosedLoopHardwareTrainer(ClosedLoopInformativeTrainer):
                 act_add = torch.stack(
                     [a for a in act_buffer[self.past_length-1:self.past_length-1+self.pred_length]]
                 )
+                img_curr = torch.stack(frame_buffer[0:self.past_length], dim=0)
+                img_next = torch.stack(frame_buffer[self.past_length:(self.past_length+self.pred_length)], dim=0)
                 self.replay_buffer.add(
-                    img = torch.stack(frame_buffer[0:self.past_length], dim=0),
+                    img = img_curr,
                     action = act_add,
                     reward = 0.0,
-                    next_img = torch.stack(frame_buffer[self.past_length:(self.past_length+self.pred_length)], dim=0),
+                    next_img = img_next,
                     done = False
                 )
+                self.data_prev[epoch*self.num_rollout_steps + idx] = img_curr
+                self.data_act[epoch*self.num_rollout_steps + idx] = act_add
+                self.data_next[epoch*self.num_rollout_steps + idx] = img_next
                 # Collect for saving when running the pre-populate phase
                 if epoch == -1:
                     # Convert (C,H,W) → (H,W,C) per frame, and stack windows
@@ -1065,7 +1098,7 @@ class ClosedLoopHardwareTrainer(ClosedLoopInformativeTrainer):
         # Compute average model loss
         avg_model_loss = total_model_loss / (self.batch_size*self.num_batches)
         fig, ax = plt.subplots(2, 1, figsize=(6, 8))
-        ax[0].imshow(cv2.cvtColor(train_return['x_pred'][0,-1].permute(1,2,0).detach().cpu().numpy(), cv2.COLOR_BGR2RGB))
+        ax[0].imshow(cv2.cvtColor(train_return['x_pred'][0,0].permute(1,2,0).detach().cpu().to(torch.float32).numpy(), cv2.COLOR_BGR2RGB))
         ax[0].set_title("Model Prediction")
         ax[1].set_title("Ground Truth")
         ax[1].imshow(cv2.cvtColor(train_return['x_next'][0,-1].permute(1,2,0).cpu().numpy(), cv2.COLOR_BGR2RGB))
@@ -1097,6 +1130,206 @@ class ClosedLoopHardwareTrainer(ClosedLoopInformativeTrainer):
                 self.collect_rollouts(epoch)
                 if (epoch % 10) == 0:
                     print(f"Collected rollouts at {epoch}".format(epoch))
+                if (epoch+1) % 10 == 0:
+                    # show model video every 10 epochs
+                    self.model.eval()
+                    if self.config['train']['eval']: self.evaluate(self.config['run_path'])
+                    self.model.train()
+                
+            pbar.close()
+        except KeyboardInterrupt:
+            print('Manual interrupt occured, ending training')
+
+class EndToEndHardwareTrainer(ClosedLoopInformativeTrainer):
+    """
+    Closed-loop trainer for real-world hardware experiments that selects actions
+    by maximizing expected information gain over candidate action sequences.
+    """
+    def __init__(self, dataset, model, config, device):
+        # super().__init__(dataset, model, config, device)
+        ClosedLoopRandomTrainer.__init__(self, dataset, model, config, device)
+        # Override environment with real hardware
+        rospy.Subscriber("/bobcat/reset", ros_string, self.test_reset_cb)
+        self.env = HardwareEnv(
+            frame_width=config['vae']['in_image_shape'][1],
+            frame_height=config['vae']['in_image_shape'][2]
+        )
+        self.start_now = False
+        while not self.start_now and not rospy.is_shutdown():
+            rospy.loginfo_once("Waiting for hardware environment to be ready...")
+            rospy.sleep(1.0)
+
+        # Re-init CEM Planning after env is set
+        self.closed_cfg = config.get('closed_loop', {})
+        self.uses_rssm = hasattr(self.model, 'rssm_step') and hasattr(self.model, 'post')
+        self.epochs_warmup = config['closed_loop'].get('epochs_warmup', 3)
+        self.num_action_samples = self.closed_cfg.get('samples', 100)
+        self.elite_frac = self.closed_cfg.get('elite_frac', 0.1)
+        self.cem_iters = self.closed_cfg.get('iters', 3)
+        self._init_cem_mu_sig()
+        self.alpha = self.closed_cfg.get('alpha', 0.7)
+        self.plan_horizon = self.closed_cfg.get('plan_horizon', self.pred_length)
+
+        # Pre-populate replay buffer with hardware dataset
+        # Buffers for saving dataset from pre-populate
+        self._prepop_prev, self._prepop_next, self._prepop_act = [], [], []
+        # print(f"Pre-loading replay buffer with {len(self.dataset)} samples from hardware dataset...")
+
+    def test_reset_cb(self, msg):
+        """
+        make sure can reset env before starting training
+        """
+        if msg.data == "":
+            self.start_now = True
+            
+    
+    def take_step(self, f_buffer=[], a_buffer=[], epoch=0):
+        """
+        Collect observations and save them to replay buffer
+        """
+        frame_buffer = f_buffer.copy()
+        act_buffer = a_buffer.copy()
+        # Get current frame from robot
+        curr_img = self.env.render()  # Returns (C, H, W)
+        if curr_img is None:
+            rospy.logwarn("Failed to get image from robot")
+            return None
+        
+        if len(frame_buffer) == 0 and epoch > self.epochs_warmup:
+            for _ in range(self.past_length):
+                frame_buffer.append(self.env.render().to(torch.float32))
+
+        # Select action: random during warmup, informative after
+        act, cost = self._select_information_action(frame_buffer)
+        
+        # Send action to robot
+        env_act = act.cpu().detach().numpy()
+        self.env.step(env_act)
+        act_buffer.append(act)
+        
+        next_img = self.env.render()
+        if next_img is None:
+            rospy.logwarn("Failed to get next image from robot")
+        
+        # Slide buffer
+        frame_buffer.append(next_img.to(torch.float32))
+
+        act_add = torch.stack(
+            [a for a in act_buffer[self.past_length-1:self.past_length-1+self.pred_length]]
+        )
+        self.replay_buffer.add(
+            img = torch.stack(frame_buffer[0:self.past_length], dim=0),
+            action = act_add,
+            reward = 0.0,
+            next_img = torch.stack(frame_buffer[self.past_length:(self.past_length+self.pred_length)], dim=0),
+            done = False
+        )
+        """# Collect for saving to visualize every action robot took
+        if epoch == -1:
+            # Convert (C,H,W) → (H,W,C) per frame, and stack windows
+            prev_win = torch.stack(frame_buffer[0:self.past_length], dim=0).permute(0, 2, 3, 1).cpu()
+            next_win = torch.stack(frame_buffer[self.past_length:(self.past_length+self.pred_length)], dim=0).permute(0, 2, 3, 1).cpu()
+            self._prepop_prev.append(prev_win)
+            self._prepop_next.append(next_win)
+            self._prepop_act.append(act_add.cpu())
+        idx += 1"""        
+        self.model.train()
+    
+    def learn(self):
+        try: 
+            model_loss = 0.0
+            pbar = tqdm(range(self.num_epochs), desc="Training")
+            if self.stop_requested or rospy.is_shutdown():
+                print("Stop requested, ending learning loop.")
+                return
+            for epoch in range(self.num_epochs):
+                # reset env every self.num_rollout_steps
+                obs, _ = self.env.reset()
+                self.env.step(np.array([0.0, 0.0]))
+                frame_buffer = []
+                act_buffer = []
+                idx = 0
+                ctrl_freq = []
+                self._init_cem_mu_sig()
+                # World model gradient update
+                scaler = torch.cuda.amp.GradScaler()
+                for step in range(self.num_rollout_steps):
+                    # prepare to take step
+                    self.model.eval()
+                    tic = time.time()
+                    self.take_step(frame_buffer, act_buffer, epoch)
+                    toc = time.time()
+                    ctrl_freq.append(toc - tic)
+                    if step == (self.num_rollout_steps - 1):
+                        print(f"Average control frequency: {(1. / np.mean(ctrl_freq)):.3f} Hz. \nDon't forget to move the cube!")
+                    x, u, r, x_next, done  = self.replay_buffer.sample(self.batch_size)
+                    x, x_next, u = x.to(self.device), x_next.to(self.device), u.to(self.device)
+                    # Forward pass
+                    with torch.cuda.amp.autocast():
+                        train_return = self.model(x, x_next, u)
+                        train_return = self.model(x, x_next, u)
+                        train_return['x'] = x
+                        train_return['x_next'] = x_next
+
+                        # Model loss and backprop
+                        model_loss, loss_return = self.model_criterion(train_return, epoch)
+                        # TODO: Raise exception
+                        if torch.isnan(model_loss):
+                            print("NaN loss encountered, stopping training.")
+                            break
+                        self.plotter.log(loss_return)
+                        self.model_optimizer.zero_grad()
+                        scaler.scale(model_loss).backward()
+                        scaler.step(self.model_optimizer)
+                        scaler.update()
+                        torch.cuda.empty_cache()
+                    
+                self.env.step(np.array([0.0, 0.0]))
+                obs, _ = self.env.reset()
+                self.env.step(np.array([0.0, 0.0]))
+                total_model_loss = 0.0
+                for i in range(self.num_batches):
+                    # train on everything num_batches more times
+                    x, u, r, x_next, done  = self.replay_buffer.sample(self.batch_size)
+                    x, x_next, u = x.to(self.device), x_next.to(self.device), u.to(self.device)
+                    # Forward pass
+                    with torch.cuda.amp.autocast():
+                        train_return = self.model(x, x_next, u)
+                        train_return = self.model(x, x_next, u)
+                        train_return['x'] = x
+                        train_return['x_next'] = x_next
+
+                        # Model loss and backprop
+                        model_loss, loss_return = self.model_criterion(train_return, epoch)
+                        # TODO: Raise exception
+                        if torch.isnan(model_loss):
+                            print("NaN loss encountered, stopping training.")
+                            break
+                        self.plotter.log(loss_return)
+                        self.model_optimizer.zero_grad()
+                        scaler.scale(model_loss).backward()
+                        scaler.step(self.model_optimizer)
+                        scaler.update()
+                        torch.cuda.empty_cache()
+
+                    total_model_loss += model_loss.item() * x.size(0)   # Aggregate total epoch loss
+
+                # Compute average model loss
+                avg_model_loss = total_model_loss / (self.batch_size*self.num_batches)
+                fig, ax = plt.subplots(2, 1, figsize=(6, 8))
+                ax[0].imshow(cv2.cvtColor(train_return['x_pred'][0,-1].permute(1,2,0).detach().cpu().numpy(), cv2.COLOR_BGR2RGB))
+                ax[0].set_title("Model Prediction")
+                ax[1].set_title("Ground Truth")
+                ax[1].imshow(cv2.cvtColor(train_return['x_next'][0,-1].permute(1,2,0).cpu().numpy(), cv2.COLOR_BGR2RGB))
+                plt.savefig("/home/ayush/Desktop/sawyer_moveit_ws/src/E2C/runs/hardware/train_pred.png")
+
+                if (epoch % 10) == 0:
+                    print(f"Training done at {epoch}".format(epoch))
+
+                pbar.set_postfix({
+                    'Epoch': epoch+1,
+                    'Model Loss': f"{model_loss:.4f}"})
+                pbar.update(1)
                 if (epoch+1) % 10 == 0:
                     # show model video every 10 epochs
                     self.model.eval()

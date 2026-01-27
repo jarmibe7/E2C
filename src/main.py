@@ -20,7 +20,7 @@ from src.model.rssm import RSSME2C
 from src.dataset import E2CDataset
 from src.utils import set_seed, anim_frames, format_time
 from src.model.policy import ConvPolicy
-from src.trainer import E2CPretrainer, RSSMPretrainer, ClosedLoopRandomTrainer, ClosedLoopInformativeTrainer, ClosedLoopHardwareTrainer
+from src.trainer import E2CPretrainer, RSSMPretrainer, ClosedLoopRandomTrainer, ClosedLoopInformativeTrainer, ClosedLoopHardwareTrainer, EndToEndHardwareTrainer
 import argparse
 
 # Set random seed globally
@@ -118,7 +118,8 @@ def main():
             trainer = ClosedLoopInformativeTrainer(dataset, model, config, device)
         elif policy_type == "hardware":
             trainer = ClosedLoopHardwareTrainer(dataset, model, config, device)
-            time.sleep(1.0)
+        elif policy_type == "end_to_end_hardware":
+            trainer = EndToEndHardwareTrainer(dataset, model, config, device)
         elif policy_type == "direct_reward":
             # TODO: Implement shallow reward-based closed loop trainer
             pass
@@ -149,6 +150,7 @@ def main():
         config_save['runtime'] = format_time(time.perf_counter() - start_time)
         if config['train']['save']: trainer.save(config_save, config['run_path'])
         # if config['train']['eval']: trainer.evaluate(config['run_path'])
+        trainer.save_dataset()
         trainer.evaluator.visualize_planner(trainer, config['run_path'], max_steps=150, closed_loop=True)
     except Exception:
         print('\n\n'); traceback.print_exc(); print('\n\n')
@@ -164,6 +166,7 @@ def main():
             config_save['runtime'] = format_time(time.perf_counter() - start_time)
             trainer.save(config_save, config['run_path'])
             # if config['train']['eval']: trainer.evaluate(config['run_path'])    
+            trainer.save_dataset()
             print(f'\nManual interrupt occured, saving current checkpoint')
         else: 
             print('Manual interrupt occured, ending training')
