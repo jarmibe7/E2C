@@ -91,7 +91,7 @@ class BaseTrainer():
         # if torch.cuda.device_count() > 1:
         #     print(f"Using {torch.cuda.device_count()} GPUs")
         #     self.model = torch.nn.DataParallel(self.model)
-        self.model_optimizer = torch.optim.Adam(model.parameters(), lr=config['trans']['alpha'], weight_decay=config['trans']['weight_decay'])
+        self.model_optimizer = torch.optim.Adam(model.parameters(), lr=config['trans']['alpha']) #, weight_decay=config['trans']['weight_decay'])
         if policy is not None:
             self.policy = policy
             policy.to(device)
@@ -891,21 +891,26 @@ class ClosedLoopHardwareTrainer(ClosedLoopInformativeTrainer):
         # print(f"Pre-loading replay buffer with {len(self.dataset)} samples from hardware dataset...")
         if config['train'].get('eval_only', False) == False and config['closed_loop']['epochs_warmup'] < 0:
             print("Initializing buffer with random rollouts...")
-            loop_steps = self.config['closed_loop']['buffer_capacity'] // 40
+            loop_steps = self.batch_size # self.config['closed_loop']['buffer_capacity'] // 40
             self.num_rollout_steps = loop_steps
+            self.collect_rollouts(-1)
+            self.num_rollout_steps = config['closed_loop']['num_rollout_steps']
+
+            """ if you want to fill up buffer with buffer_capacity images
             for reset_at_idx in tqdm(range(self.config['closed_loop']['buffer_capacity'] // loop_steps), desc="Initializing Replay Buffer"):
                 if (reset_at_idx + 1) % 1 == 0:
                     obs, _ = self.env.reset()
                 if self.stop_requested or rospy.is_shutdown():
                     print("Stop requested, ending training loop.")
                     break
-                self.collect_rollouts(-1)
+                self.collect_rollouts(-1)"""
             if len(self._prepop_prev) > 0 or rospy.is_shutdown() or self.stop_requested:
                 run_path = self.config['run_path']
                 run_path = Path(run_path) if not isinstance(run_path, Path) else run_path
                 out_dir = run_path
                 out_dir.mkdir(parents=True, exist_ok=True)
                 ts = time.strftime("%Y%m%d_%H%M%S")
+                # out_path = out_dir / f"prepop_{self.replay_buffer.size}_{ts}.pt"
                 out_path = out_dir / f"prepop_{self.replay_buffer.size}_{ts}.pt"
                 torch.save({
                     "prev_images": torch.stack(self._prepop_prev, dim=0),  # (N, past_length, H, W, C)

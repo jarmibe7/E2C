@@ -12,6 +12,77 @@ import numpy as np
 from src.model.encoder import ConvEncoder
 from src.model.decoder import ConvDecoder, ChannelUncertaintyConvDecoder, ScalarUncertaintyConvDecoder
 
+class ConvVAE(nn.Module):
+    """
+    Basic convolutional VAE model, following RSSM E2C structure.
+    Stripped down to essentials.
+    """
+    def __init__(self, enc_latent_size, stochastic_size, conv_params, device, output_uncertainty=False):
+        super().__init__()
+        self.device = device
+        self.output_uncertainty = output_uncertainty
+
+        # Set number of hidden units
+        self.enc_latent_size = enc_latent_size
+        self.stochastic_size = stochastic_size              # Stochastic state
+
+        # Encoder and decoder
+        in_channels = conv_params['in_image_shape'][0] // 3 # hacky, assuming RGB, and input has already stacked frames
+        self.encoder = ConvEncoder(enc_latent_size, in_channels, conv_params)
+        if self.output_uncertainty:
+            self.decoder = ScalarUncertaintyConvDecoder(stochastic_size, conv_params, self.encoder.out_dim_flat, self.encoder.out_shape)
+        else:
+            self.decoder = ConvDecoder(stochastic_size, conv_params, self.encoder.out_dim_flat, self.encoder.out_shape)
+        self.out_image_shape = self.decoder.out_image_shape
+
+        self.post = nn.Sequential(                      # Representation model
+            nn.Linear(self.enc_latent_size, 256),
+            nn.ReLU(),
+            nn.Linear(256, 64),
+            nn.ReLU(),
+            nn.Linear(64, 2 * self.stochastic_size)
+        )
+
+    def reparameterize(self, mu, log_var):
+        # Get standard deviation from log variance
+        std = torch.exp(0.5 * log_var)
+        std = torch.clamp(std, min=1e-5, max=1e5) # Prevent std from being too small
+
+        # Generate random noise epsilon of same shape std
+        eps = torch.randn_like(std)
+
+        # Return reparameterized sample
+        return mu + eps * std
+    
+    def encode_posterior(self, x):
+        enc = self.encoder(x)
+        stats = self.post(enc)
+        mu, log_var = stats.chunk(2, dim=-1)
+        z = self.reparameterize(mu, log_var)
+
+        return mu, log_var, z
+    
+    def forward(self, x):
+        # Encode current state
+        mu, log_var, z = self.encode_posterior(x)
+        train_return = {
+            'x': x,
+            'mu': mu,
+            'log_var': log_var
+        }
+        # Decode reconstruction
+        if self.output_uncertainty:
+            x_recon, x_recon_uncertainty = self.decoder(z)
+            train_return.update({
+                'x_recon': x_recon,
+                'x_recon_uncertainty': x_recon_uncertainty
+            })
+        else:
+            x_recon = self.decoder(z)
+            train_return.update({
+                'x_recon': x_recon
+            })
+        return train_return
 
 class ConvE2C(nn.Module):
     """

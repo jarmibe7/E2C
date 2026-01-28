@@ -328,7 +328,7 @@ class Evaluator():
                     ims[2 * j + 1].set_data(cv2.cvtColor(true_frame[:3].permute(1, 2, 0).detach().cpu().numpy(), cv2.COLOR_BGR2RGB))
 
         ani = FuncAnimation(fig, update, frames=len(true_frames), interval=5.)
-        writer = FFMpegWriter(fps=2)
+        writer = FFMpegWriter(fps=20)
         vid_name = 'hardware_RGB_' + closed_loop_policy + f'_{trainer.curr_epoch}.mp4' if closed_loop else 'planner_vis_OL_' + closed_loop_policy + f'_{trainer.curr_epoch}.mp4'
         try:
             filepath = run_path / vid_name
