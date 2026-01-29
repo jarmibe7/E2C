@@ -164,15 +164,15 @@ class Evaluator():
         model = trainer.model.module if isinstance(trainer.model, torch.nn.DataParallel) else trainer.model
         device = trainer.device
         env = trainer.env
-        try: 
-            if env.render() is None:
-                env = HardwareEnv(
-                    frame_width=trainer.config['vae']['in_image_shape'][1],
-                    frame_height=trainer.config['vae']['in_image_shape'][2]
-                )
-                time.sleep(0.1)
-        except:
-            print("Hardware env dead :(")
+        # try: 
+        #     if process_image(trainer.env.render(), self.dataset_name).permute(2, 0, 1) is None:
+        #         env = HardwareEnv(
+        #             frame_width=trainer.config['vae']['in_image_shape'][1],
+        #             frame_height=trainer.config['vae']['in_image_shape'][2]
+        #         )
+        #         time.sleep(0.1)
+        # except:
+        #     print("Hardware env dead :(")
         past_len = model.past_length if hasattr(model, 'past_length') else 3
         pred_len = model.pred_length if hasattr(model, 'pred_length') else 3
         try:
@@ -194,12 +194,12 @@ class Evaluator():
         # Prime buffer with the first observation
         if trainer.hardware:
             trainer.env.downsize = False
-            first_img = trainer.env.render().to(torch.float32)
+            first_img = process_image(trainer.env.render(), self.dataset_name).permute(2, 0, 1).to(torch.float32)
         else:
             first_img = process_image(env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1)
         for _ in range(past_len):
             trainer.env.downsize = True
-            frame_buffer.append(trainer.env.render().to(torch.float32))
+            frame_buffer.append(process_image(trainer.env.render(), self.dataset_name).permute(2, 0, 1).to(torch.float32))
 
         step_idx = 0
         if closed_loop_policy in ['informative', 'maxdyn', 'hardware']:
@@ -209,7 +209,7 @@ class Evaluator():
         for step_idx in tqdm(range(max_steps), desc="Visualizing Planner timesteps"):
             # Current frame (ground truth) - modifying for hardware
             trainer.env.downsize = False
-            curr_img = trainer.env.render().to(torch.float32)
+            curr_img = process_image(trainer.env.render(), self.dataset_name).permute(2, 0, 1).to(torch.float32)
             trainer.env.downsize = True
             # process_image(env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1)
 
@@ -230,13 +230,13 @@ class Evaluator():
                 obs, rew, done, trunc, _ = env.step(env_act)
                 if trunc:
                     print("forced to reset", step_idx)
-                    _, _ = env.reset(seed=env_reset_seed + step_idx + 1)
+                    _, _ = env.reset()
                     # TODO: would have to count contacts here
             env_rew.append(rew)
             # trainer.env.downsize = False
             # next_img_true = trainer.env.render().to(torch.float32)
             trainer.env.downsize = True
-            next_img_true_buffer = trainer.env.render().to(torch.float32)
+            next_img_true_buffer = process_image(trainer.env.render(), self.dataset_name).permute(2, 0, 1)
             # next_img_true = process_image(env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1)
 
             # Model inputs
@@ -294,8 +294,8 @@ class Evaluator():
             #     done = False
             #     frame_buffer = [process_image(env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1) for _ in range(past_len)]
 
-        trainer.env.step(np.array([0.0, 0.0]))
-        trainer.env.step(np.array([0.0, 0.0]))
+        trainer.env.step(np.array([0.0, 0.0, 0.0, 0.0]))
+        trainer.env.step(np.array([0.0, 0.0, 0.0, 0.0]))
         obs, _ = trainer.env.reset()
         # Build visualization grid: 2 rows, (pred_len + 1) columns
         cols = pred_len + 1

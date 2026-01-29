@@ -117,7 +117,7 @@ class BaseTrainer():
                 test_dataset,
                 batch_size=config['train']['batch_size'], 
                 device=config['train']['device'],
-                dataset_name=config['train']['dataset']
+                dataset_name='push'
             )
         self.curr_epoch = 0
         self.stop_requested = False
@@ -150,8 +150,8 @@ class BaseTrainer():
         self.model.eval()
         # self.evaluator.eval(run_path)
         self.evaluator.visualize_planner(self, run_path, max_steps=max_steps, closed_loop=True)
-        self.env.step(np.array([0.0, 0.0]))
-        self.env.step(np.array([0.0, 0.0]))
+        self.env.step(np.array([0.0, 0.0, 0.0, 0.0]))
+        self.env.step(np.array([0.0, 0.0, 0.0, 0.0]))
         obs, _ = self.env.reset()
 
     def save(self, config_save, run_path, model_name='model.pt'):
@@ -602,7 +602,7 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
             self.init_control = torch.stack([torch.from_numpy(self.env.action_space.sample()).to(self.device) for _ in range(self.plan_horizon)], dim=0)
         elif cfg_val == 'random':
             # self.init_control = torch.stack([torch.from_numpy(self.env.action_space.sample()).to(self.device) for _ in range(self.plan_horizon)], dim=0)
-            self.init_control = torch.stack([torch.from_numpy(np.array([0.0, 0.0])).to(self.device, torch.float32) for _ in range(self.plan_horizon)], dim=0)
+            self.init_control = torch.stack([torch.from_numpy(np.array([0.0, 0.0, 0.0, 0.0])).to(self.device, torch.float32) for _ in range(self.plan_horizon)], dim=0)
             # if self.env_name in meta_world_envs:
             #     # Scale to reasonable range for Meta-World envs
             #     self.init_control *= 2.0
@@ -791,10 +791,11 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
             # Update CEM distribution parameters
             # take mean and stddev across elite sequences at each time step
             new_mu = torch.stack([torch.mean(torch.stack([seq[t] for seq in elite_seqs], dim=0), dim=0) for t in range(self.plan_horizon)], dim=0)
-            new_mu = torch.clamp(new_mu, act_low, act_high)
+            # new_mu = torch.clamp(new_mu, act_low, act_high)
             # new_sigma = torch.stack([torch.std(torch.stack([seq[t] for seq in elite_seqs], dim=0), dim=0) for t in range(self.plan_horizon)], dim=0)
             new_sigma = 1 / len(new_mu - 1) * torch.stack([torch.sum(torch.stack([torch.sqrt((seq[t] - new_mu[t])**2) for seq in elite_seqs], dim=0), dim=0) for t in range(self.plan_horizon)], dim=0)
             mu = self.alpha * mu + (1 - self.alpha) * new_mu
+            mu = torch.clamp(new_mu, act_low, act_high)
             sigma = torch.nan_to_num(self.alpha * sigma + (1 - self.alpha) * new_sigma, nan=self.sigma_min)
             sigma = torch.clamp(sigma, min=self.sigma_min)
         
@@ -905,9 +906,10 @@ class ClosedLoopHardwareTrainer(ClosedLoopInformativeTrainer):
         #     frame_width=config['vae']['in_image_shape'][1],
         #     frame_height=config['vae']['in_image_shape'][2]
         # )
-        self.env = gym.make(name_to_env['push'], render_mode="rgb_array")
+        self.test_env_name = 'push'
+        self.env = gym.make(name_to_env[self.test_env_name], render_mode="rgb_array")
         _, _ = self.env.reset()
-        
+
         self.start_now = False
         tic = time.time()
         while not self.start_now and not rospy.is_shutdown():
@@ -937,7 +939,7 @@ class ClosedLoopHardwareTrainer(ClosedLoopInformativeTrainer):
         # Buffers for saving dataset from pre-populate
         # predefine buffer size for computational efficiency
         self.data_prev = torch.zeros((self.num_rollout_steps * self.num_epochs, self.past_length, 3, *self.in_image_shape[1:]), dtype=torch.float32)
-        self.data_act = torch.zeros((self.num_rollout_steps * self.num_epochs, self.pred_length, 2), dtype=torch.float32)
+        self.data_act = torch.zeros((self.num_rollout_steps * self.num_epochs, self.pred_length, 4), dtype=torch.float32)
         self.data_next = torch.zeros((self.num_rollout_steps * self.num_epochs, self.pred_length, 3, *self.in_image_shape[1:]), dtype=torch.float32)
         self._prepop_prev, self._prepop_next, self._prepop_act = [], [], []
         # print(f"Pre-loading replay buffer with {len(self.dataset)} samples from hardware dataset...")
@@ -1025,14 +1027,14 @@ class ClosedLoopHardwareTrainer(ClosedLoopInformativeTrainer):
         while idx < self.num_rollout_steps and not self.stop_requested and not rospy.is_shutdown():
             
             # Get current frame from robot
-            curr_img = self.env.render()  # Returns (C, H, W)
+            curr_img = process_image(self.env.render(), self.test_env_name).permute(2, 0, 1)  # Returns (C, H, W)
             if curr_img is None:
                 rospy.logwarn("Failed to get image from robot")
                 continue
             
             if len(frame_buffer) == 0 and epoch > self.epochs_warmup:
                 for _ in range(self.past_length):
-                    frame_buffer.append(self.env.render().to(torch.float32))
+                    frame_buffer.append(process_image(self.env.render(), self.test_env_name).permute(2, 0, 1))
 
             # Select action: random during warmup, informative after
             tic = time.time()
@@ -1058,7 +1060,7 @@ class ClosedLoopHardwareTrainer(ClosedLoopInformativeTrainer):
             # Small delay for robot to execute
             # rospy.sleep(0.05)
             # Get next frame
-            next_img = self.env.render()
+            next_img = process_image(self.env.render(), self.test_env_name).permute(2, 0, 1)
             if next_img is None:
                 rospy.logwarn("Failed to get next image from robot")
                 continue
@@ -1100,8 +1102,8 @@ class ClosedLoopHardwareTrainer(ClosedLoopInformativeTrainer):
             if idx == (self.num_rollout_steps-1): # and epoch == self.epochs_warmup:
                 print(f"Average control frequency: {(1. / np.mean(ctrl_freq)):.3f} Hz. \nDon't forget to move the cube!")
         
-        self.env.step(np.array([0.0, 0.0]))
-        self.env.step(np.array([0.0, 0.0]))
+        self.env.step(np.array([0.0, 0.0, 0.0, 0.0]))
+        self.env.step(np.array([0.0, 0.0, 0.0, 0.0]))
         if epoch == self.epochs_warmup:
             print("4 seconds to change cube position; don't reset position...")
             time.sleep(4.0)
