@@ -40,6 +40,8 @@ class ConvVAE(nn.Module):
             nn.ReLU(),
             nn.Linear(256, 64),
             nn.ReLU(),
+            nn.Linear(64, 64),
+            nn.ReLU(),
             nn.Linear(64, 2 * self.stochastic_size)
         )
 

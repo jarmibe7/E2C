@@ -27,6 +27,9 @@ class E2CDataset(torch.utils.data.Dataset):
         data = torch.load(dataset_dir / dataset_file)
         self.X = data["prev_images"].permute(0, 1, 4, 2, 3)  # Shape: [num_samples, past_length, C, H, W]
         self.X_next = data["next_images"].permute(0, 1, 4, 2, 3)  # Shape: [num_samples, pred_length, C, H, W]
+        if self.X.shape[-2] == 3: # If images have channel in 4th dim for some reason, permute
+            self.X = self.X.permute(0, 1, 3, 4, 2)
+            self.X_next = self.X_next.permute(0, 1, 3, 4, 2)
         self.in_img_shape = [self.X[0, 0].shape[0] * config['trans']['past_length'], *self.X[0, 0].shape[1:]]
         if len(self.X.shape) == 5:
             self.past_length = self.X.shape[1]

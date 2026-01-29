@@ -42,6 +42,8 @@ class ConvEncoder(nn.Module):
         self.fc_encode = nn.Sequential(
             nn.Linear(self.out_dim_flat, 1024),
             nn.ReLU(),
+            nn.Linear(1024, 1024),
+            nn.ReLU(),
             nn.Linear(1024, 512),
             nn.ReLU(),
             nn.Linear(512, self.latent_size),

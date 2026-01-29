@@ -249,7 +249,6 @@ class RSSMLoss(nn.Module):
         self.num_epochs = num_epochs
         self.recon_mult = loss_params['recon_mult']
         self.beta = loss_params['beta']
-        self.lam = loss_params['lambda']
         self.free_nats = loss_params.get('free_nats', 0.0)
         self.anneal_mode = loss_params['kld_anneal_mode']
         self.image_loss = loss_params.get('image_loss', 'nll')
@@ -258,7 +257,9 @@ class RSSMLoss(nn.Module):
         if self.anneal_mode == 'const':
             mult = self.beta
         elif self.anneal_mode == 'linear':
-            mult = self.beta*((epoch + 1)/self.num_epochs)
+            mult = min([self.beta / 10, self.beta*((epoch + 1)/self.num_epochs), self.beta*((epoch + 1)/self.num_epochs / 2)])
+        elif self.anneal_mode == 'reverse':
+            mult = self.beta*((self.num_epochs - 1)/self.num_epochs) + self.beta / 10
         else:
             raise NotImplementedError(f"Annealing mode {self.anneal_mode} not supported!")
 

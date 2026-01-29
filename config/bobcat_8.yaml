@@ -13,20 +13,19 @@ vae:
 loss:
   loss_type: rssm         # Loss type to use: mse | uncertainty  # TODO: Change this setup for rssm
   image_loss: mse                   # Image reconstruction loss type: mse | nll
-  recon_mult: !!float 3e3           # MSE Reconstruction loss multiplier
-  beta: !!float 7e-6                # Standard Gaussian KL multiplier
+  recon_mult: !!float 1e3           # MSE Reconstruction loss multiplier
+  beta: !!float 7e-5                # Standard Gaussian KL multiplier
   kld_anneal_mode: linear           # Beta annealing mode: const | linear
 # Transition model hyperparams
 trans:
-  stochastic_size: 16                # Stochastic state model latent dim
-  deterministic_size: 256             # Deterministic state model latent dim
+  stochastic_size: 32                # Stochastic state model latent dim
+  deterministic_size: 128             # Deterministic state model latent dim
   past_length: 3                    # Length of image history passed into encoder
   pred_length: 3                    # Length of image prediction horizon
-  alpha: !!float 1e-4               # Learning rate
+  alpha: !!float 8e-5               # Learning rate
   weight_decay: !!float 1e-4        # Adam optimizer weight decay
 # Training settings
 train:
-  # dataset: hardware_precollect_random_70/random_70.pt      # Which dataset to use for training (in data/)
   dataset: hardware_jan_28_pixel_100/hardware_pixel_100.pt      # Which dataset to use for training (in data/)
   batch_size: 128
   num_epochs: 100
@@ -44,20 +43,21 @@ closed_loop:
   policy: hardware                    # What type of policy to use: conv | random | uncertainty | informative
   epochs_warmup: -1                  # Negative one means to pre-collect buffer_capacity / num_rollout_steps random data first
   num_rollout_steps: 180           # Number of timesteps to collect in a rollout
+  eval_num_rollout_steps: 100           # Number of timesteps to collect in a rollout
   plan_horizon: 12                   # Planning horizon for CEM MPC
-  num_batches: 50                    # Number of batches to train on per gradient update
+  num_batches: 100                    # Number of batches to train on per gradient update
   buffer_capacity: 2000             # Replay buffer capacity - keeping it small just to debug
   samples: 70                      # Number of action sequences to sample for MPC
   elite_frac: 0.1                   # Fraction of action sequences to use as elites for CEM
-  iters: 3                          # Number of CEM iterations
+  iters: 4                         # Number of CEM iterations
   init_control: random              # Initial control sequence: zero | random | from_txt
   sigma_init: 0.1                   # Initial stddev for sampling actions
   sigma_min: 0.05                   # Minimum stddev for sampling actions
   alpha: 0.2                        # Smoothing factor for updating action distribution [0, new actions; 1, always old actions]
 
 # env_inters = num_epochs * num_rollout_steps - # interactions collected from environment
-    # 50 * 180 = 9,000 (9000 / 4.5 Hz / 60 = 33.33 minutes --> can double this)
+    # 100 * 180 = 18,000 (18000 / 4.5 Hz / 60 = 66.67 minutes, or about an hour)
 # training_inters = num_batches * batch_size * num_epochs - # interactions agents trained on
-    # 100 * 128 * 50 = 640,000, ~640K
+    # 100 * 128 * 100 = 896,000, ~896K # ratio of 896/18 = 49.77, so each interaction has the probability of being trained on ~50 times
 # num_rollout_steps * num_epochs * cem_iters * samples - # iteractions collected and imagined
-    # 180 * 50 * 3 * 70 = 1,050,000, ~1.05M
+    # 180 * 100 * 4 * 70 = 5,040,000, ~5.04M

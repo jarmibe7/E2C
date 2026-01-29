@@ -91,7 +91,7 @@ class BaseTrainer():
         # if torch.cuda.device_count() > 1:
         #     print(f"Using {torch.cuda.device_count()} GPUs")
         #     self.model = torch.nn.DataParallel(self.model)
-        self.model_optimizer = torch.optim.Adam(model.parameters(), lr=config['trans']['alpha']) #, weight_decay=config['trans']['weight_decay'])
+        self.model_optimizer = torch.optim.Adam(model.parameters(), lr=config['trans']['alpha'], weight_decay=config['trans']['weight_decay'])
         if policy is not None:
             self.policy = policy
             policy.to(device)
@@ -146,7 +146,7 @@ class BaseTrainer():
         """
         print('\n*** EVAL w/ reset ***\n')
         obs, _ = self.env.reset()
-        time.sleep(5.0)
+        time.sleep(10.0)
         self.model.eval()
         # self.evaluator.eval(run_path)
         self.evaluator.visualize_planner(self, run_path, max_steps=max_steps, closed_loop=True)
@@ -881,6 +881,10 @@ class ClosedLoopHardwareTrainer(ClosedLoopInformativeTrainer):
         self.alpha = self.closed_cfg.get('alpha', 0.7)
         self.plan_horizon = self.closed_cfg.get('plan_horizon', self.pred_length)
 
+        self.eval_num_rollout_steps = config['closed_loop'].get('eval_num_rollout_steps', self.num_rollout_steps)
+        #### CAN CHANGE THIS HERE TO DETERMINE IF WANT TO DO MAXDYN OR INFORMATIVE
+        self.obj_fun = "maxdyn"
+
         # Pre-populate replay buffer with hardware dataset
         # Buffers for saving dataset from pre-populate
         # predefine buffer size for computational efficiency
@@ -960,11 +964,6 @@ class ClosedLoopHardwareTrainer(ClosedLoopInformativeTrainer):
         Collect observations and save them to replay buffer
         """
         self.model.eval()
-        self.env.step(np.array([0.0, 0.0]))
-        if epoch == self.epochs_warmup:
-            print("Already reset environment?")
-        else:
-            self.env.reset() #Assume reset happens at the end
         frame_buffer = []
         act_buffer = []
         idx = 0
@@ -1072,7 +1071,7 @@ class ClosedLoopHardwareTrainer(ClosedLoopInformativeTrainer):
                 print("Stop requested, ending training loop.")
                 break
             # Unload batch
-            x, u, r, x_next, done  = self.replay_buffer.sample(self.batch_size)
+            x, u, r, x_next, done  = self.replay_buffer.sample(min(self.batch_size, self.num_rollout_steps))
             x, x_next, u = x.to(self.device), x_next.to(self.device), u.to(self.device)
 
             # Forward pass
@@ -1138,8 +1137,9 @@ class ClosedLoopHardwareTrainer(ClosedLoopInformativeTrainer):
                 if (epoch+1) % 10 == 0:
                     # show model video every 10 epochs
                     self.model.eval()
-                    if self.config['train']['eval']: self.evaluate(self.config['run_path'])
+                    if self.config['train']['eval']: self.evaluate(self.config['run_path'], max_steps=self.eval_num_rollout_steps)
                     self.model.train()
+                self.plotter.save(self.config['run_path'])
                 
             pbar.close()
         except KeyboardInterrupt:
