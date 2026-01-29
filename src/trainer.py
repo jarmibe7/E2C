@@ -102,7 +102,7 @@ class BaseTrainer():
         loss_type = config['loss'].get('loss_type', None)
         if loss_type == 'uncertainty':
             self.model_criterion = UncertaintyE2CLoss(config['train']['num_epochs'], config['loss'])
-        elif loss_type == 'rssm':
+        elif 'rssm' in loss_type:
             self.model_criterion = RSSMLoss(config['train']['num_epochs'], config['loss'])
         elif loss_type == 'mse':
             self.model_criterion = E2CLoss(config['train']['num_epochs'], config['loss'])

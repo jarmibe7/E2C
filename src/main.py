@@ -37,6 +37,7 @@ def main():
     print('*** STARTING ***\n')
     # Load config, make run path, and choose torch device
     # ---------- CONFIG HERE ----------
+<<<<<<< HEAD
     # Parse command-line arguments
     parser = argparse.ArgumentParser(description='E2C Training Script')
     parser.add_argument(
@@ -49,6 +50,10 @@ def main():
     config_name = args.config
     config_file = config_name if config_name.endswith('.yaml') else f"{config_name}.yaml"
     with open(CONFIG_PATH / config_file, "r") as f:
+=======
+    config_name = 'rssm_reacher_active_v1'   # <--- CHANGE CONFIG HERE
+    with open(CONFIG_PATH / f'{config_name}.yaml', "r") as f:
+>>>>>>> 523a1e41549f6b90e0c670dc7bc130972820a546
         config = yaml.safe_load(f)
     config['config_name'] = config_name
     config_save = copy.deepcopy(config)
