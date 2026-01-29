@@ -944,7 +944,7 @@ class ClosedLoopHardwareTrainer(ClosedLoopInformativeTrainer):
         # print(f"Pre-loading replay buffer with {len(self.dataset)} samples from hardware dataset...")
         if config['train'].get('eval_only', False) == False and config['closed_loop']['epochs_warmup'] < 0:
             print("Initializing buffer with random rollouts...")
-            loop_steps = self.batch_size # self.config['closed_loop']['buffer_capacity'] // 40
+            loop_steps = 10*self.batch_size # self.config['closed_loop']['buffer_capacity'] // 40
             self.num_rollout_steps = loop_steps
             self.collect_rollouts(-1)
             self.num_rollout_steps = config['closed_loop']['num_rollout_steps']
