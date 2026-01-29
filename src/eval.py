@@ -19,6 +19,7 @@ from src.model.rssm import RSSME2C
 from src.dataset import E2CDataset
 from src.utils import set_seed, anim_frames, shoulder_mass, excess_kurtosis, central_mass_ratio
 from src.data_gen.gen_fetch import process_image
+import cv2
 
 import sys
 import time
@@ -40,7 +41,7 @@ class Plotter():
         self.plot_freq = plot_freq
         self.plot_history = None
         self.fig = None
-        self.colors = ['blue', 'orange', 'green', 'red', 'purple', 'black']
+        self.colors = ['blue', 'orange', 'green', 'red', 'purple', 'black', 'pink']
 
     def log(self, lr):
         """
@@ -59,6 +60,10 @@ class Plotter():
 
         # Replot
         if self.num_steps % self.plot_freq == 0: self.plot()
+
+    def log_value(self, key, value):
+        print("Not implemented yet")
+        pass
 
     def plot(self):
         """
@@ -144,7 +149,7 @@ class Evaluator():
         self.eval_traj(run_path, max_frames=vid_max_frames)
         # self.eval_latent(run_path)
 
-    def visualize_planner(self, trainer, run_path, max_steps=25, closed_loop=True):
+    def visualize_planner(self, trainer, run_path, max_steps=25, closed_loop=True, env_reset_seed=None):
         """
         Visualize trajectories using the trainer's planner/rollout logic.
 
@@ -178,7 +183,7 @@ class Evaluator():
 
         dtype = next(self.model.parameters()).dtype
         model.eval()
-        obs, _ = env.reset()
+        # obs, _ = env.reset() # reset in trainer.save()
         frame_buffer = []   # frames used as model input window
         true_frames = []    # ground-truth frames for visualization
         recon_frames = []   # model reconstructions
@@ -197,9 +202,10 @@ class Evaluator():
             frame_buffer.append(trainer.env.render().to(torch.float32))
 
         step_idx = 0
-        trainer._init_cem_mu_sig()
-        mu = trainer.init_control.clone()
-        sigma = trainer.sigma.clone()
+        if closed_loop_policy in ['informative', 'maxdyn', 'hardware']:
+            trainer._init_cem_mu_sig()
+            mu = trainer.init_control.clone()
+            sigma = trainer.sigma.clone()
         for step_idx in tqdm(range(max_steps), desc="Visualizing Planner timesteps"):
             # Current frame (ground truth) - modifying for hardware
             trainer.env.downsize = False
@@ -221,10 +227,11 @@ class Evaluator():
 
             # Step env
             for _ in range(trainer.meta_ts):
-                _, rew, done, trunc, _ = env.step(env_act)
+                obs, rew, done, trunc, _ = env.step(env_act)
                 if trunc:
                     print("forced to reset", step_idx)
-                    obs, _ = env.reset()
+                    _, _ = env.reset(seed=env_reset_seed + step_idx + 1)
+                    # TODO: would have to count contacts here
             env_rew.append(rew)
             # trainer.env.downsize = False
             # next_img_true = trainer.env.render().to(torch.float32)
@@ -291,7 +298,7 @@ class Evaluator():
         obs, _ = trainer.env.reset()
         # Build visualization grid: 2 rows, (pred_len + 1) columns
         cols = pred_len + 1
-        fig, ax = plt.subplots(2, cols, figsize=(3 * cols, 10))
+        fig, ax = plt.subplots(2, cols, figsize=(3 * cols, 8))
         ax = np.atleast_2d(ax)
         ax[0, 0].set_title(f"Pred t=0; {plan_obj_vals[0]:.2f}")
         ax[1, 0].set_title(f"True t=0; {env_rew[0]:.2f}")
@@ -309,7 +316,6 @@ class Evaluator():
             a.axis('off')
 
         def update(frame_idx):
-            # TODO: Plot KLD value
             # TODO: somehow show "reward"/number of times interacted with object?
             true_curr = true_frames[frame_idx].squeeze(0)
             true_next = true_frames[frame_idx + 1].squeeze(0) if frame_idx + 1 < len(true_frames) else true_curr
@@ -318,20 +324,20 @@ class Evaluator():
             # Pred current recon
             ax[0, 0].set_title(f"Pred t=0; {plan_obj_vals[frame_idx]:.2f}")
             ax[1, 0].set_title(f"True t=0; {env_rew[frame_idx]:.2f}")
-            ims[0].set_data(recon[:3].permute(1, 2, 0).detach().cpu().numpy())
-            ims[1].set_data(true_curr[:3].permute(1, 2, 0).detach().cpu().numpy())
+            ims[0].set_data(cv2.cvtColor(recon[:3].permute(1, 2, 0).detach().cpu().numpy(), cv2.COLOR_BGR2RGB))
+            ims[1].set_data(cv2.cvtColor(true_curr[:3].permute(1, 2, 0).detach().cpu().numpy(), cv2.COLOR_BGR2RGB))
 
             # Predictions across horizon
             for j in range(1, cols):
                 pred_frame = pred_sequences[frame_idx][j-1].squeeze(0)
-                ims[2 * j].set_data(pred_frame.permute(1, 2, 0).detach().cpu().numpy())
+                ims[2 * j].set_data(cv2.cvtColor(pred_frame.permute(1, 2, 0).detach().cpu().numpy(), cv2.COLOR_BGR2RGB))
                 if j == 1:
                     true_frame = true_next  # reuse true_next for all future slots
-                    ims[2 * j + 1].set_data(true_frame[:3].permute(1, 2, 0).detach().cpu().numpy())
+                    ims[2 * j + 1].set_data(cv2.cvtColor(true_frame[:3].permute(1, 2, 0).detach().cpu().numpy(), cv2.COLOR_BGR2RGB))
 
         ani = FuncAnimation(fig, update, frames=len(true_frames), interval=5.)
-        writer = FFMpegWriter(fps=2)
-        vid_name = 'planner_CL_' + closed_loop_policy + f'_{trainer.curr_epoch}.mp4' if closed_loop else 'planner_vis_OL_' + closed_loop_policy + f'_{trainer.curr_epoch}.mp4'
+        writer = FFMpegWriter(fps=20)
+        vid_name = 'hardware_RGB_' + closed_loop_policy + f'_{trainer.curr_epoch}.mp4' if closed_loop else 'planner_vis_OL_' + closed_loop_policy + f'_{trainer.curr_epoch}.mp4'
         try:
             filepath = run_path / vid_name
             print(f'Saved planner visualization to {filepath}\n')
@@ -341,7 +347,6 @@ class Evaluator():
             print('Exception occurred, saved planner visualization to current directory')
             ani.save(vid_name, writer=writer)
         plt.close(fig)
-        return
         
     def eval_traj(self, run_path, max_frames=50):
         # TODO: update eval_traj with model

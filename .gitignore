@@ -11,3 +11,5 @@ runs/
 config/*
 src/data_gen/temp_figs
 src/data_gen/*.png
+*.png
+*/*.png

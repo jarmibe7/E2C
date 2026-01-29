@@ -33,7 +33,7 @@ image_shape = (64, 64, 3)                                   # Downsampled image 
 past_length = 3                                             # Number of previous observations to use for training
 pred_length = 3                                             # Number of timesteps to predict in the future
 new_dt = None                                               # Desired new timestep in seconds
-metaworld_cam_name = 'corner'                        # Camera angle for metaworld environments: corner | behindGripper         
+metaworld_cam_name = 'corner3' if OUTPUT_NAME.__contains__('isom') else 'corner'                        # Camera angle for metaworld environments: corner | behindGripper         
 # ---------------------------------
 # Only modify XML if new_dt is set
 if new_dt is not None:
@@ -55,7 +55,7 @@ DATA_PATH = PROJECT_ROOT / "data"
 
 seed = 42
 set_seed(seed)
-meta_world_envs = ['shelf', 'sweep', 'assembly', 'test', 'plate', 'button', 'door', 'drawer', 'window']
+meta_world_envs = ['shelf', 'sweep', 'assembly', 'test', 'plate', 'button', 'door', 'drawer', 'window', 'lever', 'coffee', 'faucet']
 name_to_env = {'reacher': 'Reacher-v5', 
                 'cartpole': 'CartPole-v1', 
                 'push': 'FetchPushDense-v3', 
@@ -67,9 +67,12 @@ name_to_env = {'reacher': 'Reacher-v5',
                 'assembly': 'assembly-v3', 
                 'plate': 'plate-slide-v3',
                 'button': 'button-press-v3',
-                'door': 'door-close-v3',
-                'drawer': 'drawer-close-v3',
-                'window': 'window-open-v3'
+                'door': 'door-open-v3',
+                'drawer': 'drawer-open-v3',
+                'window': 'window-open-v3',
+                'lever': 'lever-pull-v3',
+                'coffee': 'coffee-button-v3',
+                'faucet': 'faucet-open-v3'
                }
 env_to_aspace = {'reacher': 'continuous', 'cartpole': 'discrete', 'push': 'continuous', 
                  'pointmaze': 'continuous', 'antmaze': 'continuous', 'mountaincar': 'continuous',
@@ -107,7 +110,7 @@ def debug_render(img):
     else: plt.imshow(img)
     plt.savefig('debug.png')
 
-def process_image(image, dataset_name, image_shape=image_shape):
+def process_image(image, dataset_name, image_shape=image_shape, downscale=True):
     """
     Image processing
     """
@@ -117,7 +120,8 @@ def process_image(image, dataset_name, image_shape=image_shape):
     elif 'push' in dataset_name: image = image[100:-50, :-100, :]     # Zoom on robot # TODO: need to zoom on push?
     elif 'pointmaze' in dataset_name: image = image[110:-70, 20:-20, :]
     elif 'antmaze' in dataset_name: image = image[110:-70, 20:-20, :]
-    elif dataset_name in meta_world_envs and metaworld_cam_name == 'corner': 
+    elif dataset_name in meta_world_envs: # and metaworld_cam_name == 'corner': 
+        # always rotate Metaworld images
         image = np.rot90(image, k=2)    # Metaworld corner images are upside down
     elif dataset_name in meta_world_envs and metaworld_cam_name == 'behindGripper':
         pass 
@@ -126,15 +130,165 @@ def process_image(image, dataset_name, image_shape=image_shape):
     image = torch.from_numpy(image.copy()).permute(2, 0, 1)  # Get image tensor into (C, H, W)
 
     # Image processing
-    normalized = image.unsqueeze(0).float() / 255.0 # Normalize to [0,1]
+    normalized = image.float() / 255.0 # Normalize to [0,1]
     # if 'mountaincar' in dataset_name:
-    image_resized = torchvision.transforms.Resize(size=image_shape[0:2], antialias=True)(normalized)
-    image_resized = image_resized.clamp(0.0, 1.0)
+    if downscale:
+        image_resized = torchvision.transforms.Resize(size=image_shape[0:2], antialias=True)(normalized)
+        image_resized = image_resized.clamp(0.0, 1.0)
+    else:
+        image_resized = normalized
     # else:
         # image_resized = torchvision.transforms.functional.resize(normalized, image_shape[0:2], interpolation=torchvision.transforms.functional.InterpolationMode.NEAREST)   # Downscaling
     
-    return image_resized.permute(0, 2, 3, 1) # Permute back to raw shape
+    return image_resized.permute(1, 2, 0) # Permute back to raw shape
 
+def get_obj_site_id(dataset_name, mj_model):
+    if 'button' in dataset_name:
+        return mj_model.site("buttonStart").id
+    elif 'coffee' in dataset_name:
+        return mj_model.site("objSite").id
+    elif 'door' in dataset_name or 'drawer' in dataset_name or 'plate' in dataset_name:
+        return mj_model.site("goal").id
+
+def get_mujoco_geom_keys_index(dataset_name):
+    """
+    Return dicts with collision geometry geom_index -> geom_name for both robot and obj
+    """
+    robot_geom = {
+            25: 'right_l6',
+            26: 'right_l6',
+            27: 'right_hand',
+            28: 'right_hand',
+            29: 'hand',
+            30: 'rightclaw',
+            31: 'rightpad',
+            32: 'leftclaw',
+            33: 'leftpad',
+        }
+    if 'button' in dataset_name:
+        obj_geom = {
+            36: 'buttonbox',
+            37: 'buttonbox',
+            38: 'buttonbox',
+            39: 'buttonbox',
+            40: 'buttonbox',
+            41: 'buttonbox',
+            42: 'buttonbox',
+            43: 'button',
+            44: 'button',
+            45: 'button',
+            46: 'button',
+            47: 'button',
+        }
+    elif 'drawer' in dataset_name:
+        obj_geom = {
+            36: 'drawercase_link',
+            37: 'drawercase_link',
+            38: 'drawercase_link',
+            39: 'drawercase_link',
+            40: 'drawercase_link',
+            41: 'drawercase_link',
+            42: 'drawer_link',
+            43: 'drawer_link',
+            44: 'drawer_link',
+            45: 'drawer_link',
+            46: 'drawer_link',
+            47: 'drawer_link',
+            48: 'drawer_link',
+            49: 'drawer_link',
+            50: 'drawer_link',
+            51: 'drawer_link',
+        }
+    elif 'coffee' in dataset_name:
+        robot_geom = {
+            29: 'right_l6',
+            30: 'right_l6',
+            31: 'right_hand',
+            32: 'right_hand',
+            33: 'hand',
+            34: 'rightclaw',
+            35: 'rightpad',
+            36: 'leftclaw',
+            37: 'leftpad',
+        }
+        obj_geom = {
+            8: 'mug',
+            9: 'mug',
+            10: 'mug',
+            11: 'mug',
+            40: 'cm_link',
+            41: 'cm_link',
+            42: 'cm_link',
+            43: 'cm_link',
+            44: 'cm_link',
+            45: 'cm_link',
+            46: 'cm_link',
+            47: 'cm_link',
+            48: 'cm_link',
+            49: 'cm_link',
+            50: 'cm_link',
+            51: 'cm_link',
+            52: 'cm_link',
+            53: 'cm_link',
+            54: 'cmbutton',
+            55: 'cmbutton',
+        }
+    elif 'door' in dataset_name:
+        obj_geom = {
+            36: 'doorlockB',
+            37: 'doorlockB',
+            38: 'doorlockB',
+            39: 'doorlockB',
+            40: 'doorlockB',
+            41: 'doorlockB',
+            42: 'door_link',
+            43: 'door_link',
+            44: 'door_link',
+            45: 'door_link',
+            46: 'door_link',
+            47: 'door_link',
+            48: 'door_link',
+            49: 'door_link',
+            50: 'door_link',
+            51: 'door_link',
+        }
+    elif 'faucet' in dataset_name:
+        obj_geom = {
+            36: 'faucet_link',
+            37: 'faucet_link',
+            38: 'faucet_link',
+            39: 'faucet_link2',
+            40: 'faucet_link2',
+            41: 'faucet_link2',
+            42: 'faucet_link2',
+            43: 'faucet_link2',
+            44: 'faucet_link2',
+        }
+    else:
+        robot_geom = {}
+        obj_geom = {}
+        print("Could not find env name in src.data_gen.gen_fetch:get_mujoco_geom_keys_index, will not check collisions\n")
+
+    return robot_geom, obj_geom
+
+def is_robot_contact_geometry(data, robot_geom, object_geom):
+    """
+    Determine whether robot contacting task object(s)
+    """
+    for i in range(data.ncon):
+        c = data.contact[i]
+        g1, g2 = c.geom1, c.geom2
+
+        robot_object = (
+            (g1 in robot_geom and g2 in object_geom) or
+            (g2 in robot_geom and g1 in object_geom)
+        )
+
+        if robot_object:
+            # print(f"Robot collided with {object_geom.get(g1, object_geom.get(g2, 'unknown object...'))}")
+            return True
+
+    return False
 
 def main():
     start_time = time.perf_counter()
@@ -200,8 +354,8 @@ def main():
 
             # Add obs history buffer to dataset
             if len(frame_buffer) == past_length + pred_length:
-                prev_img[idx] = torch.cat(frame_buffer[0:past_length], dim=0)
-                next_img[idx] = torch.cat(frame_buffer[past_length:(past_length+pred_length)], dim=0)
+                prev_img[idx] = torch.stack(frame_buffer[0:past_length], dim=0)
+                next_img[idx] = torch.stack(frame_buffer[past_length:(past_length+pred_length)], dim=0)
 
                 # Get controls for entire pred_length
                 if continuous:

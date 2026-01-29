@@ -6,6 +6,48 @@ Authors: Jared Berry, Ayush Gaggar
 import torch
 from torch import nn
 
+class VAELoss(nn.Module):
+    """
+    Basic VAE Loss, as a PyTorch module.
+    """
+    def __init__(self, num_epochs, loss_params):
+        super().__init__()
+        self.num_epochs = num_epochs
+        self.recon_mult = loss_params.get('recon_mult', 1000.0)
+        self.beta = loss_params['beta']
+        self.anneal_mode = loss_params['kld_anneal_mode']
+        self.free_nats = loss_params.get('free_nats', 1.0)
+
+    def kld_anneal(self, epoch):
+        if self.anneal_mode == 'const':
+            mult = self.beta
+        elif self.anneal_mode == 'linear':
+            mult = self.beta*((epoch + 1)/self.num_epochs)
+        else:
+            raise NotImplementedError(f"Annealing mode {self.anneal_mode} not supported!")
+
+        return mult
+
+    def forward(self, tr, epoch):
+        # Reconstruction loss
+        recon = self.recon_mult*nn.functional.mse_loss(tr['x'], tr['x_recon'], reduction='mean')
+
+        # Encoding KL Divergence
+        log_var, mu = tr['log_var'], tr['mu']
+        kld = self.kld_anneal(epoch)*(-0.5 * torch.sum(1 + log_var - mu.pow(2) - log_var.exp(), dim=-1).mean())
+        kld = torch.clamp(kld, min=self.free_nats, max=1e-2)
+
+        loss = recon + kld
+        if torch.isnan(loss):
+            breakpoint()
+
+        # Make return dictionary for loss values
+        loss_return = {
+            r"$x$ Reconstruction Loss": recon.detach().cpu().item(),
+            "KLD": kld.detach().cpu().item(),
+        }
+        return loss, loss_return
+
 class E2CLoss(nn.Module):
     """
     E2C loss, made with PyTorch.
@@ -13,7 +55,7 @@ class E2CLoss(nn.Module):
     def __init__(self, num_epochs, loss_params):
         super().__init__()
         self.num_epochs = num_epochs
-        self.recon_mult = loss_params['recon_mult']
+        self.recon_mult = loss_params.get('recon_mult', 1000.0)
         self.beta = loss_params['beta']
         self.lam = loss_params['lambda']
         self.anneal_mode = loss_params['kld_anneal_mode']
@@ -207,7 +249,6 @@ class RSSMLoss(nn.Module):
         self.num_epochs = num_epochs
         self.recon_mult = loss_params['recon_mult']
         self.beta = loss_params['beta']
-        self.lam = loss_params['lambda']
         self.free_nats = loss_params.get('free_nats', 0.0)
         self.anneal_mode = loss_params['kld_anneal_mode']
         self.image_loss = loss_params.get('image_loss', 'nll')
@@ -216,7 +257,9 @@ class RSSMLoss(nn.Module):
         if self.anneal_mode == 'const':
             mult = self.beta
         elif self.anneal_mode == 'linear':
-            mult = self.beta*((epoch + 1)/self.num_epochs)
+            mult = min([self.beta / 10, self.beta*((epoch + 1)/self.num_epochs), self.beta*((epoch + 1)/self.num_epochs / 2)])
+        elif self.anneal_mode == 'reverse':
+            mult = self.beta*((self.num_epochs - 1)/self.num_epochs) + self.beta / 10
         else:
             raise NotImplementedError(f"Annealing mode {self.anneal_mode} not supported!")
 

@@ -183,6 +183,7 @@ class RSSME2C(nn.Module):
             else:
                 window = x_pred.detach()  # past_length==1, just use pred image
             mu_q, log_var_q, zs = self.encode_posterior(window)
+            z = zs[:, -1]
 
             # # posterior update using real next frame
             # enc = self.encoder(x_next[:, t])

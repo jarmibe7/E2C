@@ -18,10 +18,18 @@ class E2CDataset(torch.utils.data.Dataset):
     def __init__(self, config):
         # Load raw dataset
         env_name = config['train']['dataset'].split('_')[0]
-        dataset_dir = DATA_PATH / env_name
-        data = torch.load(dataset_dir / f"{config['train']['dataset']}.pt")
+        if config['train']['dataset'].endswith('.pt'):
+            dataset_dir = PROJECT_ROOT / "runs" / env_name
+            dataset_file = config['train']['dataset']
+        else:
+            dataset_dir = DATA_PATH / env_name
+            dataset_file = f"{config['train']['dataset']}.pt"
+        data = torch.load(dataset_dir / dataset_file)
         self.X = data["prev_images"].permute(0, 1, 4, 2, 3)  # Shape: [num_samples, past_length, C, H, W]
         self.X_next = data["next_images"].permute(0, 1, 4, 2, 3)  # Shape: [num_samples, pred_length, C, H, W]
+        if self.X.shape[-2] == 3: # If images have channel in 4th dim for some reason, permute
+            self.X = self.X.permute(0, 1, 3, 4, 2)
+            self.X_next = self.X_next.permute(0, 1, 3, 4, 2)
         self.in_img_shape = [self.X[0, 0].shape[0] * config['trans']['past_length'], *self.X[0, 0].shape[1:]]
         if len(self.X.shape) == 5:
             self.past_length = self.X.shape[1]
@@ -30,6 +38,15 @@ class E2CDataset(torch.utils.data.Dataset):
             self.past_length = 1
         self.pred_length = config['trans']['pred_length']
         control = data["actions"]
+        # Filter out samples where any tensor has all zeros
+        # Check if each sample has any non-zero values
+        prev_images_nonzero = (self.X.reshape(self.X.shape[0], -1) != 0).any(dim=1)
+        next_images_nonzero = (self.X_next.reshape(self.X_next.shape[0], -1) != 0).any(dim=1)
+        actions_nonzero = (control.reshape(control.shape[0], -1) != 0).any(dim=1)
+        valid_indices = prev_images_nonzero & next_images_nonzero & actions_nonzero
+        self.X = self.X[valid_indices]
+        self.X_next = self.X_next[valid_indices]
+        self.U = control[valid_indices]
 
         # Normalize actions
         # if control.max() - control.min() > 0:

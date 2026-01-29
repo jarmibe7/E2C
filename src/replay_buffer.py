@@ -54,7 +54,7 @@ class ReplayBuffer:
     def sample(self, batch_size):
         # Generate batch_size random samples from the replay buffer
         # idx = torch.randint(0, self.size, (batch_size,), device=self.device)  # Samples with replacement
-        idx = random.sample(range(self.size), batch_size)
+        idx = random.sample(range(self.size), min(batch_size, self.size))  # Samples without replacement
 
         return (
             self.X[idx],
