@@ -149,7 +149,7 @@ class Evaluator():
         self.eval_traj(run_path, max_frames=vid_max_frames)
         # self.eval_latent(run_path)
 
-    def visualize_planner(self, trainer, run_path, max_steps=25, closed_loop=True):
+    def visualize_planner(self, trainer, run_path, max_steps=25, closed_loop=True, env_reset_seed=None):
         """
         Visualize trajectories using the trainer's planner/rollout logic.
 
@@ -202,6 +202,10 @@ class Evaluator():
             frame_buffer.append(trainer.env.render().to(torch.float32))
 
         step_idx = 0
+        if closed_loop_policy in ['informative', 'maxdyn', 'hardware']:
+            trainer._init_cem_mu_sig()
+            mu = trainer.init_control.clone()
+            sigma = trainer.sigma.clone()
         for step_idx in tqdm(range(max_steps), desc="Visualizing Planner timesteps"):
             # Current frame (ground truth) - modifying for hardware
             trainer.env.downsize = False
@@ -211,8 +215,8 @@ class Evaluator():
 
             # Action: reuse trainer.collect_rollouts logic
             if closed_loop_policy in ['informative', 'maxdyn', 'hardware']:
-                trainer._init_cem_mu_sig()
-                mu, costs = trainer._sample_cem(frame_buffer[-past_len:]) # pred_len, act_size
+                # trainer._init_cem_mu_sig()
+                mu, costs, sigma = trainer._sample_cem(frame_buffer[-past_len:], mu=mu, sigma=sigma) # pred_len, act_size
                 action_seq = mu.clone()
                 plan_obj_vals.append(costs[0].clone().cpu().item())
             else:
@@ -227,7 +231,7 @@ class Evaluator():
                 obs, rew, done, trunc, _ = env.step(env_act)
                 if trunc:
                     print("forced to reset", step_idx)
-                    _, _ = env.reset()
+                    _, _ = env.reset(seed=env_reset_seed + step_idx + 1)
                     # TODO: would have to count contacts here
             env_rew.append(rew)
             # trainer.env.downsize = False

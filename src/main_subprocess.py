@@ -1,12 +1,75 @@
 import subprocess
+import yaml
+from pathlib import Path, PosixPath
+from src.eval_render_videos import posixpath_constructor, load_trainer
 
-for i in range(2):
+PROJECT_ROOT = Path(__file__).parent.parent
+CONFIG_PATH = PROJECT_ROOT / "config"
+RUNS_PATH = PROJECT_ROOT / "runs"
+
+# define yaml_safe load constructor to handle PosixPath
+yaml.SafeLoader.add_constructor(
+    "tag:yaml.org,2002:python/object/apply:pathlib.PosixPath",
+    posixpath_constructor,
+)
+
+#### DEFINE WHAT CUDA TO USE HERE ####
+DEVICE_TO_USE = 'cuda:2' # None
+NUM_EPOCHS = 500
+
+for i in range(4, 5):
     # for config in [f'configs_final/{env}_{policy}_{i}' for policy in ['eig', 'maxdyn', 'random']]:
-    for policy in ['eig', 'maxdyn', 'random']:
-        for env in ['door', 'drawer', 'faucet']: # 'button', 'coffee'
-            config = f'configs_change_cam/{env}_{policy}_{i}'
-            print(f"Running config: {config}")
+    for policy in ['maxdyn']: #, 'maxdyn', 'random']:
+        for env in ['drawer', 'door']: # 'coffee', 'button', 'faucet']:
+            config_name = f'configs_change_cam/{env}_{policy}_{i}'
+            print(f"Loading config: {config_name}")
+            config_file = config_name if config_name.endswith('.yaml') else f"{config_name}.yaml"
+            with open(CONFIG_PATH / config_file, "r") as f:
+                config = yaml.safe_load(f)
+            
+            if DEVICE_TO_USE is not None:
+                config['train']['device'] = DEVICE_TO_USE 
+            if NUM_EPOCHS is not None:
+                config['train']['num_epochs'] = NUM_EPOCHS
+            config['config_name'] = config_name
+            config['closed_loop']['sigma_init'] = 1.5
+            config['closed_loop']['sigma_min'] = 0.1
+            config['closed_loop']['elite_frac'] = 0.4
+            config['closed_loop']['iters'] = 4
+            config['closed_loop']['alpha'] = 0.4
+            policy = config_name.split('/')[-1].split('_')[1]
+            if policy in ['eig', 'maxdyn', 'random']:
+                if policy == 'eig':
+                    objective = 'pixel'
+                elif policy == 'maxdyn':
+                    objective = 'dynamics'
+                else:
+                    objective = 'random'
+                save_name = config['train']['dataset'].split('_')[0] + '_' + objective + '_' + str(config.get('seed', 0))
+            else:
+                save_name = config['train']['dataset'].split('_')[0] + '_' + policy + '_' + str(config.get('seed', 0))
+            run_path = RUNS_PATH / Path(config['train']['dataset'].split('_')[0]) / save_name
+            model_path = run_path / 'model.pt'
+            if model_path.exists():
+                config['train']['load_path'] = str(run_path)
+            else:
+                print(f"I couldn't find a checkpoint...")
+            # save updated config with device and load_path
+            # new_config_path = CONFIG_PATH / Path(str(config_file).split('.yaml')[0] + "_test.yaml")
+            new_config_path = CONFIG_PATH / config_file
+            with open(new_config_path, "w") as f:
+                yaml.safe_dump(config, f, sort_keys=False, default_flow_style=False) # Save original config so model can be loaded later
+            
             subprocess.run(
-                ["python3.10", "-m", "src.main", "--config", config],
+                ["python3.10", "-m", "src.main", "--config", str(new_config_path)],
                 check=True,
             )
+
+            # if i == 3:
+            #     if env in ['button', 'door']:
+            #         continue # already did these
+            #     elif env == 'coffee' and policy == 'maxdyn':
+            #         continue
+            # elif i == 4 and env == 'door':
+            #     if policy == 'dynamics':
+            #         continue
