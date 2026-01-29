@@ -795,7 +795,7 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
             # new_sigma = torch.stack([torch.std(torch.stack([seq[t] for seq in elite_seqs], dim=0), dim=0) for t in range(self.plan_horizon)], dim=0)
             new_sigma = 1 / len(new_mu - 1) * torch.stack([torch.sum(torch.stack([torch.sqrt((seq[t] - new_mu[t])**2) for seq in elite_seqs], dim=0), dim=0) for t in range(self.plan_horizon)], dim=0)
             mu = self.alpha * mu + (1 - self.alpha) * new_mu
-            mu = torch.clamp(new_mu, act_low, act_high)
+            mu = torch.clamp(mu, act_low, act_high)
             sigma = torch.nan_to_num(self.alpha * sigma + (1 - self.alpha) * new_sigma, nan=self.sigma_min)
             sigma = torch.clamp(sigma, min=self.sigma_min)
         
