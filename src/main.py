@@ -71,8 +71,10 @@ def main():
         else:
             objective = 'random'
         save_name = config['train']['dataset'].split('_')[0] + '_' + objective + '_' + str(config.get('seed', 0))
+    elif policy == 'hardware':
+        save_name = "hardware_" + timestamp
     else:
-        save_name = config['train']['dataset'].split('_')[0] + '_' + policy + '_' + str(config.get('seed', 0))
+        save_name = config['train']['dataset'].split('_')[0] + '_' + policy + '_' + str(config.get('seed', 0)) + '_' + timestamp
     run_path = RUNS_PATH / Path(config['train']['dataset'].split('_')[0]) / save_name
     config['run_path'] = run_path
     if 'cuda' in config['train']['device']: 

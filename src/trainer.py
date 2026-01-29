@@ -901,10 +901,13 @@ class ClosedLoopHardwareTrainer(ClosedLoopInformativeTrainer):
         ClosedLoopRandomTrainer.__init__(self, dataset, model, config, device)
         # Override environment with real hardware
         rospy.Subscriber("/bobcat/reset", ros_string, self.test_reset_cb)
-        self.env = HardwareEnv(
-            frame_width=config['vae']['in_image_shape'][1],
-            frame_height=config['vae']['in_image_shape'][2]
-        )
+        # self.env = HardwareEnv(
+        #     frame_width=config['vae']['in_image_shape'][1],
+        #     frame_height=config['vae']['in_image_shape'][2]
+        # )
+        self.env = gym.make(name_to_env['push'], render_mode="rgb_array")
+        _, _ = self.env.reset()
+        
         self.start_now = False
         tic = time.time()
         while not self.start_now and not rospy.is_shutdown():
@@ -1041,7 +1044,8 @@ class ClosedLoopHardwareTrainer(ClosedLoopInformativeTrainer):
                 act = torch.from_numpy(self.env.action_space.sample()).to(self.device)
             else:
                 rospy.loginfo_once(f'Switching to informative action selection. \n')
-                act, cost = self._select_information_action(frame_buffer)
+                act, cost, sigma = self._select_information_action(frame_buffer)
+                act = act[0]
                 if idx == 0:
                     tic2 = time.time()
                     print(f"CEM planning took {(tic2 - tic):.3f}s per action")
