@@ -15,6 +15,7 @@ loss:
   image_loss: mse                   # Image reconstruction loss type: mse | nll
   recon_mult: !!float 1e3           # MSE Reconstruction loss multiplier
   beta: !!float 7e-5                # Standard Gaussian KL multiplier
+  lambda: !!float 1e-3              # Transition KL multiplier
   kld_anneal_mode: linear           # Beta annealing mode: const | linear
 # Transition model hyperparams
 trans:

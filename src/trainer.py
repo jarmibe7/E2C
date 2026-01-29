@@ -154,14 +154,13 @@ class BaseTrainer():
         self.env.step(np.array([0.0, 0.0]))
         obs, _ = self.env.reset()
 
-    def save(self, config_save, run_path):
+    def save(self, config_save, run_path, model_name='model.pt'):
         """
         Save model, policy, and config to run directory
         """
         self.plotter.save(run_path)
 
         # Save model
-        model_name = 'model.pt'
         try:
             filepath = run_path / model_name
             print(f'Saved model to {filepath}')
@@ -363,9 +362,10 @@ class ClosedLoopRandomTrainer(BaseTrainer):
         env_name = config['train']['dataset'].split('_')[0]
         self.env_name = env_name
         if env_name in meta_world_envs:
-            self.env = gym.make('Meta-World/MT1', env_name=name_to_env[env_name], render_mode='rgb_array', camera_name='corner', max_episode_steps=2000)
+            camera_name = 'corner3' if 'isom' in config['train']['dataset'] else 'corner'
+            self.env = gym.make('Meta-World/MT1', env_name=name_to_env[env_name], render_mode='rgb_array', camera_name=camera_name, max_episode_steps=2000)
             print("made steps 2000?")
-            if config['train']['dataset'].split('_')[1][:-1] == '2':
+            if config['train']['dataset'].split('_')[-1][:-1] == '2':
                 self.meta_ts = 4
         else:
             self.env = gym.make(name_to_env[env_name], render_mode="rgb_array") if not self.hardware else None
@@ -383,6 +383,10 @@ class ClosedLoopRandomTrainer(BaseTrainer):
             config
         )
         assert self.num_rollout_steps <= self.replay_buffer.capacity, 'Steps per rollout should be <= buffer_capacity!'
+
+        num_states_to_save = 12 # [x, y, z, gripper, x_obj, y_obj, z_obj, reward, xdot, ydot, zdot, gripper_vel]
+        # self.saved_state = torch.zeros((self.num_epochs * self.num_rollout_steps, num_states_to_save), device=self.device)
+        self.saved_state = torch.zeros((self.num_epochs * self.num_rollout_steps, num_states_to_save), device='cpu')
 
     def _frames_to_tensor(self, frames):
         """
@@ -420,6 +424,24 @@ class ClosedLoopRandomTrainer(BaseTrainer):
         mu, log_var = post_stats.chunk(2, dim=-1)
         z = self.model.reparameterize(mu, log_var)
         return mu, log_var, z
+    
+    def save(self, config_save, run_path):
+        """
+        Save model, policy, and config to run directory
+        """
+        super().save(config_save, run_path)
+        if hasattr(self, 'saved_state'):
+            # Save logged states
+            # take velocity as well?
+            # torch.diff(self.saved_state[:, :3], dim=0, prepend=self.saved_state[0:1, :3])
+            try:
+                filepath = run_path / 'training_states.pt'
+                print(f'Saved state tensor to {filepath}')
+                torch.save(self.saved_state, filepath)
+            except Exception as e:
+                print(e)
+                print('Exception occured, saved state tensor to current directory')
+                torch.save(self.saved_state, 'training_states.pt')
 
     def collect_rollouts(self, epoch):
         """
@@ -434,7 +456,7 @@ class ClosedLoopRandomTrainer(BaseTrainer):
         
         while idx < self.num_rollout_steps:
             # Render current frame
-            curr_img = process_image(self.env.render(), self.evaluator.dataset_name).squeeze(0).permute(2, 0, 1)
+            curr_img = process_image(self.env.render(), self.evaluator.dataset_name).permute(2, 0, 1)
             if len(frame_buffer) == 0:
                 frame_buffer.append(curr_img)
 
@@ -465,7 +487,7 @@ class ClosedLoopRandomTrainer(BaseTrainer):
             if len(frame_buffer) == self.past_length + self.pred_length:
                 frame_buffer.pop(0)
                 act_buffer.pop(0)
-            next_image = process_image(self.env.render(), self.evaluator.dataset_name).squeeze(0).permute(2, 0, 1)
+            next_image = process_image(self.env.render(), self.evaluator.dataset_name).permute(2, 0, 1)
             frame_buffer.append(next_image)
 
             # Add sample to replay buffer
@@ -546,6 +568,8 @@ class ClosedLoopRandomTrainer(BaseTrainer):
                 self.model.eval()
                 if self.config['train']['eval']: self.evaluate(self.config['run_path'])
                 self.model.train()
+            if (epoch + 1) % 100 == 0:
+                if self.config['train']['save']: super().save(self.config, self.config['run_path'], model_name=f'model_epoch{epoch+1}.pt')
             
         pbar.close()
 
@@ -688,6 +712,8 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
                     mu_q = mu_p
                     log_var_q = log_var_p
                     z_prior = self.model.reparameterize(mu_q, log_var_q)
+                    # compare with previous --> would expect more dramatic results
+                    # z = self.model.reparameterize(mu_q, log_var_q)
                 else:
                     # Decode prior to observation space
                     if self.model.output_uncertainty:
@@ -793,7 +819,7 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
             if self.hardware:
                 curr_image = self.env.process_image(self.env.render()).permute(2, 0, 1)
             else:
-                curr_img = process_image(self.env.render(), self.evaluator.dataset_name).squeeze(0).permute(2, 0, 1)
+                curr_img = process_image(self.env.render(), self.evaluator.dataset_name).permute(2, 0, 1)
             if len(frame_buffer) == 0:
                 frame_buffer.append(curr_img)
 
@@ -818,12 +844,13 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
             act_buffer.append(act)
             for _ in range(self.meta_ts):
                 next_obs, rew, done, _, _ = self.env.step(env_act)
+            self.saved_state[epoch*self.num_rollout_steps + idx] = torch.as_tensor([*next_obs[0:7], rew, *env_act], device='cpu')
 
             # Slide frame obs history frame buffer to next image
             if len(frame_buffer) == self.past_length + self.pred_length:
                 frame_buffer.pop(0)
                 act_buffer.pop(0)
-            next_image = process_image(self.env.render(), self.evaluator.dataset_name).squeeze(0).permute(2, 0, 1)
+            next_image = process_image(self.env.render(), self.evaluator.dataset_name).permute(2, 0, 1)
             frame_buffer.append(next_image)
 
             # Add sample to replay buffer

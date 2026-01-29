@@ -23,9 +23,6 @@ from src.model.policy import ConvPolicy
 from src.trainer import E2CPretrainer, RSSMPretrainer, ClosedLoopRandomTrainer, ClosedLoopInformativeTrainer, ClosedLoopHardwareTrainer, EndToEndHardwareTrainer
 import argparse
 
-# Set random seed globally
-set_seed(42)
-
 # Paths
 PROJECT_ROOT = Path(__file__).parent.parent
 DATA_PATH = PROJECT_ROOT / "data"
@@ -37,7 +34,6 @@ def main():
     print('*** STARTING ***\n')
     # Load config, make run path, and choose torch device
     # ---------- CONFIG HERE ----------
-<<<<<<< HEAD
     # Parse command-line arguments
     parser = argparse.ArgumentParser(description='E2C Training Script')
     parser.add_argument(
@@ -50,12 +46,10 @@ def main():
     config_name = args.config
     config_file = config_name if config_name.endswith('.yaml') else f"{config_name}.yaml"
     with open(CONFIG_PATH / config_file, "r") as f:
-=======
-    config_name = 'rssm_reacher_active_v1'   # <--- CHANGE CONFIG HERE
-    with open(CONFIG_PATH / f'{config_name}.yaml', "r") as f:
->>>>>>> 523a1e41549f6b90e0c670dc7bc130972820a546
         config = yaml.safe_load(f)
     config['config_name'] = config_name
+    # Set random seed globally
+    set_seed(config.get('seed', 0))
     config_save = copy.deepcopy(config)
     timestamp = datetime.fromtimestamp(time.time()).strftime("%Y-%m-%d_%H-%M-%S")
     run_path = RUNS_PATH / Path(config['train']['dataset'].split('_')[0]) / timestamp
@@ -104,6 +98,7 @@ def main():
         config_save['load_path'] = config['run_path']
     else:
         # Load existing model to train from checkpoint
+        load_path = load_path.split("model.pt")[0] if load_path.endswith('model.pt') else load_path
         model_path = load_path + '/model.pt'
         print(f'Loading model from checkpoint: {model_path}\n')
         model.load_state_dict(torch.load(model_path))

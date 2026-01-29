@@ -41,7 +41,7 @@ class Plotter():
         self.plot_freq = plot_freq
         self.plot_history = None
         self.fig = None
-        self.colors = ['blue', 'orange', 'green', 'red', 'purple', 'black']
+        self.colors = ['blue', 'orange', 'green', 'red', 'purple', 'black', 'pink']
 
     def log(self, lr):
         """
@@ -60,6 +60,10 @@ class Plotter():
 
         # Replot
         if self.num_steps % self.plot_freq == 0: self.plot()
+
+    def log_value(self, key, value):
+        print("Not implemented yet")
+        pass
 
     def plot(self):
         """
@@ -220,10 +224,11 @@ class Evaluator():
 
             # Step env
             for _ in range(trainer.meta_ts):
-                _, rew, done, trunc, _ = env.step(env_act)
+                obs, rew, done, trunc, _ = env.step(env_act)
                 if trunc:
                     print("forced to reset", step_idx)
-                    obs, _ = env.reset()
+                    _, _ = env.reset()
+                    # TODO: would have to count contacts here
             env_rew.append(rew)
             # trainer.env.downsize = False
             # next_img_true = trainer.env.render().to(torch.float32)
@@ -290,7 +295,7 @@ class Evaluator():
         obs, _ = trainer.env.reset()
         # Build visualization grid: 2 rows, (pred_len + 1) columns
         cols = pred_len + 1
-        fig, ax = plt.subplots(2, cols, figsize=(3 * cols, 10))
+        fig, ax = plt.subplots(2, cols, figsize=(3 * cols, 8))
         ax = np.atleast_2d(ax)
         ax[0, 0].set_title(f"Pred t=0; {plan_obj_vals[0]:.2f}")
         ax[1, 0].set_title(f"True t=0; {env_rew[0]:.2f}")
@@ -339,7 +344,6 @@ class Evaluator():
             print('Exception occurred, saved planner visualization to current directory')
             ani.save(vid_name, writer=writer)
         plt.close(fig)
-        return
         
     def eval_traj(self, run_path, max_frames=50):
         # TODO: update eval_traj with model
