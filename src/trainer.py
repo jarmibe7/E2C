@@ -17,6 +17,7 @@ from pyvirtualdisplay import Display
 import time
 import os
 os.environ['MUJOCO_GL'] = 'egl'
+from src.utils import set_seed, format_time
 
 from src.model.loss import E2CLoss, UncertaintyE2CLoss, RSSMLoss
 from src.eval import Plotter, Evaluator
@@ -74,6 +75,7 @@ class BaseTrainer():
             print(f"Train size: {train_size}        Test size: {test_size}\n")
 
         # Save model and policy
+        set_seed(config.get('seed', 0))
         self.model = model
         model.to(device)
         self.model_optimizer = torch.optim.Adam(model.parameters(), lr=config['trans']['alpha'], weight_decay=config['trans']['weight_decay'])
@@ -326,7 +328,6 @@ class ClosedLoopRandomTrainer(BaseTrainer):
         if env_name in meta_world_envs:
             camera_name = 'corner3' if 'isom' in config['train']['dataset'] else 'corner'
             self.env = gym.make('Meta-World/MT1', env_name=name_to_env[env_name], render_mode='rgb_array', camera_name=camera_name, max_episode_steps=2000)
-            print("made steps 2000?")
             if config['train']['dataset'].split('_')[-1][:-1] == '2':
                 self.meta_ts = 4
         else:
@@ -510,11 +511,12 @@ class ClosedLoopRandomTrainer(BaseTrainer):
     
     def learn(self):
         model_loss = 0.0
-        pbar = tqdm(range(self.num_epochs), desc="Training")
+        pbar = tqdm(range(self.curr_epoch, self.num_epochs), desc="Training")
         print("Initializing buffer with random rollouts...")
         for _ in range(max(self.num_batches // self.num_rollout_steps, self.config['closed_loop']['buffer_capacity'] // self.num_rollout_steps)):
             self.collect_rollouts(-1)
-        for epoch in range(self.num_epochs):
+        start_epoch = self.curr_epoch
+        for epoch in range(start_epoch, self.num_epochs):
             self.curr_epoch = epoch
             model_loss = self.train(epoch)
 
@@ -564,10 +566,11 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
             print("Only 'zero' and 'random' init_control methods are currently supported. Defaulting to 'random'.")
             self.init_control = torch.stack([torch.from_numpy(self.env.action_space.sample()).to(self.device) for _ in range(self.plan_horizon)], dim=0)
         elif cfg_val == 'random':
-            self.init_control = torch.stack([torch.from_numpy(self.env.action_space.sample()).to(self.device) for _ in range(self.plan_horizon)], dim=0)
-            if self.env_name in meta_world_envs:
-                # Scale to reasonable range for Meta-World envs
-                self.init_control *= 2.5
+            # self.init_control = torch.stack([torch.from_numpy(self.env.action_space.sample()).to(self.device) for _ in range(self.plan_horizon)], dim=0)
+            self.init_control = torch.stack([torch.from_numpy(np.array([0.03, 0.05, 0.0, 0.0])).to(self.device, torch.float32) for _ in range(self.plan_horizon)], dim=0)
+            # if self.env_name in meta_world_envs:
+            #     # Scale to reasonable range for Meta-World envs
+            #     self.init_control *= 2.0
         else:
             self.init_control = torch.zeros(self.plan_horizon, len(self.env.action_space.sample()), device=self.device)
 
@@ -711,10 +714,12 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
 
             return total_kl # / T # Average info gain per step
     
-    def _sample_cem(self, frame_buffer):
+    def _sample_cem(self, frame_buffer, mu=None, sigma=None):
         # Initialize CEM distribution
-        mu = self.init_control  # (plan_horizon, action_size)
-        sigma = self.sigma      # (plan_horizon, action_size)
+        if mu is None:
+            mu = self.init_control.clone() # (plan_horizon, action_size)
+        if sigma is None:
+            sigma = self.sigma.clone() # (plan_horizon, action_size)
         act_low = torch.as_tensor(self.env.action_space.low, device=self.device, dtype=torch.float32)
         act_high = torch.as_tensor(self.env.action_space.high, device=self.device, dtype=torch.float32)
         if self.evaluator.dataset_name == 'pointmaze':
@@ -749,16 +754,22 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
             # Update CEM distribution parameters
             # take mean and stddev across elite sequences at each time step
             new_mu = torch.stack([torch.mean(torch.stack([seq[t] for seq in elite_seqs], dim=0), dim=0) for t in range(self.plan_horizon)], dim=0)
+            new_mu = torch.clamp(new_mu, act_low, act_high)
             new_sigma = torch.stack([torch.std(torch.stack([seq[t] for seq in elite_seqs], dim=0), dim=0) for t in range(self.plan_horizon)], dim=0)
             mu = self.alpha * mu + (1 - self.alpha) * new_mu
             sigma = torch.nan_to_num(self.alpha * sigma + (1 - self.alpha) * new_sigma, nan=self.sigma_min)
             sigma = torch.clamp(sigma, min=self.sigma_min)
+        
+        mu[:-1] = mu[1:].clone()  # shift mean sequence left
+        mu[-1] = self.init_control[0]   # last action reverts to initial mean
+        sigma[:-1] = sigma[1:].clone()
+        sigma[-1] = self.sigma_init     # last action reverts to initial std
 
-        return mu, costs
+        return mu, costs, sigma
     
-    def _select_information_action(self, frame_buffer):
-        mu, costs = self._sample_cem(frame_buffer)
-        return mu[0].clone(), costs[0].clone()
+    def _select_information_action(self, frame_buffer, mu=None, sigma=None):
+        mu, costs, sigma = self._sample_cem(frame_buffer, mu=mu, sigma=sigma)
+        return mu, costs, sigma
 
     def collect_rollouts(self, epoch):
         """
@@ -772,6 +783,8 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
         
         while idx < self.num_rollout_steps:
             self._init_cem_mu_sig()
+            mu = self.init_control.clone()
+            sigma = self.sigma.clone()
             if self.hardware:
                 curr_image = self.env.process_image(self.env.render()).permute(2, 0, 1)
             else:
@@ -784,7 +797,8 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
                 if epoch == self.epochs_warmup and len(frame_buffer) == self.past_length:
                     print(f'Switching to informative action selection using CEM over {self.num_action_samples} samples and {self.cem_iters} iterations. \n')
                 tic = time.time()
-                act, cost = self._select_information_action(frame_buffer)
+                mu, costs, sigma = self._select_information_action(frame_buffer=frame_buffer, mu=mu, sigma=sigma)
+                act = mu[0]
                 toc = time.time()
                 if idx == 0 and epoch == self.epochs_warmup:
                     print(f"CEM planning will take ~{((toc - tic)*self.num_rollout_steps/60):.3f} minutes.")
