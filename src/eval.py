@@ -197,6 +197,9 @@ class Evaluator():
             frame_buffer.append(trainer.env.render().to(torch.float32))
 
         step_idx = 0
+        trainer._init_cem_mu_sig()
+        mu = trainer.init_control.clone()
+        sigma = trainer.sigma.clone()
         for step_idx in tqdm(range(max_steps), desc="Visualizing Planner timesteps"):
             # Current frame (ground truth) - modifying for hardware
             trainer.env.downsize = False
@@ -206,9 +209,8 @@ class Evaluator():
 
             # Action: reuse trainer.collect_rollouts logic
             if closed_loop_policy in ['informative', 'maxdyn', 'hardware']:
-                trainer._init_cem_mu_sig()
-                mu, costs = trainer._sample_cem(frame_buffer[-past_len:]) # pred_len, act_size
-                action_seq = mu.clone()
+                mu, costs, sigma = trainer._sample_cem(frame_buffer[-past_len:], mu, sigma) # pred_len, act_size
+                action_seq = mu[0].clone()
                 plan_obj_vals.append(costs[0].clone().cpu().item())
             else:
                 # repeat pred len number of times for action horizon

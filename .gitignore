@@ -8,3 +8,6 @@ runs/
 *.mp4
 *__init__.py
 */test.ipynb
+config/*
+src/data_gen/temp_figs
+src/data_gen/*.png

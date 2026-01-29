@@ -906,10 +906,12 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
 
             return total_kl # / T # Average info gain per step
     
-    def _sample_cem(self, frame_buffer):
+    def _sample_cem(self, frame_buffer, mu=None, sigma=None):
         # Initialize CEM distribution
-        mu = self.init_control  # (plan_horizon, action_size)
-        sigma = self.sigma      # (plan_horizon, action_size)
+        if mu is None:
+            mu = self.init_control.clone() # (plan_horizon, action_size)
+        if sigma is None:
+            sigma = self.sigma.clone() # (plan_horizon, action_size)
         act_low = torch.as_tensor(self.env.action_space.low, device=self.device, dtype=torch.float32)
         act_high = torch.as_tensor(self.env.action_space.high, device=self.device, dtype=torch.float32)
         if self.evaluator.dataset_name == 'pointmaze':
@@ -931,11 +933,7 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
             
             # Evaluate information gain for each sequence
             # window = torch.stack(frame_buffer[-self.past_length:], dim=0).unsqueeze(0).to(self.device)
-            dtype = next(self.model.parameters()).dtype
-            window = torch.stack(frame_buffer[-self.past_length:], dim=0).unsqueeze(0).to(self.device, dtype=dtype).repeat(self.num_action_samples, 1, 1, 1, 1)
-            action_samples = action_samples.to(self.device, dtype=dtype)
-            act_low = act_low.to(self.device, dtype=dtype)
-            act_high = act_high.to(self.device, dtype=dtype)
+            window = torch.stack(frame_buffer[-self.past_length:], dim=0).unsqueeze(0).to(self.device).repeat(self.num_action_samples, 1, 1, 1, 1)
             mu_prior, log_var_prior, z_prior = self.model.encode_posterior(window)
             costs = self.rollout_info_gain_decoded_batch(window, action_samples, t0_dist=(mu_prior, log_var_prior, z_prior))
 
@@ -948,16 +946,23 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
             # Update CEM distribution parameters
             # take mean and stddev across elite sequences at each time step
             new_mu = torch.stack([torch.mean(torch.stack([seq[t] for seq in elite_seqs], dim=0), dim=0) for t in range(self.plan_horizon)], dim=0)
-            new_sigma = torch.stack([torch.std(torch.stack([seq[t] for seq in elite_seqs], dim=0), dim=0) for t in range(self.plan_horizon)], dim=0)
+            new_mu = torch.clamp(new_mu, act_low, act_high)
+            # new_sigma = torch.stack([torch.std(torch.stack([seq[t] for seq in elite_seqs], dim=0), dim=0) for t in range(self.plan_horizon)], dim=0)
+            new_sigma = 1 / len(new_mu - 1) * torch.stack([torch.sum(torch.stack([torch.sqrt((seq[t] - new_mu[t])**2) for seq in elite_seqs], dim=0), dim=0) for t in range(self.plan_horizon)], dim=0)
             mu = self.alpha * mu + (1 - self.alpha) * new_mu
             sigma = torch.nan_to_num(self.alpha * sigma + (1 - self.alpha) * new_sigma, nan=self.sigma_min)
             sigma = torch.clamp(sigma, min=self.sigma_min)
+        
+        mu[:-1] = mu[1:].clone()  # shift mean sequence left
+        mu[-1] = self.init_control[0]   # last action reverts to initial mean
+        sigma[:-1] = sigma[1:].clone()
+        sigma[-1] = self.sigma_init     # last action reverts to initial std
 
-        return mu, costs
+        return mu, costs, sigma
     
-    def _select_information_action(self, frame_buffer):
-        mu, costs = self._sample_cem(frame_buffer)
-        return mu[0].clone(), costs[0].clone()
+    def _select_information_action(self, frame_buffer, mu=None, sigma=None):
+        mu, costs, sigma = self._sample_cem(frame_buffer, mu=mu, sigma=sigma)
+        return mu, costs, sigma
 
     def collect_rollouts(self, epoch):
         """
@@ -969,12 +974,14 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
         act_buffer = []
         idx = 0
         
+        self._init_cem_mu_sig()
+        mu = self.init_control.clone()
+        sigma = self.sigma.clone()
         while idx < self.num_rollout_steps:
-            self._init_cem_mu_sig()
             if self.hardware:
                 curr_image = self.env.process_image(self.env.render()).permute(2, 0, 1)
             else:
-                curr_img = process_image(self.env.render(), self.evaluator.dataset_name).squeeze(0).permute(2, 0, 1)
+                curr_img = process_image(self.env.render(), self.evaluator.dataset_name).permute(2, 0, 1)
             if len(frame_buffer) == 0:
                 frame_buffer.append(curr_img)
 
@@ -983,10 +990,11 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
                 if epoch == self.epochs_warmup and len(frame_buffer) == self.past_length:
                     print(f'Switching to informative action selection using CEM over {self.num_action_samples} samples and {self.cem_iters} iterations. \n')
                 tic = time.time()
-                act, cost = self._select_information_action(frame_buffer)
+                mu, costs, sigma = self._select_information_action(frame_buffer=frame_buffer, mu=mu, sigma=sigma)
+                act = mu[0]
                 toc = time.time()
                 if idx == 0 and epoch == self.epochs_warmup:
-                    print(f"CEM planning will take ~{((toc - tic)):.3f} seconds per action.")
+                    print(f"CEM planning will take ~{((toc - tic)*self.num_rollout_steps/60):.3f} minutes.")
             else:
                 if epoch == 0 and len(frame_buffer) == 1: 
                     print(f'Initializing data from random actions. \n')
@@ -999,12 +1007,13 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
             act_buffer.append(act)
             for _ in range(self.meta_ts):
                 next_obs, rew, done, _, _ = self.env.step(env_act)
+            # self.saved_state[epoch*self.num_rollout_steps + idx] = torch.as_tensor([*next_obs[0:7], rew, *env_act], device='cpu')
 
             # Slide frame obs history frame buffer to next image
             if len(frame_buffer) == self.past_length + self.pred_length:
                 frame_buffer.pop(0)
                 act_buffer.pop(0)
-            next_image = process_image(self.env.render(), self.evaluator.dataset_name).squeeze(0).permute(2, 0, 1)
+            next_image = process_image(self.env.render(), self.evaluator.dataset_name).permute(2, 0, 1)
             frame_buffer.append(next_image)
 
             # Add sample to replay buffer
@@ -1080,8 +1089,10 @@ class ClosedLoopHardwareTrainer(ClosedLoopInformativeTrainer):
         idx = 0
         ctrl_freq = []
 
+        self._init_cem_mu_sig()
+        mu = self.init_control.clone()
+        sigma = self.sigma.clone()
         while idx < self.num_rollout_steps and not self.stop_requested and not rospy.is_shutdown():
-            self._init_cem_mu_sig()
             
             # Get current frame from robot
             curr_img = self.env.render()  # Returns (C, H, W)
@@ -1097,7 +1108,8 @@ class ClosedLoopHardwareTrainer(ClosedLoopInformativeTrainer):
             if epoch >= self.epochs_warmup and len(frame_buffer) >= self.past_length:
                 if epoch == self.epochs_warmup and len(frame_buffer) == self.past_length:
                     print(f'Switching to informative action selection. \n')
-                act, cost = self._select_information_action(frame_buffer)
+                mu, cost, sigma = self._select_information_action(frame_buffer, mu, sigma)
+                act = mu[0].clone()
                 if idx == 0:
                     tic2 = time.time()
                     print(f"CEM planning took {(tic2 - tic):.3f}s per action")
