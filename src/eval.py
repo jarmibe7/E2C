@@ -384,7 +384,7 @@ class Evaluator():
             trainer._init_cem_mu_sig()
             mu = trainer.init_control.clone()
             sigma = trainer.sigma.clone()
-        for step_idx in range(max_steps): #, desc="Visualizing Planner timesteps"): # range(max_steps): #
+        for step_idx in tqdm(range(max_steps), desc="Visualizing Planner timesteps"): # range(max_steps): #
             # Current frame (ground truth)
             curr_render_raw = env.render()  # Store raw render
             curr_img = process_image(curr_render_raw, self.dataset_name, downscale=False).permute(2, 0, 1)
@@ -396,12 +396,12 @@ class Evaluator():
                 # sigma = trainer.sigma.clone()
                 mu, costs, sigma = trainer._sample_cem(frame_buffer[-past_len:], mu=mu, sigma=sigma) # pred_len, act_size
                 action_seq = mu.clone()
-                print(mu[0])
+                # print(mu[0].detach().cpu().numpy())
                 plan_obj_vals.append(costs[0].clone().cpu().item())
             else:
                 # repeat pred len number of times for action horizon
                 act = [env.action_space.sample() for _ in range(pred_len)]
-                print(act[0])
+                # print(act[0])
                 action_seq = torch.from_numpy(np.array(act)).to(device)
                 plan_obj_vals.append(0.0)   # no cost info for random policy
             env_act = action_seq.cpu().detach().numpy()[0]
@@ -481,7 +481,7 @@ class Evaluator():
         vid_name = f'eval_render_{trainer.curr_epoch}.mp4'
         try:
             filepath = run_path / vid_name
-            print(f'Saved planner visualization to {filepath}\n')
+            print(f'Saved planner visualization to {filepath}')
             ani.save(filepath, writer=writer)
         except Exception as e:
             print(e)
