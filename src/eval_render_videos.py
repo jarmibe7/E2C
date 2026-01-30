@@ -91,16 +91,16 @@ def render_video(trainer: ClosedLoopRandomTrainer, max_steps=100, env_seed=0):
     torch.save(saved_state, trainer.config['load_path'] / f'eval_states_{env_seed}.pt')
 
 if __name__ == "__main__":
-    for i in range(1, 2):
-        # for policy, objective in tqdm(zip(['random', 'eig', 'maxdyn'], ['random', 'pixel', 'dynamics'])):
+    for i in range(2, 3):
+        for policy, objective in tqdm(zip(['random', 'eig', 'maxdyn'], ['random', 'pixel', 'dynamics'])):
         # for policy, objective in tqdm(zip(['maxdyn', 'eig'], ['pixel', 'dynamics'])):
         # for policy, objective in tqdm(zip(['random'], ['random'])):
-        for policy, objective in zip(['eig'], ['pixel']):
+        # for policy, objective in zip(['eig'], ['pixel']):
         # for policy, objective in zip(['maxdyn', 'random'], ['dynamics', 'random']):
-            # for env in ['drawer', 'faucet', 'button', 'coffee', 'door']: # looks good...
-            for env in ['faucet']: # [button, 'door', 'drawer', 'faucet']: #, 'button', 'coffee', 'door', 'drawer', 'faucet']:
+            for env in ['drawer', 'faucet', 'button', 'coffee', 'door']: # looks good...
+            # for env in ['faucet']: # [button, 'door', 'drawer', 'faucet']: #, 'button', 'coffee', 'door', 'drawer', 'faucet']:
                 config = "runs/{env}/{env}_{objective}_{i}/config.yaml".format(env=env, objective=objective, i=i)
                 # print(f"Evaluating config: {config}")
                 trainer = load_trainer(config)
-                for render_seed in range(12, 13):
+                for render_seed in range(0, 1):
                     render_video(trainer, max_steps=100, env_seed=render_seed)
