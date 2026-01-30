@@ -711,9 +711,9 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
                     total_kl += self._kl_diag_gaussian(mu_p, log_var_p, mu_q, log_var_q).mean().item()
                     mu_q = mu_p
                     log_var_q = log_var_p
-                    z_prior = self.model.reparameterize(mu_q, log_var_q)
+                    # z_prior = self.model.reparameterize(mu_q, log_var_q)
                     # compare with previous --> would expect more dramatic results
-                    # z = self.model.reparameterize(mu_q, log_var_q)
+                    z = self.model.reparameterize(mu_q, log_var_q)
                 else:
                     # Decode prior to observation space
                     if self.model.output_uncertainty:
@@ -846,8 +846,6 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
                 tic = time.time()
                 mu, costs, sigma = self._select_information_action(frame_buffer=frame_buffer, mu=mu, sigma=sigma)
                 act = mu[0]
-                mu, costs, sigma = self._select_information_action(frame_buffer=frame_buffer, mu=mu, sigma=sigma)
-                act = mu[0]
                 toc = time.time()
                 if idx == 0 and epoch == self.epochs_warmup:
                     print(f"CEM planning will take ~{((toc - tic)*self.num_rollout_steps/60):.3f} minutes.")
@@ -902,12 +900,10 @@ class ClosedLoopHardwareTrainer(ClosedLoopInformativeTrainer):
         ClosedLoopRandomTrainer.__init__(self, dataset, model, config, device)
         # Override environment with real hardware
         rospy.Subscriber("/bobcat/reset", ros_string, self.test_reset_cb)
-        # self.env = HardwareEnv(
-        #     frame_width=config['vae']['in_image_shape'][1],
-        #     frame_height=config['vae']['in_image_shape'][2]
-        # )
-        self.env = gym.make(name_to_env['push'], render_mode="rgb_array")
-        _, _ = self.env.reset()
+        self.env = HardwareEnv(
+            frame_width=config['vae']['in_image_shape'][1],
+            frame_height=config['vae']['in_image_shape'][2]
+        )
         
         self.start_now = False
         tic = time.time()
@@ -932,7 +928,7 @@ class ClosedLoopHardwareTrainer(ClosedLoopInformativeTrainer):
 
         self.eval_num_rollout_steps = config['closed_loop'].get('eval_num_rollout_steps', self.num_rollout_steps)
         #### CAN CHANGE THIS HERE TO DETERMINE IF WANT TO DO MAXDYN OR INFORMATIVE
-        self.obj_fun = "maxdyn"
+        self.obj_fun = "informative"
 
         # Pre-populate replay buffer with hardware dataset
         # Buffers for saving dataset from pre-populate
@@ -944,19 +940,20 @@ class ClosedLoopHardwareTrainer(ClosedLoopInformativeTrainer):
         # print(f"Pre-loading replay buffer with {len(self.dataset)} samples from hardware dataset...")
         if config['train'].get('eval_only', False) == False and config['closed_loop']['epochs_warmup'] < 0:
             print("Initializing buffer with random rollouts...")
-            loop_steps = 10*self.batch_size # self.config['closed_loop']['buffer_capacity'] // 40
+            loop_steps = self.batch_size # self.config['closed_loop']['buffer_capacity'] // 40
             self.num_rollout_steps = loop_steps
-            self.collect_rollouts(-1)
-            self.num_rollout_steps = config['closed_loop']['num_rollout_steps']
-
-            """ if you want to fill up buffer with buffer_capacity images
-            for reset_at_idx in tqdm(range(self.config['closed_loop']['buffer_capacity'] // loop_steps), desc="Initializing Replay Buffer"):
+            num_loops = 10
+            # self.collect_rollouts(-1)
+            
+            # if you want to fill up buffer with num_loops*loop_steps images
+            for reset_at_idx in tqdm(range(num_loops), desc="Initializing Replay Buffer"):
                 if (reset_at_idx + 1) % 1 == 0:
                     obs, _ = self.env.reset()
                 if self.stop_requested or rospy.is_shutdown():
                     print("Stop requested, ending training loop.")
                     break
-                self.collect_rollouts(-1)"""
+                self.collect_rollouts(-1)
+            self.num_rollout_steps = config['closed_loop']['num_rollout_steps']
             if len(self._prepop_prev) > 0 or rospy.is_shutdown() or self.stop_requested:
                 run_path = self.config['run_path']
                 run_path = Path(run_path) if not isinstance(run_path, Path) else run_path
@@ -972,7 +969,7 @@ class ClosedLoopHardwareTrainer(ClosedLoopInformativeTrainer):
                 }, out_path)
                 print(f"Saved pre-populated dataset: {out_path}")
         else:
-            print("Load dataset into buffer")
+            print(f"Load dataset into buffer; length: {len(self.dataset)}")
             self.num_rollout_steps = config['closed_loop']['num_rollout_steps']
             for i in range(len(self.dataset)):
                 x, x_next, u = self.dataset[i]  # Get sample from dataset
