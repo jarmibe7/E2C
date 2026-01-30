@@ -341,7 +341,7 @@ class Evaluator():
         vid_name = 'hardware_RGB_' + closed_loop_policy + f'_{trainer.curr_epoch}.mp4' if closed_loop else 'planner_vis_OL_' + closed_loop_policy + f'_{trainer.curr_epoch}.mp4'
         try:
             filepath = run_path / vid_name
-            print(f'Saved planner visualization to {filepath}\n')
+            print(f'Saved planner visualization to {filepath}')
             ani.save(filepath, writer=writer)
         except Exception as e:
             print(e)

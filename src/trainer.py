@@ -50,7 +50,7 @@ class BaseTrainer():
         device: Torch device object
         policy (optional): A policy class instance for closed-loop training
     """
-    def __init__(self, dataset, model, config, device, policy=None):
+    def __init__(self, dataset, model, config, device, policy=None, prints=True):
         # Split into training and test sets
         train_size = int(len(dataset) * config['train']['train_ratio'])
         test_size = len(dataset) - train_size
@@ -71,15 +71,15 @@ class BaseTrainer():
             # num_batches * num_epochs * batch_size - # interactions agents trained on
             # num_rollout_steps * num_epochs - # interactions collected
             # num_rollout_steps * num_epochs * cem_iters * num_action_samples - # iteractions collected and imagined
-
-            print(
-                f"Closed-loop training: \n"
-                f"- Total final training interactions: {self.num_train_inters}\n"
-                f"- Total environment interactions collected: {self.num_env_inters}\n"
-                f"- Gradient updates (training iters / batch size): {self.num_updates}\n"
-                f"- Replay buffer capacity: {config['closed_loop']['buffer_capacity']}\n"
-                f"- Rollout steps per epoch: {config['closed_loop']['num_rollout_steps']}\n"
-            )
+            if prints:
+                print(
+                    f"Closed-loop training: \n"
+                    f"- Total final training interactions: {self.num_train_inters}\n"
+                    f"- Total environment interactions collected: {self.num_env_inters}\n"
+                    f"- Gradient updates (training iters / batch size): {self.num_updates}\n"
+                    f"- Replay buffer capacity: {config['closed_loop']['buffer_capacity']}\n"
+                    f"- Rollout steps per epoch: {config['closed_loop']['num_rollout_steps']}\n"
+                )
         else:
             print(f"Train size: {train_size}        Test size: {test_size}\n")
 
@@ -338,8 +338,8 @@ class ClosedLoopRandomTrainer(BaseTrainer):
         config: Config dictionary with required params
         device: Torch device object
     """
-    def __init__(self, dataset, model, config, device):
-        super().__init__(dataset, model, config, device)
+    def __init__(self, dataset, model, config, device, prints=True):
+        super().__init__(dataset, model, config, device, prints=prints)
         self.num_rollout_steps = config['closed_loop']['num_rollout_steps']
         self.num_batches = config['closed_loop']['num_batches']
         self.pred_length = config['trans'].get('pred_length', 3)   # How long to predict ahead in network
@@ -577,8 +577,8 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
     Closed-loop trainer that selects actions by maximizing expected information gain
     (posterior vs prior KL) over candidate action sequences.
     """
-    def __init__(self, dataset, model, config, device):
-        super().__init__(dataset, model, config, device)
+    def __init__(self, dataset, model, config, device, prints=True):
+        super().__init__(dataset, model, config, device, prints=prints)
         self.closed_cfg = config.get('closed_loop', {})
         self.uses_rssm = hasattr(self.model, 'rssm_step') and hasattr(self.model, 'post')
         self.epochs_warmup = config['closed_loop'].get('epochs_warmup', 3)
@@ -791,11 +791,11 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
             # Update CEM distribution parameters
             # take mean and stddev across elite sequences at each time step
             new_mu = torch.stack([torch.mean(torch.stack([seq[t] for seq in elite_seqs], dim=0), dim=0) for t in range(self.plan_horizon)], dim=0)
-            # new_mu = torch.clamp(new_mu, act_low, act_high)
+            new_mu = torch.clamp(new_mu, act_low, act_high)
             # new_sigma = torch.stack([torch.std(torch.stack([seq[t] for seq in elite_seqs], dim=0), dim=0) for t in range(self.plan_horizon)], dim=0)
             new_sigma = 1 / len(new_mu - 1) * torch.stack([torch.sum(torch.stack([torch.sqrt((seq[t] - new_mu[t])**2) for seq in elite_seqs], dim=0), dim=0) for t in range(self.plan_horizon)], dim=0)
             mu = self.alpha * mu + (1 - self.alpha) * new_mu
-            mu = torch.clamp(mu, act_low, act_high)
+            # mu = torch.clamp(mu, act_low, act_high)
             sigma = torch.nan_to_num(self.alpha * sigma + (1 - self.alpha) * new_sigma, nan=self.sigma_min)
             sigma = torch.clamp(sigma, min=self.sigma_min)
         
