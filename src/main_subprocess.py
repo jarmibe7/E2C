@@ -14,29 +14,36 @@ yaml.SafeLoader.add_constructor(
 )
 
 #### DEFINE WHAT CUDA TO USE HERE ####
-DEVICE_TO_USE = 'cuda:2' # None
-NUM_EPOCHS = 500
+DEVICE_TO_USE = 'cuda:1' # None
+NUM_EPOCHS = 250
+# saved updated version with CEM planning to pixel_5 folder (can rename to 8 or something, this is a valid run)
+# running with clipped loss for maxdyn and eig to _7 as well
 
-for i in range(4, 5):
+# TODO: write down all valid directories for the model (and also try running updated CEM on old models?)
+
+for i in range(21, 22):
     # for config in [f'configs_final/{env}_{policy}_{i}' for policy in ['eig', 'maxdyn', 'random']]:
-    for policy in ['maxdyn']: #, 'maxdyn', 'random']:
-        for env in ['drawer', 'door']: # 'coffee', 'button', 'faucet']:
-            config_name = f'configs_change_cam/{env}_{policy}_{i}'
+    # for policy in ['eig', 'maxdyn', 'random']:
+    for policy in ['maxdyn']:
+        for env in reversed(['coffee', 'button', 'door', 'drawer', 'faucet']):
+            config_name = f'configs_change_cam/{env}_{policy}_{7}'
             print(f"Loading config: {config_name}")
-            config_file = config_name if config_name.endswith('.yaml') else f"{config_name}.yaml"
-            with open(CONFIG_PATH / config_file, "r") as f:
+            with open(CONFIG_PATH / f"{config_name}.yaml", "r") as f:
                 config = yaml.safe_load(f)
+            config_file = f"{config_name[:-1]}{i}.yaml"
+            config['seed'] = i
             
             if DEVICE_TO_USE is not None:
                 config['train']['device'] = DEVICE_TO_USE 
             if NUM_EPOCHS is not None:
                 config['train']['num_epochs'] = NUM_EPOCHS
             config['config_name'] = config_name
+            config['loss']['free_nats'] = 0.0
             config['closed_loop']['sigma_init'] = 1.5
-            config['closed_loop']['sigma_min'] = 0.1
-            config['closed_loop']['elite_frac'] = 0.4
+            config['closed_loop']['sigma_min'] = 0.25
+            config['closed_loop']['elite_frac'] = 0.2
             config['closed_loop']['iters'] = 4
-            config['closed_loop']['alpha'] = 0.4
+            config['closed_loop']['alpha'] = 0.3
             policy = config_name.split('/')[-1].split('_')[1]
             if policy in ['eig', 'maxdyn', 'random']:
                 if policy == 'eig':

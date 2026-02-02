@@ -671,12 +671,13 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
                 if self.obj_fun == 'maxdyn':
                     # Encourage dynamics change
                     # total_kl += self._kl_diag_gaussian(mu_p, log_var_p, mu_t0, log_var_t0).mean().item()
-                    total_kl += self._kl_diag_gaussian(mu_p, log_var_p, mu_q, log_var_q).mean().item()
+                    total_kl += self._kl_diag_gaussian(mu_p, log_var_p, mu_q, log_var_q) # .mean().item()
                     mu_q = mu_p
                     log_var_q = log_var_p
-                    z_prior = self.model.reparameterize(mu_q, log_var_q)
+                    # compare with t0
+                    # z_prior = self.model.reparameterize(mu_q, log_var_q)
                     # compare with previous --> would expect more dramatic results
-                    # z = self.model.reparameterize(mu_q, log_var_q)
+                    z = self.model.reparameterize(mu_q, log_var_q)
                 else:
                     # Decode prior to observation space
                     if self.model.output_uncertainty:
@@ -700,7 +701,7 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
                     # mu_post, log_var_post = stats.chunk(2, dim=-1)
 
                     # expected information gain - KL(q || p)
-                    total_kl += self._kl_diag_gaussian(mu_post, log_var_post, mu_p, log_var_p).mean(dim=-1)
+                    total_kl += self._kl_diag_gaussian(mu_post, log_var_post, mu_p, log_var_p) # .mean(dim=-1)
                     # TODO: try doing KLD over t0 z, instead of t_prev
                     # total_kl += self._kl_diag_gaussian(mu_q, log_var_q, mu_p, log_var_p).mean(dim=-1)
                     # total_kl += self._kl_diag_gaussian(mu_post, log_var_post, mu_q, log_var_q).mean(dim=-1)
@@ -744,7 +745,6 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
             window = torch.stack(frame_buffer[-self.past_length:], dim=0).unsqueeze(0).to(self.device).repeat(self.num_action_samples, 1, 1, 1, 1)
             mu_prior, log_var_prior, z_prior = self.model.encode_posterior(window)
             costs = self.rollout_info_gain_decoded_batch(window, action_samples, t0_dist=(mu_prior, log_var_prior, z_prior))
-
             
             # Select elite sequences
             num_elites = max(1, int(self.elite_frac * self.num_action_samples))
@@ -754,10 +754,10 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
             # Update CEM distribution parameters
             # take mean and stddev across elite sequences at each time step
             new_mu = torch.stack([torch.mean(torch.stack([seq[t] for seq in elite_seqs], dim=0), dim=0) for t in range(self.plan_horizon)], dim=0)
-            new_mu = torch.clamp(new_mu, act_low, act_high)
             # new_sigma = torch.stack([torch.std(torch.stack([seq[t] for seq in elite_seqs], dim=0), dim=0) for t in range(self.plan_horizon)], dim=0)
             new_sigma = 1 / len(new_mu - 1) * torch.stack([torch.sum(torch.stack([torch.sqrt((seq[t] - new_mu[t])**2) for seq in elite_seqs], dim=0), dim=0) for t in range(self.plan_horizon)], dim=0)
             mu = self.alpha * mu + (1 - self.alpha) * new_mu
+            mu = torch.clamp(mu, act_low, act_high)
             sigma = torch.nan_to_num(self.alpha * sigma + (1 - self.alpha) * new_sigma, nan=self.sigma_min)
             sigma = torch.clamp(sigma, min=self.sigma_min)
         
@@ -782,10 +782,10 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
         act_buffer = []
         idx = 0
         
+        self._init_cem_mu_sig()
+        mu = self.init_control.clone()
+        sigma = self.sigma.clone()
         while idx < self.num_rollout_steps:
-            self._init_cem_mu_sig()
-            mu = self.init_control.clone()
-            sigma = self.sigma.clone()
             if self.hardware:
                 curr_image = self.env.process_image(self.env.render()).permute(2, 0, 1)
             else:

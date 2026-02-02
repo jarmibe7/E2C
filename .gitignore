@@ -10,4 +10,7 @@ runs/
 */test.ipynb
 config/*
 *.png
-*/*.png
+**/*.png
+src/data_gen/contact/*
+**/*.npy
+**/*.txt

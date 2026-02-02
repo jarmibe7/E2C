@@ -395,6 +395,7 @@ class Evaluator():
                 # mu = trainer.init_control.clone()
                 # sigma = trainer.sigma.clone()
                 mu, costs, sigma = trainer._sample_cem(frame_buffer[-past_len:], mu=mu, sigma=sigma) # pred_len, act_size
+                np.savetxt(f'/home/ayush/Desktop/tutorials/rl_latent/E2C/src/data_gen/temp_figs/step_costs.txt', costs.cpu().numpy())
                 action_seq = mu.clone()
                 # print(mu[0].detach().cpu().numpy())
                 plan_obj_vals.append(costs[0].clone().cpu().item())
@@ -478,7 +479,7 @@ class Evaluator():
 
         ani = FuncAnimation(fig, update, frames=len(true_frames), interval=5.)
         writer = FFMpegWriter(fps=20)
-        vid_name = f'eval_render_{trainer.curr_epoch}.mp4'
+        vid_name = f'{trainer.env_name}_{env_reset_seed}.mp4'
         try:
             filepath = run_path / vid_name
             print(f'Saved planner visualization to {filepath}')

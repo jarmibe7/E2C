@@ -216,6 +216,7 @@ class RSSMLoss(nn.Module):
         if self.anneal_mode == 'const':
             mult = self.beta
         elif self.anneal_mode == 'linear':
+            # mult = min(self.beta*((epoch + 1)/self.num_epochs), 0.5 * self.beta)
             mult = self.beta*((epoch + 1)/self.num_epochs)
         else:
             raise NotImplementedError(f"Annealing mode {self.anneal_mode} not supported!")
