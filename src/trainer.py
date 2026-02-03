@@ -140,7 +140,7 @@ class BaseTrainer():
     def learn(self, *args, **kwargs):
         pass
 
-    def evaluate(self, run_path, max_steps=50):
+    def evaluate(self, run_path, max_steps=50, iter=None):
         """
         Evaluate model and output figures to run directory
         """
@@ -149,17 +149,12 @@ class BaseTrainer():
         time.sleep(10.0)
         self.model.eval()
         # self.evaluator.eval(run_path)
-        self.evaluator.visualize_planner(self, run_path, max_steps=max_steps, closed_loop=True)
+        self.evaluator.visualize_planner(self, run_path, max_steps=max_steps, closed_loop=True, iter=iter)
         self.env.step(np.array([0.0, 0.0]))
         self.env.step(np.array([0.0, 0.0]))
-        obs, _ = self.env.reset()
+        if iter is None: obs, _ = self.env.reset()
 
-    def save(self, config_save, run_path, model_name='model.pt'):
-        """
-        Save model, policy, and config to run directory
-        """
-        self.plotter.save(run_path)
-
+    def save_checkpoint(self, run_path, model_name):
         # Save model
         try:
             filepath = run_path / model_name
@@ -176,6 +171,15 @@ class BaseTrainer():
                 self.model.module.state_dict() if isinstance(self.model, torch.nn.DataParallel) else self.model.state_dict(),
                 model_name
             )
+
+    def save(self, config_save, run_path, model_name='model.pt'):
+        """
+        Save model, policy, and config to run directory
+        """
+        self.plotter.save(run_path)
+
+        # Save model
+        self.save_checkpoint(run_path, model_name)
 
 
         # Save policy
@@ -202,6 +206,30 @@ class BaseTrainer():
             print('Exception occurred, saved config to current directory')
             with open(yaml_name, 'w') as f:
                 yaml.dump(config_save, f, sort_keys=False, default_flow_style=False)
+
+        # Save config dictionary
+        try:
+            yaml_name = 'config.yaml'
+            yaml_path = run_path / yaml_name
+            print(f'Saved config to {yaml_path}')
+            with open(yaml_path, 'w') as f:
+                yaml.dump(config_save, f, sort_keys=False, default_flow_style=False) # Save original config so model can be loaded later
+        except Exception as e:
+            print(e)
+            print('Exception occurred, saved config to current directory')
+            with open(yaml_name, 'w') as f:
+                yaml.dump(config_save, f, sort_keys=False, default_flow_style=False)        
+
+        if hasattr(self, 'replay_buffer'):
+            try:
+                filepath = run_path / 'replay_buffer.pt'
+                print(f'Saved replay buffer to {filepath}')
+                # torch.save(self.model.state_dict(), filepath)
+                torch.save(self.replay_buffer, filepath)
+            except Exception as e:
+                print(e)
+                print('Exception occured, saved replay buffer to current directory')
+                torch.save(self.replay_buffer, 'replay_buffer.pt')
 
 class E2CPretrainer(BaseTrainer):
     """
@@ -900,11 +928,13 @@ class ClosedLoopHardwareTrainer(ClosedLoopInformativeTrainer):
         ClosedLoopRandomTrainer.__init__(self, dataset, model, config, device)
         # Override environment with real hardware
         rospy.Subscriber("/bobcat/reset", ros_string, self.test_reset_cb)
+        rospy.Subscriber("/bobcat/comms", ros_string, self.state_cb)
         self.env = HardwareEnv(
             frame_width=config['vae']['in_image_shape'][1],
             frame_height=config['vae']['in_image_shape'][2]
         )
         
+        self.robot_STATE = None
         self.start_now = False
         tic = time.time()
         while not self.start_now and not rospy.is_shutdown():
@@ -968,8 +998,10 @@ class ClosedLoopHardwareTrainer(ClosedLoopInformativeTrainer):
                     "next_images": torch.stack(self._prepop_next, dim=0),  # (N, pred_length, H, W, C)
                 }, out_path)
                 print(f"Saved pre-populated dataset: {out_path}")
+        elif config['train']['load_path'] is not None:
+            pass
         else:
-            print(f"Load dataset into buffer; length: {len(self.dataset)}")
+            print(f"Load full dataset into buffer; length: {len(self.dataset)}")
             self.num_rollout_steps = config['closed_loop']['num_rollout_steps']
             for i in range(len(self.dataset)):
                 x, x_next, u = self.dataset[i]  # Get sample from dataset
@@ -991,6 +1023,9 @@ class ClosedLoopHardwareTrainer(ClosedLoopInformativeTrainer):
         """
         if msg.data == "":
             self.start_now = True
+
+    def state_cb(self, msg):
+        self.robot_STATE = msg.data
 
     def save_dataset(self):
         run_path = self.config['run_path']
@@ -1021,6 +1056,9 @@ class ClosedLoopHardwareTrainer(ClosedLoopInformativeTrainer):
         mu = self.init_control.clone()
         sigma = self.sigma.clone()
         while idx < self.num_rollout_steps and not self.stop_requested and not rospy.is_shutdown():
+            # while self.robot_STATE != "READY" and not rospy.is_shutdown():
+            #     print(f"Am i out of bounds? :( {idx}")
+            #     time.sleep(1.0)
             
             # Get current frame from robot
             curr_img = self.env.render()  # Returns (C, H, W)
@@ -1100,11 +1138,11 @@ class ClosedLoopHardwareTrainer(ClosedLoopInformativeTrainer):
         
         self.env.step(np.array([0.0, 0.0]))
         self.env.step(np.array([0.0, 0.0]))
-        if epoch == self.epochs_warmup:
-            print("4 seconds to change cube position; don't reset position...")
-            time.sleep(4.0)
-        else:
-            obs, _ = self.env.reset()
+        # if epoch == self.epochs_warmup:
+        #     print("4 seconds to change cube position; don't reset position...")
+        #     time.sleep(4.0)
+        # else:
+        obs, _ = self.env.reset()
         
         self.model.train()
 
@@ -1186,8 +1224,14 @@ class ClosedLoopHardwareTrainer(ClosedLoopInformativeTrainer):
                 if (epoch+1) % 10 == 0:
                     # show model video every 10 epochs
                     self.model.eval()
-                    if self.config['train']['eval']: self.evaluate(self.config['run_path'], max_steps=self.eval_num_rollout_steps)
+                    eval_iter = 10
+                    for i in range(eval_iter):
+                        if self.config['train']['eval']: self.evaluate(self.config['run_path'], max_steps=self.eval_num_rollout_steps, iter=i)
                     self.model.train()
+
+                    # Save checkpoint every 10 epochs
+                    self.save_checkpoint(self.config['run_path'], f'model_checkpoint_{epoch}.pt')
+
                 self.plotter.save(self.config['run_path'])
                 
             pbar.close()

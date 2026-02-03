@@ -330,7 +330,7 @@ class RSSMLoss(nn.Module):
             tr["mu_priors"],
             tr["log_var_priors"]
         )
-        kld = torch.clamp(kld, min=self.free_nats)
+        kld = torch.clamp(kld, min=self.free_nats)#, max=0.1)
         kld = kld.mean()
         kld = self.kld_anneal(epoch)*kld
 

@@ -149,7 +149,7 @@ class Evaluator():
         self.eval_traj(run_path, max_frames=vid_max_frames)
         # self.eval_latent(run_path)
 
-    def visualize_planner(self, trainer, run_path, max_steps=25, closed_loop=True, env_reset_seed=None):
+    def visualize_planner(self, trainer, run_path, max_steps=25, closed_loop=True, env_reset_seed=None, iter=None):
         """
         Visualize trajectories using the trainer's planner/rollout logic.
 
@@ -296,7 +296,7 @@ class Evaluator():
 
         trainer.env.step(np.array([0.0, 0.0]))
         trainer.env.step(np.array([0.0, 0.0]))
-        obs, _ = trainer.env.reset()
+        if iter is None: obs, _ = trainer.env.reset()
         # Build visualization grid: 2 rows, (pred_len + 1) columns
         cols = pred_len + 1
         fig, ax = plt.subplots(2, cols, figsize=(3 * cols, 8))
@@ -338,7 +338,10 @@ class Evaluator():
 
         ani = FuncAnimation(fig, update, frames=len(true_frames), interval=5.)
         writer = FFMpegWriter(fps=20)
-        vid_name = 'hardware_RGB_' + closed_loop_policy + f'_{trainer.curr_epoch}.mp4' if closed_loop else 'planner_vis_OL_' + closed_loop_policy + f'_{trainer.curr_epoch}.mp4'
+        if iter is not None:
+            vid_name = f'eval_vid_{trainer.curr_epoch}_{iter}'
+        else:
+            vid_name = 'hardware_RGB_' + closed_loop_policy + f'_{trainer.curr_epoch}.mp4' if closed_loop else 'planner_vis_OL_' + closed_loop_policy + f'_{trainer.curr_epoch}.mp4'
         try:
             filepath = run_path / vid_name
             print(f'Saved planner visualization to {filepath}')
