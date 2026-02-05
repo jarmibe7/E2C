@@ -9,3 +9,5 @@ runs/
 *__init__.py
 */test.ipynb
 config/
+.venv/
+e2c.egg-info/
