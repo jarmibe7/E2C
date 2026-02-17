@@ -34,6 +34,8 @@ class Plotter():
         self.plot_history = None
         self.fig = None
         self.colors = ['blue', 'orange', 'green', 'red', 'purple', 'black', 'pink']
+        self.twentyfifth = []
+        self.seventyfifth = []
 
     def log(self, lr):
         """
@@ -45,10 +47,24 @@ class Plotter():
             self.plot_history = {}
             for key in lr.keys():
                 self.plot_history[key] = []
+            self.plot_history['obj'] = []
 
         # Update plot history arrays
         for key in lr.keys():
-            self.plot_history[key].append(lr[key])
+            if key == 'obj':
+                data = lr[key].cpu()
+                med_vals = torch.median(data, axis=1).values
+                twofive = torch.quantile(data, 0.25, axis=1)
+                sevenfive = torch.quantile(data, 0.75, axis=1)
+                self.plot_history[key] = []
+                self.twentyfifth = []
+                self.seventyfifth = []
+                for val in range(len(med_vals)):
+                    self.plot_history[key].append(med_vals[val].item())
+                    self.twentyfifth.append(twofive[val].item())
+                    self.seventyfifth.append(sevenfive[val].item())
+            else:
+                self.plot_history[key].append(lr[key])
 
         # Replot
         if self.num_steps % self.plot_freq == 0: self.plot()
@@ -81,10 +97,17 @@ class Plotter():
                 plt.ioff()
 
         for i, key in enumerate(self.plot_history.keys()):
+            # axes labels and titles get cleared here
             self.axs[i].cla() 
-            self.axs[i].plot(self.plot_history[key], label=key, color=self.colors[i])
+            if key == 'obj':
+                # plot the median and a shaded region for 25-75 percentile
+                self.axs[i].plot(self.plot_history[key], label='median obj', color='darkorchid')
+                self.axs[i].fill_between(range(len(self.plot_history[key])), self.twentyfifth, self.seventyfifth, color='darkorchid', alpha=0.1)
+                self.axs[i].set_ylim([0., 1e4])
+            else:
+                self.axs[i].plot(self.plot_history[key], label=key, color=self.colors[i])
             self.axs[i].legend()
-            self.axs[i].grid(True)
+            # self.axs[i].grid(True)
 
         plt.tight_layout()
         if self.render: plt.pause(0.001)
@@ -346,6 +369,7 @@ class Evaluator():
         """
         model = trainer.model
         device = trainer.device
+        trainer.env.unwrapped.max_path_length = 5000
         env = trainer.env
         past_len = model.past_length if hasattr(model, 'past_length') else 3
         pred_len = model.pred_length if hasattr(model, 'pred_length') else 3
@@ -473,7 +497,7 @@ class Evaluator():
             recon = recon_frames[frame_idx].squeeze(0)
 
             # Pred current recon
-            # ax.set_title(f"Pred t=0; {plan_obj_vals[frame_idx]:.2f}")
+            ax.set_title(f"t={frame_idx}; {env_rew[frame_idx]:.2f}")
             # ax[1, 0].set_title(f"True t=0; {env_rew[frame_idx]:.2f}")
             ims[0].set_data(true_curr[:3].permute(1, 2, 0).detach().cpu().numpy())
 
