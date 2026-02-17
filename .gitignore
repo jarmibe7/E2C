@@ -8,6 +8,11 @@ runs/
 *.mp4
 *__init__.py
 */test.ipynb
-config/
+config/*
+*.png
+**/*.png
+src/data_gen/contact/*
+**/*.npy
+**/*.txt
 .venv/
 e2c.egg-info/

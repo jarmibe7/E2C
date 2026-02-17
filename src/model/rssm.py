@@ -112,6 +112,7 @@ class RSSME2C(nn.Module):
 
         stats = self.prior(h_next[-1])
         mu, log_var = stats.chunk(2, dim=-1)
+        # log_var = torch.clamp(log_var, min=1e-5, max=1e5)
         z_next = self.reparameterize(mu, log_var)
 
         return h_next, z_next, mu, log_var
@@ -126,6 +127,7 @@ class RSSME2C(nn.Module):
 
             stats = self.post(enc)
             mu, log_var = stats.chunk(2, dim=-1)
+            # log_var = torch.clamp(log_var, min=1e-5, max=1e5)
             z = self.reparameterize(mu, log_var)
 
             mus.append(mu)

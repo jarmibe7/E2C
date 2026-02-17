@@ -20,8 +20,18 @@ from src.model.rssm import RSSME2C
 from src.dataset import E2CDataset
 from src.utils import set_seed, anim_frames, format_time
 from src.model.policy import ConvPolicy
-from src.trainer import E2CPretrainer, RSSMPretrainer, ClosedLoopPolicyTrainer, ClosedLoopRandomTrainer, ClosedLoopInformativeTrainer, ClosedLoopHardwareTrainer
+from src.trainer import E2CPretrainer, RSSMPretrainer, ClosedLoopRandomTrainer, ClosedLoopInformativeTrainer, ClosedLoopHardwareTrainer
 import argparse
+
+def posixpath_constructor(loader, node):
+    seq = loader.construct_sequence(node)
+    return Path(*seq)
+
+# define yaml_safe load constructor to handle PosixPath
+yaml.SafeLoader.add_constructor(
+    "tag:yaml.org,2002:python/object/apply:pathlib.PosixPath",
+    posixpath_constructor,
+)
 
 # Paths
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -52,7 +62,18 @@ def main():
     set_seed(config.get('seed', 0))
     config_save = copy.deepcopy(config)
     timestamp = datetime.fromtimestamp(time.time()).strftime("%Y-%m-%d_%H-%M-%S")
-    run_path = RUNS_PATH / Path(config['train']['dataset'].split('_')[0]) / timestamp
+    policy = config_name.split('/')[-1].split('_')[1]
+    if policy in ['eig', 'maxdyn', 'random']:
+        if policy == 'eig':
+            objective = 'pixel'
+        elif policy == 'maxdyn':
+            objective = 'dynamics'
+        else:
+            objective = 'random'
+        save_name = config['train']['dataset'].split('_')[0] + '_' + objective + '_' + str(config.get('seed', 0))
+    else:
+        save_name = config['train']['dataset'].split('_')[0] + '_' + policy + '_' + str(config.get('seed', 0))
+    run_path = RUNS_PATH / Path(config['train']['dataset'].split('_')[0]) / save_name
     config['run_path'] = run_path
     if 'cuda' in config['train']['device']: 
         assert torch.cuda.is_available(), f"{config['train']['device']} selected in {config_name}, but is unavailable!"
@@ -96,13 +117,18 @@ def main():
         print(f'Training model from scratch\n')
         config['run_path'].mkdir(parents=True, exist_ok=True)
         config_save['load_path'] = config['run_path']
+        curr_epoch = 0
     else:
         # Load existing model to train from checkpoint
         load_path = load_path.split("model.pt")[0] if load_path.endswith('model.pt') else load_path
         model_path = load_path + '/model.pt'
-        print(f'Loading model from checkpoint: {model_path}\n')
         model.load_state_dict(torch.load(model_path))
         config['run_path'] = PROJECT_ROOT / Path(load_path)
+        with open(config['run_path'] / 'config.yaml', "r") as f:
+            loaded_config = yaml.safe_load(f)
+        curr_epoch = loaded_config['train']['num_epochs']
+        config_save['load_path'] = config['run_path']
+        print(f'Loading model from checkpoint: {model_path} at epoch {curr_epoch}\n')
     
     # Make Trainer
     # If active learning, just use env specified by dataset name
@@ -110,12 +136,7 @@ def main():
     if config.get('closed_loop', None) is not None and config['closed_loop']['closed_loop']:
         env = None
         policy_type = config['closed_loop'].get('policy', None)
-        if policy_type == 'conv':
-            policy = ConvPolicy(config['trans']['control_size'], 
-                                config['vae']['in_image_shape'][0] // config['trans']['past_length'],
-                                config['vae'])
-            trainer = ClosedLoopPolicyTrainer(dataset, model, config, device, policy)
-        elif policy_type == 'random':
+        if policy_type == 'random':
             trainer = ClosedLoopRandomTrainer(dataset, model, config, device)
         elif policy_type == 'informative':
             trainer = ClosedLoopInformativeTrainer(dataset, model, config, device)
@@ -135,6 +156,7 @@ def main():
             trainer = RSSMPretrainer(dataset, model, config, device)
         else:
             trainer = E2CPretrainer(dataset, model, config, device)
+    trainer.curr_epoch = curr_epoch
 
     if config['train'].get('eval_only', False):
             print('*** EVAL ONLY ***')
