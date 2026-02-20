@@ -125,10 +125,11 @@ class BaseTrainer():
 
     def _handle_sigint(self, sig, frame):
         self.stop_requested = True
-        try:
-            self.save_dataset()
-        except Exception as e:
-            print("you don't want to save this data? :(", e)
+        if not self.config['train']['eval_only']:
+            try:
+                self.save_dataset()
+            except Exception as e:
+                print("you don't want to save this data? :(", e)
         rospy.signal_shutdown("SIGINT received")
     
     def collect_rollouts(self, *args, **kwargs):
@@ -145,14 +146,12 @@ class BaseTrainer():
         Evaluate model and output figures to run directory
         """
         print('\n*** EVAL w/ reset ***\n')
-        obs, _ = self.env.reset()
-        time.sleep(10.0)
+        if iter is None or iter == 0: obs, _ = self.env.reset()
         self.model.eval()
         # self.evaluator.eval(run_path)
         self.evaluator.visualize_planner(self, run_path, max_steps=max_steps, closed_loop=True, iter=iter)
         self.env.step(np.array([0.0, 0.0]))
         self.env.step(np.array([0.0, 0.0]))
-        if iter is None: obs, _ = self.env.reset()
 
     def save_checkpoint(self, run_path, model_name):
         # Save model
@@ -736,7 +735,7 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
                 if self.obj_fun == 'maxdyn':
                     # Encourage dynamics change
                     # total_kl += self._kl_diag_gaussian(mu_p, log_var_p, mu_t0, log_var_t0).mean().item()
-                    total_kl += self._kl_diag_gaussian(mu_p, log_var_p, mu_q, log_var_q).mean().item()
+                    total_kl += self._kl_diag_gaussian(mu_p, log_var_p, mu_q, log_var_q) # .mean().item()
                     mu_q = mu_p
                     log_var_q = log_var_p
                     # z_prior = self.model.reparameterize(mu_q, log_var_q)
@@ -765,7 +764,7 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
                     # mu_post, log_var_post = stats.chunk(2, dim=-1)
 
                     # expected information gain - KL(q || p)
-                    total_kl += self._kl_diag_gaussian(mu_post, log_var_post, mu_p, log_var_p).mean(dim=-1)
+                    total_kl += self._kl_diag_gaussian(mu_post, log_var_post, mu_p, log_var_p) # .mean(dim=-1)
                     # TODO: try doing KLD over t0 z, instead of t_prev
                     # total_kl += self._kl_diag_gaussian(mu_q, log_var_q, mu_p, log_var_p).mean(dim=-1)
                     # total_kl += self._kl_diag_gaussian(mu_post, log_var_post, mu_q, log_var_q).mean(dim=-1)
@@ -819,11 +818,11 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
             # Update CEM distribution parameters
             # take mean and stddev across elite sequences at each time step
             new_mu = torch.stack([torch.mean(torch.stack([seq[t] for seq in elite_seqs], dim=0), dim=0) for t in range(self.plan_horizon)], dim=0)
-            new_mu = torch.clamp(new_mu, act_low, act_high)
+            # new_mu = torch.clamp(new_mu, act_low, act_high)
             # new_sigma = torch.stack([torch.std(torch.stack([seq[t] for seq in elite_seqs], dim=0), dim=0) for t in range(self.plan_horizon)], dim=0)
             new_sigma = 1 / len(new_mu - 1) * torch.stack([torch.sum(torch.stack([torch.sqrt((seq[t] - new_mu[t])**2) for seq in elite_seqs], dim=0), dim=0) for t in range(self.plan_horizon)], dim=0)
             mu = self.alpha * mu + (1 - self.alpha) * new_mu
-            # mu = torch.clamp(mu, act_low, act_high)
+            mu = torch.clamp(mu, act_low, act_high)
             sigma = torch.nan_to_num(self.alpha * sigma + (1 - self.alpha) * new_sigma, nan=self.sigma_min)
             sigma = torch.clamp(sigma, min=self.sigma_min)
         
@@ -969,20 +968,22 @@ class ClosedLoopHardwareTrainer(ClosedLoopInformativeTrainer):
         self._prepop_prev, self._prepop_next, self._prepop_act = [], [], []
         # print(f"Pre-loading replay buffer with {len(self.dataset)} samples from hardware dataset...")
         if config['train'].get('eval_only', False) == False and config['closed_loop']['epochs_warmup'] < 0:
-            print("Initializing buffer with random rollouts...")
-            loop_steps = self.batch_size # self.config['closed_loop']['buffer_capacity'] // 40
+            print("Initializing buffer with RASTER rollouts...")
+            # loop_steps = self.batch_size # self.config['closed_loop']['buffer_capacity'] // 40
+            num_loops = 40
+            loop_steps = self.config['closed_loop']['buffer_capacity'] // num_loops
             self.num_rollout_steps = loop_steps
-            num_loops = 10
             # self.collect_rollouts(-1)
             
             # if you want to fill up buffer with num_loops*loop_steps images
             for reset_at_idx in tqdm(range(num_loops), desc="Initializing Replay Buffer"):
-                if (reset_at_idx + 1) % 1 == 0:
-                    obs, _ = self.env.reset()
+                # if (reset_at_idx + 1) % 1 == 0:
+                #     obs, _ = self.env.reset()
                 if self.stop_requested or rospy.is_shutdown():
                     print("Stop requested, ending training loop.")
                     break
                 self.collect_rollouts(-1)
+                print("don't forget to move the cube")
             self.num_rollout_steps = config['closed_loop']['num_rollout_steps']
             if len(self._prepop_prev) > 0 or rospy.is_shutdown() or self.stop_requested:
                 run_path = self.config['run_path']
@@ -999,11 +1000,13 @@ class ClosedLoopHardwareTrainer(ClosedLoopInformativeTrainer):
                 }, out_path)
                 print(f"Saved pre-populated dataset: {out_path}")
         elif config['train']['load_path'] is not None:
+            replay_buffer_path = "/home/ayush/Desktop/sawyer_moveit_ws/src/E2C/runs/hardware/hardware_11_0_2026-02-17_15-27-16/replay_buffer_feb17.pt"
             pass
         else:
-            print(f"Load full dataset into buffer; length: {len(self.dataset)}")
+            num_init = min(len(self.dataset), self.replay_buffer.capacity)
+            print(f"Load full dataset into buffer; length: {num_init}")
             self.num_rollout_steps = config['closed_loop']['num_rollout_steps']
-            for i in range(len(self.dataset)):
+            for i in range(num_init):
                 x, x_next, u = self.dataset[i]  # Get sample from dataset
                 
                 # Add to replay buffer (assuming reward=0, done=False for hardware data)
@@ -1050,7 +1053,8 @@ class ClosedLoopHardwareTrainer(ClosedLoopInformativeTrainer):
         idx = 0
         ctrl_freq = []
         if epoch == self.epochs_warmup:
-            print("Random actions for warmup...")
+            print("Random rasterized actions for warmup...")
+            raster_acts = self.env.raster_action(self.num_rollout_steps)
 
         self._init_cem_mu_sig()
         mu = self.init_control.clone()
@@ -1072,16 +1076,19 @@ class ClosedLoopHardwareTrainer(ClosedLoopInformativeTrainer):
 
             # Select action: random during warmup, informative after
             tic = time.time()
-            if epoch == self.epochs_warmup or len(frame_buffer) < self.past_length:
-                if epoch > self.epochs_warmup:
-                    print(f'Initializing with random actions.')
-                else:
-                    rospy.loginfo_once(f'Using random action selection for warmup epoch {epoch}. \n')
-                act = torch.from_numpy(self.env.action_space.sample()).to(self.device)
+            if epoch == self.epochs_warmup or len(frame_buffer) < self.past_length or self.obj_fun == 'random':
+                if not self.obj_fun == 'random':
+                    if epoch > self.epochs_warmup:
+                        print(f'Initializing with random actions.')
+                        act = torch.from_numpy(self.env.action_space.sample()).to(self.device)
+                    else:
+                        # rospy.loginfo_once(f'Using random action selection for warmup epoch {epoch}. \n')
+                        rospy.loginfo_once(f'Raster actions for warmup epoch {epoch}. \n')
+                        act = torch.from_numpy(raster_acts[idx]).to(self.device)
             else:
                 rospy.loginfo_once(f'Switching to informative action selection. \n')
-                act, cost, sigma = self._select_information_action(frame_buffer)
-                act = act[0]
+                mu, cost, sigma = self._select_information_action(frame_buffer, mu, sigma)
+                act = mu[0]
                 if idx == 0:
                     tic2 = time.time()
                     print(f"CEM planning took {(tic2 - tic):.3f}s per action")
@@ -1091,8 +1098,6 @@ class ClosedLoopHardwareTrainer(ClosedLoopInformativeTrainer):
             self.env.step(env_act)
             act_buffer.append(act)
 
-            # Small delay for robot to execute
-            # rospy.sleep(0.05)
             # Get next frame
             next_img = self.env.render()
             if next_img is None:
@@ -1144,7 +1149,8 @@ class ClosedLoopHardwareTrainer(ClosedLoopInformativeTrainer):
         # else:
         obs, _ = self.env.reset()
         
-        self.model.train()
+        if epoch > self.epochs_warmup or self.epochs_warmup == 0:
+            self.model.train()
 
     def train(self, epoch):
         """
@@ -1163,7 +1169,6 @@ class ClosedLoopHardwareTrainer(ClosedLoopInformativeTrainer):
 
             # Forward pass
             with torch.cuda.amp.autocast():
-                train_return = self.model(x, x_next, u)
                 train_return = self.model(x, x_next, u)
                 train_return['x'] = x
                 train_return['x_next'] = x_next

@@ -22,7 +22,6 @@ class ConvEncoder(nn.Module):
         p = conv_params['pad']
 
         # Define encoder part of autoencoder
-        # original
         # self.encoder_cnn = nn.Sequential(
         #     nn.Conv2d(self.in_channels, 32, kernel_size=k+2, stride=s-1, padding=p+1),
         #     nn.ReLU(),
@@ -32,50 +31,21 @@ class ConvEncoder(nn.Module):
         #     nn.ReLU(),
         #     nn.Conv2d(32, 32, kernel_size=k, stride=s, padding=p),
         #     nn.ReLU(),
-        # )
-
-        # tried this in february, good but still hallucinates. need to preserve finer detail
-        # self.encoder_cnn = nn.Sequential(
-        #     nn.Conv2d(self.in_channels, 64, kernel_size=k, stride=s, padding=p), 
-        #     nn.ReLU(inplace=True),
-        #     nn.Conv2d(64, 128, kernel_size=k, stride=s, padding=p),
-        #     nn.GroupNorm(16, 128),
-        #     nn.ReLU(inplace=True),
-        #     nn.Conv2d(128, 256, kernel_size=k, stride=s, padding=0),
-        #     nn.GroupNorm(16, 256),
-        #     nn.ReLU(inplace=True),
         # )
         self.encoder_cnn = nn.Sequential(
-            nn.Conv2d(self.in_channels, 32, kernel_size=k, stride=1, padding=p), 
-            nn.ReLU(inplace=True),
-            nn.Conv2d(32, 64, kernel_size=k, stride=2, padding=p),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(64, 64, kernel_size=k, stride=1, padding=p),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(64, 128, kernel_size=k, stride=2, padding=p),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(128, 256, kernel_size=k, stride=2, padding=1),
-            nn.GroupNorm(16, 256),
-            nn.ReLU(inplace=True),
+            nn.Conv2d(self.in_channels, 64, kernel_size=k+2, stride=s-1, padding=p+1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+            nn.Conv2d(64, 128, kernel_size=k, stride=s, padding=p),
+            nn.BatchNorm2d(128),
+            nn.ReLU(),
+            nn.Conv2d(128, 256, kernel_size=k, stride=s, padding=p),
+            nn.BatchNorm2d(256),
+            # nn.ReLU(),
+            # nn.Conv2d(256, 256, kernel_size=k, stride=s, padding=p),
+            # nn.BatchNorm2d(256),
+            nn.ReLU(),
         )
-
-
-        # good but slow and divergent
-        # self.encoder_cnn = nn.Sequential(
-        #     nn.Conv2d(self.in_channels, 32, kernel_size=k+2, stride=s-1, padding=p+1),
-        #     # nn.GroupNorm(8, 32),
-        #     nn.ReLU(inplace=True),
-        #     nn.Conv2d(32, 64, 4, 2, 1),
-        #     nn.GroupNorm(8, 64),
-        #     nn.ReLU(inplace=True),
-        #     nn.Conv2d(64, 128, 4, 2, 1),
-        #     nn.ReLU(inplace=True),
-        #     nn.Conv2d(128, 256, kernel_size=k, stride=s, padding=p),
-        #     nn.ReLU(inplace=True),
-        #     # nn.Conv2d(256, 256, kernel_size=k, stride=s, padding=p),
-        #     # nn.BatchNorm2d(256),
-        #     # nn.ReLU(),
-        # )
 
 
         with torch.no_grad():
@@ -95,15 +65,14 @@ class ConvEncoder(nn.Module):
         # )
         self.fc_encode = nn.Sequential(
             nn.Linear(self.out_dim_flat, 512),
-            # nn.Dropout(0.3),  # 30% dropout to prevent overfitting
             nn.ReLU(),
+            # nn.Dropout(0.3),  # 30% dropout to prevent overfitting
             # nn.Linear(512, 512),
             # nn.ReLU(),
             # nn.Dropout(0.5),
             nn.Linear(512, 128),
             nn.ReLU(),
             nn.Linear(128, self.latent_size),
-            # nn.LayerNorm(self.latent_size)
         )
 
     def forward(self, x):

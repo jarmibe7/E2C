@@ -22,7 +22,8 @@ class VAELoss(nn.Module):
         if self.anneal_mode == 'const':
             mult = self.beta
         elif self.anneal_mode == 'linear':
-            mult = self.beta*((epoch + 1)/self.num_epochs)
+            mult = min([self.beta / 10, self.beta*((epoch + 1)/self.num_epochs), self.beta*((epoch + 1)/self.num_epochs / 2)])
+            # mult = self.beta*((epoch + 1)/self.num_epochs)
         else:
             raise NotImplementedError(f"Annealing mode {self.anneal_mode} not supported!")
 
@@ -258,6 +259,8 @@ class RSSMLoss(nn.Module):
             mult = self.beta
         elif self.anneal_mode == 'linear':
             mult = min([self.beta / 10, self.beta*((epoch + 1)/self.num_epochs), self.beta*((epoch + 1)/self.num_epochs / 2)])
+            # mult = min([self.beta*((epoch + 1)/self.num_epochs), self.beta*((epoch + 1)/self.num_epochs / 2)])
+            # mult = self.beta*((epoch + 1)/self.num_epochs)
         elif self.anneal_mode == 'reverse':
             mult = self.beta*((self.num_epochs - 1)/self.num_epochs) + self.beta / 10
         else:
@@ -330,7 +333,7 @@ class RSSMLoss(nn.Module):
             tr["mu_priors"],
             tr["log_var_priors"]
         )
-        kld = torch.clamp(kld, min=self.free_nats)#, max=0.1)
+        kld = torch.clamp(kld, min=self.free_nats)#, max=1e4)
         kld = kld.mean()
         kld = self.kld_anneal(epoch)*kld
 

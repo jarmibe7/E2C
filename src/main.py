@@ -122,14 +122,19 @@ def main():
         curr_epoch = 0
     else:
         # Load existing model to train from checkpoint
-        load_path = load_path.split("model.pt")[0] if load_path.endswith('model.pt') else load_path
-        model_path = load_path + '/model.pt'
+        if load_path.endswith(".pt"):
+            model_path = load_path
+            load_path = load_path.split("model.pt")[0] if load_path.endswith('model.pt') else load_path
+        else:
+            load_path = load_path.split("model.pt")[0] if load_path.endswith('model.pt') else load_path
+            model_path = load_path + '/model.pt'
         model.load_state_dict(torch.load(model_path))
         config['run_path'] = PROJECT_ROOT / Path(load_path)
-        with open(config['run_path'] / 'config.yaml', "r") as f:
-            loaded_config = yaml.safe_load(f)
-        curr_epoch = loaded_config['train']['num_epochs']
-        config_save['load_path'] = config['run_path']
+        curr_epoch = 20
+        # with open(config['run_path'] / 'config.yaml', "r") as f:
+        #     loaded_config = yaml.safe_load(f)
+        # curr_epoch = loaded_config['train']['num_epochs']
+        # config_save['load_path'] = config['run_path']
         print(f'Loading model from checkpoint: {model_path} at epoch {curr_epoch}\n')
     
     # Make Trainer
@@ -163,13 +168,13 @@ def main():
     trainer.curr_epoch = curr_epoch
 
     if config['train'].get('eval_only', False):
-            print('*** EVAL ONLY ***')
-            # trainer.evaluate(config['run_path'])
-            # trainer.evaluator.eval_traj(config['run_path'], max_frames=25)
-            trainer.epochs_warmup = 0
-            trainer.evaluate(config['run_path'], max_steps=150)
-            print('\n*** DONE ***')
-            return
+        print('*** EVAL ONLY ***')
+        # trainer.evaluate(config['run_path'])
+        # trainer.evaluator.eval_traj(config['run_path'], max_frames=25)
+        trainer.epochs_warmup = 0
+        for i in range(10): trainer.evaluate(config['run_path'], max_steps=150, iter=i+1)
+        print('\n*** DONE ***')
+        return
     
     # Train, save, and evaluate
     try:

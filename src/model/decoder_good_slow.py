@@ -25,8 +25,8 @@ class ConvDecoder(nn.Module):
             nn.Linear(self.latent_size, 128),
             nn.ReLU(),
             nn.Linear(128, 512),
-            nn.ReLU(),
-            nn.Linear(512, 512),
+            # nn.ReLU(),#, ChannelUncertaintyConvDecoder, ScalarUncertaintyConvDecoder
+            # nn.Linear(512, 512),
             nn.ReLU(),
             nn.Linear(512, enc_out_dim),
             nn.ReLU(),
@@ -57,7 +57,7 @@ class ConvDecoder(nn.Module):
             nn.ConvTranspose2d(64, 32, kernel_size=k, stride=s, padding=p),
             nn.BatchNorm2d(32),
             nn.ReLU(),
-            nn.ConvTranspose2d(32, self.out_image_shape[0], kernel_size=conv_params['enc_kernel_size'], stride=1, padding=p),
+            nn.ConvTranspose2d(32, self.out_image_shape[0], kernel_size=conv_params['enc_kernel_size'], stride=s-1, padding=p),
             nn.Sigmoid()  # Ensure output is between 0 and 1
         )
 
@@ -116,86 +116,20 @@ class ScalarUncertaintyConvDecoder(ConvDecoder):
         s = conv_params['stride']
         p = conv_params['pad']
 
-        # Original
-        # self.decoder_cnn = nn.Sequential(
-        #     nn.ConvTranspose2d(32, 64, kernel_size=k, stride=s, padding=p),
-        #     nn.BatchNorm2d(64),
-        #     nn.ReLU(),
-        #     nn.ConvTranspose2d(64, 64, kernel_size=k, stride=s, padding=p),
-        #     nn.BatchNorm2d(64),
-        #     nn.ReLU(),
-        #     nn.ConvTranspose2d(64, 32, kernel_size=k, stride=s, padding=p),
-        #     nn.BatchNorm2d(32),
-        #     nn.ReLU(),
-        #     # nn.ConvTranspose2d(32, self.out_image_shape[0], kernel_size=conv_params['enc_kernel_size'], stride=s-1, padding=p),
-        #     nn.Conv2d(32, self.out_image_shape[0], kernel_size=conv_params['enc_kernel_size'], stride=s-1, padding=p),
-        #     nn.Sigmoid()  # Ensure output is between 0 and 1
-        # )
-
-        # tried this in february, good but still hallucinates. need to preserve finer detail
-        # self.decoder_cnn = nn.Sequential(
-        #     nn.ConvTranspose2d(self.enc_out_shape[1], 64, kernel_size=k, stride=s, padding=p, output_padding=1),  # 8 -> 16
-        #     nn.GroupNorm(8, 64),
-        #     nn.ReLU(inplace=True),
-        #     nn.ConvTranspose2d(64, 32, kernel_size=k, stride=s, padding=p, output_padding=1),                     # 16 -> 32
-        #     nn.GroupNorm(8, 32),
-        #     nn.ReLU(inplace=True),
-        #     nn.ConvTranspose2d(32, 16, kernel_size=k, stride=s, padding=p, output_padding=1),                     # 32 -> 64
-        #     nn.GroupNorm(8, 16),
-        #     nn.ReLU(inplace=True),
-        #     nn.Conv2d(16, self.out_image_shape[0], kernel_size=k, stride=1, padding=1),
-        #     nn.Sigmoid(),
-        # )
-
-        # self.decoder_cnn = nn.Sequential(
-        #     nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),  # 8 -> 16
-        #     nn.Conv2d(256, 128, kernel_size=3, padding=1),
-        #     nn.ReLU(inplace=True),
-
-        #     nn.Upsample(scale_factor=2, mode='nearest'),  # 16 -> 32
-        #     nn.Conv2d(128, 64, kernel_size=3, padding=1),
-        #     nn.ReLU(inplace=True),
-
-        #     nn.Upsample(scale_factor=2, mode='nearest'),  # 32 -> 64
-        #     nn.Conv2d(64, 32, kernel_size=3, padding=1),
-        #     nn.GroupNorm(8, 32),
-        #     nn.ReLU(inplace=True),
-
-        #     nn.Conv2d(32, self.out_image_shape[0], kernel_size=3, padding=1),
-        #     nn.Sigmoid()
-        # )
-
         self.decoder_cnn = nn.Sequential(
-            nn.ConvTranspose2d(256, 128, kernel_size=3, stride=2, padding=1, output_padding=1),
-            nn.ReLU(inplace=True),
-
-            nn.ConvTranspose2d(128, 64, kernel_size=3, stride=2, padding=1, output_padding=1),
-            nn.ReLU(inplace=True),
-
-            nn.Upsample(scale_factor=2, mode='nearest'),
-            nn.Conv2d(64, 32, kernel_size=3, padding=1),
-            nn.ReLU(inplace=True),
-
-            nn.Conv2d(32, self.out_image_shape[0], kernel_size=3, padding=1),
-            nn.Sigmoid()
+            nn.ConvTranspose2d(256, 128, kernel_size=k, stride=s, padding=p),
+            nn.BatchNorm2d(128),
+            nn.ReLU(),
+            nn.ConvTranspose2d(128, 64, kernel_size=k, stride=s, padding=p),
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+            # nn.ConvTranspose2d(64, 32, kernel_size=k, stride=s, padding=p),
+            # nn.BatchNorm2d(32),
+            # nn.ReLU(),
+            # nn.ConvTranspose2d(32, self.out_image_shape[0], kernel_size=conv_params['enc_kernel_size'], stride=s-1, padding=p),
+            nn.Conv2d(64, self.out_image_shape[0], kernel_size=conv_params['enc_kernel_size'], stride=s-1, padding=p),
+            nn.Sigmoid()  # Ensure output is between 0 and 1
         )
-
-        
-        # Good, but slow and divergent
-        # self.decoder_cnn = nn.Sequential(
-        #     nn.ConvTranspose2d(256, 128, kernel_size=k, stride=s, padding=p),
-        #     nn.GroupNorm(8, 128),
-        #     nn.ReLU(inplace=True),
-        #     nn.ConvTranspose2d(128, 64, kernel_size=k, stride=s, padding=p),
-        #     nn.GroupNorm(8, 64),
-        #     nn.ReLU(inplace=True),
-        #     nn.ConvTranspose2d(64, 32, kernel_size=k, stride=s, padding=p),
-        #     # nn.BatchNorm2d(32),
-        #     nn.ReLU(),
-        #     # nn.ConvTranspose2d(32, self.out_image_shape[0], kernel_size=conv_params['enc_kernel_size'], stride=s-1, padding=p),
-        #     nn.Conv2d(32, self.out_image_shape[0], kernel_size=conv_params['enc_kernel_size'], stride=s-1, padding=p),
-        #     nn.Sigmoid()  # Ensure output is between 0 and 1
-        # )
         
         self.uncertainty_head = nn.Sequential(
             nn.Linear(latent_size, 64),

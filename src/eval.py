@@ -201,8 +201,10 @@ class Evaluator():
             trainer.env.downsize = True
             frame_buffer.append(trainer.env.render().to(torch.float32))
 
+        ctrl_freq = []
         step_idx = 0
-        if closed_loop_policy in ['informative', 'maxdyn', 'hardware']:
+        use_rand_action = ((hasattr(trainer, 'obj_fun')) and trainer.obj_fun == 'random')
+        if closed_loop_policy in ['informative', 'maxdyn', 'hardware'] and not use_rand_action:
             trainer._init_cem_mu_sig()
             mu = trainer.init_control.clone()
             sigma = trainer.sigma.clone()
@@ -213,8 +215,9 @@ class Evaluator():
             trainer.env.downsize = True
             # process_image(env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1)
 
+            tic = time.time()
             # Action: reuse trainer.collect_rollouts logic
-            if closed_loop_policy in ['informative', 'maxdyn', 'hardware']:
+            if closed_loop_policy in ['informative', 'maxdyn', 'hardware'] and not use_rand_action:
                 mu, costs, sigma = trainer._sample_cem(frame_buffer[-past_len:], mu, sigma) # pred_len, act_size
                 action_seq = mu.clone()
                 plan_obj_vals.append(costs[0].clone().cpu().item())
@@ -237,6 +240,11 @@ class Evaluator():
             # next_img_true = trainer.env.render().to(torch.float32)
             trainer.env.downsize = True
             next_img_true_buffer = trainer.env.render().to(torch.float32)
+            toc = time.time()
+            ctrl_freq.append(toc - tic)
+            if step_idx % 25 == 0:
+                print(f"\nAverage control frequency: {(1. / np.mean(ctrl_freq)):.3f} Hz.")
+
             # next_img_true = process_image(env.render(), self.dataset_name).squeeze(0).permute(2, 0, 1)
 
             # Model inputs
@@ -251,7 +259,7 @@ class Evaluator():
                     x_recon = model.decoder(z)
                 x_recon_next = []
 
-                for act in action_seq:
+                for act in action_seq: # only evaluate one timestep in future for speed
                     act_batch = act.view(1, -1).to(trainer.device, dtype=dtype)
                     h, z_prior, mu_p, log_var_p = trainer.model.rssm_step(h, z.unsqueeze(1), act_batch)
                     # h, z_prior, mu_p, log_var_p = trainer.model.rssm_step(h, zs, act_batch)
@@ -296,7 +304,7 @@ class Evaluator():
 
         trainer.env.step(np.array([0.0, 0.0]))
         trainer.env.step(np.array([0.0, 0.0]))
-        if iter is None: obs, _ = trainer.env.reset()
+        obs, _ = trainer.env.reset()
         # Build visualization grid: 2 rows, (pred_len + 1) columns
         cols = pred_len + 1
         fig, ax = plt.subplots(2, cols, figsize=(3 * cols, 8))
@@ -304,8 +312,8 @@ class Evaluator():
         ax[0, 0].set_title(f"Pred t=0; {plan_obj_vals[0]:.2f}")
         ax[1, 0].set_title(f"True t=0; {env_rew[0]:.2f}")
         for j in range(1, cols):
-            ax[0, j].set_title(f"Pred t={j}")
-            ax[1, j].set_title(f"True t={j}")
+            ax[0, j].set_title(f"Pred t_next={j}")
+            ax[1, j].set_title(f"True t_next={j}")
 
         ims = []
         # Initialize cells
@@ -323,8 +331,8 @@ class Evaluator():
             recon = recon_frames[frame_idx].squeeze(0)
 
             # Pred current recon
-            ax[0, 0].set_title(f"Pred t=0; {plan_obj_vals[frame_idx]:.2f}")
-            ax[1, 0].set_title(f"True t=0; {env_rew[frame_idx]:.2f}")
+            ax[0, 0].set_title(f"Pred t={frame_idx}; {plan_obj_vals[frame_idx]:.2f}")
+            ax[1, 0].set_title(f"True t={frame_idx}; {env_rew[frame_idx]:.2f}")
             ims[0].set_data(cv2.cvtColor(recon[:3].permute(1, 2, 0).detach().cpu().numpy(), cv2.COLOR_BGR2RGB))
             ims[1].set_data(cv2.cvtColor(true_curr[:3].permute(1, 2, 0).detach().cpu().numpy(), cv2.COLOR_BGR2RGB))
 
@@ -339,7 +347,7 @@ class Evaluator():
         ani = FuncAnimation(fig, update, frames=len(true_frames), interval=5.)
         writer = FFMpegWriter(fps=20)
         if iter is not None:
-            vid_name = f'eval_vid_{trainer.curr_epoch}_{iter}'
+            vid_name = f'eval_vid_{trainer.curr_epoch}_{iter}.mp4'
         else:
             vid_name = 'hardware_RGB_' + closed_loop_policy + f'_{trainer.curr_epoch}.mp4' if closed_loop else 'planner_vis_OL_' + closed_loop_policy + f'_{trainer.curr_epoch}.mp4'
         try:
