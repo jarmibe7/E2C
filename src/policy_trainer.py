@@ -16,13 +16,17 @@ from src.utils import set_seed, format_time
 
 from src.model.loss import E2CLoss, UncertaintyE2CLoss, RSSMLoss
 from src.eval import Plotter, Evaluator
-from src.replay_buffer import ReplayBuffer
+from src.replay_buffer import RLReplayBuffer
 from src.data_gen.gen_fetch import name_to_env, env_to_aspace, process_image, meta_world_envs, metaworld_cam_name
-from src.trainer import ClosedLoopInformativeTrainer
+from src.trainer import BaseTrainer, ClosedLoopInformativeTrainer
+from src.data_gen.gen_fetch import get_mujoco_geom_keys_index, is_robot_contact_geometry
+from src.model.policy_loss import OffPolicyStochasticActorLoss
 
-class PixExpRL(ClosedLoopInformativeTrainer):
+class ContactRewardActorCritic(ClosedLoopInformativeTrainer):
     """
-    Train an RL policy to complete a task, using task-agnostic affordance discovery from pixels as exploration.
+    Train an actor-critic RL policy to complete a task, using task-agnostic affordance discovery from pixels as exploration.
+    Instead of using the objective directly in the policy loss, this method adds reward for contacts.
+
     Args:
         dataset: Torch dataset object, from which test set is used during evaluation.
         model: A world model class instance for training
@@ -35,26 +39,25 @@ class PixExpRL(ClosedLoopInformativeTrainer):
         self.num_rollout_steps = config['closed_loop']['num_rollout_steps']
         self.num_batches = config['closed_loop']['num_batches']
         self.pre_explore = config['closed_loop'].get('pre_explore', 0.1)
-        assert self.num_rollout_steps > self.batch_size, 'Steps per rollout must be > batch_size!'
-
-        # Initialize environment
-        disp = Display(visible=0, size=(480, 480))
-        disp.start()
-        env_name = config['train']['dataset'].split('_')[0]
-        self.env = gym.make(name_to_env[env_name], render_mode="rgb_array")
-        self.env_continuous = (env_to_aspace[env_name] == 'continuous')
-        self.past_length = config['trans']['past_length']
+        # assert self.num_rollout_steps > self.batch_size, 'Steps per rollout must be > batch_size!'
+        self.obj_fun = 'informative'
 
         # Policy optimizer and loss (TODO)
+        self.policy = policy
+        self.policy.to(device)
         self.policy_optimizer = torch.optim.Adam(
-            policy.parameters(), 
+            self.policy.parameters(), 
             lr=config['closed_loop']['alpha'], 
-            weight_decay=config['closed_loop']['weight_decay']
+            weight_decay=config['trans']['weight_decay']
         )
-        self.policy_criterion = torch.nn.functional.mse_loss # TODO: Placeholder loss
+        self.actor_criterion = OffPolicyStochasticActorLoss()
+        self.critic_criterion = torch.nn.functional.mse_loss
 
-        # Initialize replay buffer
-        self.replay_buffer = ReplayBuffer(
+        # TODO: Add discount factor hparam
+        self.discount = 0.95
+
+        # Overwrite super() replay buffer
+        self.replay_buffer = RLReplayBuffer(
             self.in_image_shape, 
             model.control_size, 
             config['closed_loop']['buffer_capacity'],
@@ -65,31 +68,46 @@ class PixExpRL(ClosedLoopInformativeTrainer):
         self.curr_epoch = 0
 
     def take_action(self, frame_buffer, epoch, mu, sigma, eval=False):
+        policy_return = {
+            'dist': torch.tensor(torch.nan),
+            'log_probs': torch.full((1, ), torch.nan),
+            'values': torch.full((1, ), torch.nan)
+        }
         if epoch < self.epochs_warmup:
             # Warmup, random actions
-            return torch.from_numpy(self.env.action_space.sample()).to(self.device), mu
+            act = torch.from_numpy(self.env.action_space.sample()).to(self.device)
         elif epoch < self.pre_explore*self.num_epochs:
             # First epochs are always explore
+            # Use CEM distribution to calculate action probs
             mu, costs, sigma = self._select_information_action(frame_buffer=frame_buffer, mu=mu, sigma=sigma)
-            act = mu[0]
-            return act, mu
+            policy_return['dist'] = torch.distributions.Normal(mu, sigma)
+            action_full = policy_return['dist'].sample()
+            act = action_full[0]
+            policy_return['log_probs'] = policy_return['dist'].log_prob(action_full)[0].sum(-1).unsqueeze(-1)
         else:
             # Annealed Greedy explore/exploit
-            warmup = self.pre_explore*self.num_epochs
+            warmup = max(self.epochs_warmup, self.pre_explore*self.num_epochs)
             epsilon = 1.0 - (epoch - warmup) / (self.num_epochs - warmup)
-            epsilon = torch.clip(epsilon, 0.0, 1.0)
+            epsilon = max(0.0, min(epsilon, 1.0))
 
-            # Mak uniform and assign
             u = random.random()
-
             if u < epsilon:
                 mu, costs, sigma = self._select_information_action(frame_buffer=frame_buffer, mu=mu, sigma=sigma)
-                act = mu[0]
-                return act, mu
+                policy_return['dist'] = torch.distributions.Normal(mu, sigma)
+                action_full = policy_return['dist'].sample()
+                act = action_full[0]
+                policy_return['log_probs'] = policy_return['dist'].log_prob(action_full)[0].sum(-1).unsqueeze(-1)
             else:
-                act = self.policy(frame_buffer)
-                return act, mu
-
+                policy_return = self.policy(frame_buffer[-1].unsqueeze(0).to(self.device))
+                act = policy_return['dist'].sample().squeeze(0)
+                policy_return['log_probs'] = policy_return['dist'].log_prob(act).sum(-1)   # Sum over action dims
+                policy_return['values'] = torch.full((1, ), torch.nan)
+        return act, mu, policy_return
+            
+    def calc_reward(self, raw_reward, contact):
+        # Metaworld env reward is clipped at 10
+        # https://www.emergentmind.com/papers/2505.11289
+        return raw_reward + contact
 
 
     def collect_rollouts(self, epoch):
@@ -104,9 +122,13 @@ class PixExpRL(ClosedLoopInformativeTrainer):
         act_buffer = []
         idx = 0
 
+        mj_data = self.env.unwrapped.data
+        robot_geom, obj_geom = get_mujoco_geom_keys_index(self.env_name)
+
         self._init_cem_mu_sig()
         mu = self.init_control.clone()
         sigma = self.sigma.clone()
+        cum_reward = 0.0
         while idx < self.num_rollout_steps:
             # Render current frame
             curr_img = process_image(self.env.render(), self.evaluator.dataset_name).permute(2, 0, 1)
@@ -116,9 +138,14 @@ class PixExpRL(ClosedLoopInformativeTrainer):
             # Sample and take action
             # act = self.policy(curr_img.unsqueeze(0).to(self.device)).flatten()
             # act = torch.from_numpy(self.env.action_space.sample()).to(self.device)
-            act = self.take_action(curr_img.unsqueeze(0).to(self.device))
-            act_buffer.append(act)
-            next_obs, rew, done, _, _ = self.env.step(act.cpu().detach().numpy())
+            act, mu, policy_return = self.take_action(frame_buffer, epoch, mu, sigma)
+            next_obs, raw_rew, done, _, _ = self.env.step(act.cpu().detach().numpy())
+            act_buffer.append((act, policy_return['log_probs'], policy_return['values']))
+
+            # Calculate reward based on contact
+            contact = int(is_robot_contact_geometry(mj_data, robot_geom, obj_geom))
+            rew = self.calc_reward(raw_rew, contact)
+            cum_reward += rew
 
             # If done reset env, otherwise add sample to dataset
             if done:
@@ -129,41 +156,53 @@ class PixExpRL(ClosedLoopInformativeTrainer):
                 continue
             else:
                 # Slide frame obs history frame buffer to next image
-                if len(frame_buffer) == self.past_length + 1:
+                if len(frame_buffer) == self.past_length + self.pred_length:
                     frame_buffer.pop(0)
                     act_buffer.pop(0)
                 next_image = process_image(self.env.render(), self.evaluator.dataset_name).permute(2, 0, 1)
                 frame_buffer.append(next_image)
 
                 # Add sample to replay buffer
-                if len(frame_buffer) == self.past_length + 1:
+                if len(frame_buffer) == self.past_length + self.pred_length:
+                    # Compute action and img windows
+                    if self.env_continuous:
+                        act_add = torch.stack(
+                            [a[0] for a in act_buffer[self.past_length-1:self.past_length-1+self.pred_length]]
+                        )
+                        action_prob_add = torch.stack(
+                            [a[1] for a in act_buffer[self.past_length-1:self.past_length-1+self.pred_length]]
+                        )
+                        values_add = torch.stack(
+                            [a[2] for a in act_buffer[self.past_length-1:self.past_length-1+self.pred_length]]
+                        )
+                    else:
+                        act_add = act_buffer[self.past_length-1:self.past_length-1+self.pred_length].unsqueeze(-1)
+
                     self.replay_buffer.add(
                         img = torch.stack(frame_buffer[0:self.past_length], dim=0),
-                        action = act_buffer[-1],
+                        action = act_add,
                         reward = rew,
-                        next_img = frame_buffer[self.past_length],
-                        done = done
+                        next_img = torch.stack(frame_buffer[self.past_length:(self.past_length+self.pred_length)], dim=0),
+                        done = done,
+                        action_probs=action_prob_add,
+                        value=values_add
                     )
                     idx += 1
+
+        self.plotter.log_value("Avg Train Rollout Rew", cum_reward / self.num_rollout_steps)
+        self.model.train()
+        self.policy.train()
 
     def train(self, epoch):
         """
         Gradient update for model and asychronous policy
         """
-        # Sample batches
-        batches = []
-        for i in range(self.num_batches):
-            # Sampling
-            batches.append(self.replay_buffer.sample(self.batch_size))
-
         # World model and policy update
-        total_model_loss, total_policy_loss = 0.0, 0.0
-        for i, batch in enumerate(batches):
+        total_model_loss, total_actor_loss, total_critic_loss = 0.0, 0.0, 0.0
+        for i in range(self.num_batches):
             # Unload batch
-            x, u, r, x_next, done  = batch
-            x, x_next, u = x.to(self.device), x_next.to(self.device), u.to(self.device)
-            x = x.reshape(x.shape[0], -1, *self.in_image_shape[1:])    # Stack obs history in channel dim
-            x_next = torch.hstack([x_next for i in range(self.model.past_length)]).to(self.device)
+            sample  = self.replay_buffer.sample(self.batch_size)
+            x, x_next, u = sample.x.to(self.device), sample.x_next.to(self.device), sample.u.to(self.device)
 
             # Forward pass
             train_return = self.model(x, x_next, u)
@@ -185,62 +224,64 @@ class PixExpRL(ClosedLoopInformativeTrainer):
             total_model_loss += model_loss.item() * x.size(0)   # Aggregate total epoch loss
 
             # Forward pass through policy
-            C = self.out_image_shape[0]
-            current_frame = x[:, -C:, :, :]  # Take only current frame
-            pred_action = self.policy(current_frame)
+            current_frame = x[:, -1]  # Take only current frame
+            policy_return = self.policy(current_frame)
 
-            # Policy loss and backprop
-            policy_loss = self.policy_criterion(u, pred_action)
-            self.policy_optimizer.zero_grad()
-            policy_loss.backward()
-            self.policy_optimizer.step()
+            # Compute targetes, critic loss
+            values = self.policy.get_value(current_frame)
+            with torch.no_grad():
+                next_values = self.policy.get_value(x_next[:, 0])
+                targets = sample.rewards + (self.discount*next_values)*(1 - (sample.dones))
+            critic_loss = self.critic_criterion(values, targets)
 
             # TODO: Raise exception
-            if torch.isnan(policy_loss):
-                print("NaN loss encountered, stopping training.")
+            if torch.isnan(critic_loss):
+                print("NaN critic loss encountered!")
                 break
 
-            total_policy_loss += policy_loss.item() * x.size(0)
+            # Compute policy loss and backprop
+            log_probs = policy_return['dist'].log_prob(u[:, 0]).sum(-1)
+            advantages = targets - values
+            advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+            actor_loss = self.actor_criterion(log_probs, advantages)
+            
+            # TODO: Raise exception
+            if torch.isnan(actor_loss):
+                print("NaN actor loss encountered!")
+                break
+
+            self.policy_optimizer.zero_grad()
+            critic_loss.backward()
+            actor_loss.backward()
+            self.policy_optimizer.step()
+
+            total_actor_loss += actor_loss.item() * x.size(0)
+            total_critic_loss += critic_loss.item() * x.size(0)
 
         # Compute average model loss
         avg_model_loss = total_model_loss / (self.batch_size*self.num_batches)
 
-        # # Policy update on same samples
-        # total_policy_loss = 0.0
-        # for i, batch in enumerate(batches):
-        #     x, u, r, x_next, done = batch
-        #     x = x.to(self.device).reshape(x.shape[0], -1, *self.in_image_shape[1:])
-
-        #     # Forward pass through policy
-        #     pred_action = self.policy(x)  
-
-        #     # Example policy loss: maximize expected reward in replay buffer
-        #     # You can replace this with SAC-style loss or any other RL objective
-        #     policy_loss = -torch.mean(pred_action)  
-
-        #     self.policy_optimizer.zero_grad()
-        #     policy_loss.backward()
-        #     self.policy_optimizer.step()
-
-        #     total_policy_loss += policy_loss.item() * x.size(0)
-
-        avg_policy_loss = total_policy_loss / (self.num_batches * self.batch_size)
-        return avg_model_loss, avg_policy_loss
+        avg_critic_loss = total_critic_loss / (self.num_batches * self.batch_size)
+        self.plotter.log_value('Avg Critic Loss', min(avg_critic_loss, 100.0))
+        self.plotter.log_value('Avg Actor Loss', min(100, max(actor_loss, -100.0)))
+        avg_actor_loss = total_actor_loss / (self.num_batches * self.batch_size)
+        return avg_model_loss, avg_critic_loss, avg_actor_loss
 
     def learn(self):
-        model_loss, policy_loss = 0.0, 0.0
+        model_loss, critic_loss, actor_loss = 0.0, 0.0, 0.0
         pbar = tqdm(range(self.curr_epoch, self.num_epochs), desc="Training")
         for _ in range(max(self.num_batches // self.num_rollout_steps, self.config['closed_loop']['buffer_capacity'] // self.num_rollout_steps)):
             self.collect_rollouts(-1)
         start_epoch = self.curr_epoch
         for epoch in range(start_epoch, self.num_epochs):
             self.curr_epoch = epoch
-            model_loss, policy_loss = self.train(epoch)
+            model_loss, critic_loss, actor_loss = self.train(epoch)
 
             pbar.set_postfix({
                 'Epoch': epoch+1,
                 'Model Loss': f"{model_loss:.4f}",
-                'Policy Loss': f"{policy_loss:.4f}"})
+                'Critic Loss': f"{critic_loss:.4f}",
+                'Actor Loss': f"{actor_loss:.4f}"})
             pbar.update(1)
 
             self.collect_rollouts(epoch)
@@ -250,7 +291,6 @@ class PixExpRL(ClosedLoopInformativeTrainer):
                 if self.config['train']['eval']: self.evaluate(self.config['run_path'])
                 self.model.train()
             if (epoch + 1) % 100 == 0:
-                if self.config['train']['save']: super().save(self.config, self.config['run_path'], model_name=f'model_epoch{epoch+1}.pt')
+                if self.config['train']['save']: super(BaseTrainer, self).save(self.config, self.config['run_path'], model_name=f'model_epoch{epoch+1}.pt')
 
-            
         pbar.close()

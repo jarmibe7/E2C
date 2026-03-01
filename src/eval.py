@@ -34,28 +34,28 @@ class Plotter():
         self.plot_history = None
         self.fig = None
         self.colors = ['blue', 'orange', 'green', 'red', 'purple', 'black', 'pink']
+        self.plot_history = {}
+
+    def log_value(self, key, value):
+        # Log value in plot history
+        if key not in self.plot_history:
+                self.plot_history[key] = []
+        self.plot_history[key].append(value)
+        return
 
     def log(self, lr):
         """
         Update live training plot logs, and plot at frequency self.plot_freq
         """
         # Create plot history dictionary if none exists
-        self.num_steps += 1
-        if self.plot_history is None:
-            self.plot_history = {}
-            for key in lr.keys():
-                self.plot_history[key] = []
+        self.num_steps += 1            
 
         # Update plot history arrays
         for key in lr.keys():
-            self.plot_history[key].append(lr[key])
+            self.log_value(key, lr[key])
 
         # Replot
         if self.num_steps % self.plot_freq == 0: self.plot()
-
-    def log_value(self, key, value):
-        print("Not implemented yet")
-        pass
 
     def plot(self):
         """
@@ -81,8 +81,14 @@ class Plotter():
                 plt.ioff()
 
         for i, key in enumerate(self.plot_history.keys()):
+            y = self.plot_history[key]
+            if isinstance(y, list):
+                y = [v.cpu().detach().numpy() if torch.is_tensor(v) else v for v in y]
+            elif torch.is_tensor(y):
+                y = y.cpu().detach().numpy()
+
             self.axs[i].cla() 
-            self.axs[i].plot(self.plot_history[key], label=key, color=self.colors[i])
+            self.axs[i].plot(y, label=key, color=self.colors[i])
             self.axs[i].legend()
             self.axs[i].grid(True)
 
@@ -168,6 +174,7 @@ class Evaluator():
             env_reset_seed = np.random.randint(0, 1e2)
 
         model.eval()
+        if hasattr(trainer, 'policy'): trainer.policy.eval()
         obs, _ = env.reset(seed=env_reset_seed)
         frame_buffer = []   # frames used as model input window
         true_frames = []    # ground-truth frames for visualization
@@ -203,6 +210,11 @@ class Evaluator():
                 mu, costs, sigma = trainer._sample_cem(frame_buffer[-past_len:], mu=mu, sigma=sigma) # pred_len, act_size
                 action_seq = mu.clone()
                 plan_obj_vals.append(costs[0].clone().cpu().item())
+            elif closed_loop_policy in ['contact_reward']:
+                policy_return = trainer.policy(process_image(curr_render_raw, self.dataset_name, downscale=True).permute(2, 0, 1).unsqueeze(0).to(device))
+                act = policy_return['dist'].sample().squeeze(0)
+                action_seq = torch.stack([act for _ in range(pred_len)])
+                plan_obj_vals.append(0.0)
             else:
                 # repeat pred len number of times for action horizon
                 act = [env.action_space.sample() for _ in range(pred_len)]

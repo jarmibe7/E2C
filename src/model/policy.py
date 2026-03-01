@@ -5,6 +5,8 @@ Authors: Jared Berry, Ayush Gaggar
 """
 import torch
 from torch import nn
+from torch.distributions import Normal
+from src.model.encoder import ConvEncoder
 
 class BasePolicy(nn.Module):
     """
@@ -16,11 +18,11 @@ class BasePolicy(nn.Module):
     def forward(self, x):
         pass
 
-class ConvPolicy(nn.Module):
+class ConvStochasticPolicy(nn.Module):
     """
     A policy that encodes an image observation and outputs an action.
     """
-    def __init__(self, control_size, in_channels, conv_params):
+    def __init__(self, control_size, enc_latent_size, conv_params, encoder=None):
         super().__init__()
         # CNN parameters
         k = conv_params['enc_kernel_size']
@@ -29,31 +31,53 @@ class ConvPolicy(nn.Module):
         self.control_size = control_size
 
         # Define convolutional encoder
-        self.conv = nn.Sequential(
-            nn.Conv2d(in_channels, 32, kernel_size=k+2, stride=s-1, padding=p+1),
-            nn.ReLU(),
-            nn.Conv2d(32, 32, kernel_size=k, stride=s, padding=p),
-            nn.ReLU(),
-            nn.Conv2d(32, 32, kernel_size=k, stride=s, padding=p),
-            nn.ReLU(),
-            nn.Conv2d(32, 32, kernel_size=k, stride=s, padding=p),
+        if encoder is None:
+            in_channels = conv_params['in_image_shape'][0] // 3 # hacky, assuming RGB, and input has already stacked frames
+            self.encoder_cnn = ConvEncoder(
+                enc_latent_size,
+                in_channels,
+                conv_params
+            )
+        else:
+            self.encoder_cnn = encoder
+
+
+        # Actor and critic share encoder
+        self.fc_actor = nn.Sequential(
+            nn.Linear(enc_latent_size, 64),
             nn.ReLU(),
         )
 
-        with torch.no_grad():
-            x = torch.zeros(1, in_channels, conv_params['out_image_shape'][1], conv_params['out_image_shape'][2])
-            conv_out = self.conv(x)
-            self.out_dim_flat = conv_out.view(conv_out.size(0), -1).shape[1] # Keep batch dim, determine number of elements
-
-        self.fc = nn.Sequential(
-            nn.Linear(self.out_dim_flat, 512),
+        self.fc_critic = nn.Sequential(
+            nn.Linear(enc_latent_size, 64),
             nn.ReLU(),
-            nn.Linear(512, self.control_size),
+            nn.Linear(64, 1),
+            nn.ReLU()
         )
 
-    def forward(self, x):
-        conv_out = self.conv(x)
-        flattened = conv_out.reshape(conv_out.size(0), -1)
-        action = self.fc(flattened)
-        return action
+        self.mu = nn.Linear(64, self.control_size)
+
+        # Log variance is state independent
+        # https://github.com/DLR-RM/stable-baselines3/blob/master/stable_baselines3/common/distributions.py
+        self.log_std = nn.Parameter(torch.zeros(self.control_size)) 
+
+    def get_value(self, x):
+        # Get value of state
+        encoded = self.encoder_cnn(x)
+        return self.fc_critic(encoded)
+
+    def forward(self, x, train=True):
+        encoded = self.encoder_cnn(x)
+        h = self.fc_actor(encoded)
+
+        mu = self.mu(h)
+        std = torch.exp(self.log_std)
+
+        dist = Normal(mu, std)
+
+        policy_return = {
+            'dist': dist,
+        }
+
+        return policy_return
 

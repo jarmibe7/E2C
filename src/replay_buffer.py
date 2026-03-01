@@ -10,8 +10,9 @@ class ReplayBuffer:
 
     Args:
         img_shape: Shape of image obs is (past_length*C, H, W)
-        control_dim: Dimension of control vector
+        control_size: Dimension of control vector
         capacity: How many samples to hold at once
+        device: CPU or GPU
         config: Config dictionary
     """
     def __init__(self, img_shape, control_size, capacity, device, config):
@@ -40,12 +41,72 @@ class ReplayBuffer:
         return self.size
 
     @torch.no_grad()
-    def add(self, img, action, reward, next_img, done):
+    def add(self, img, action, reward, next_img, done, update_ptr=True):
         self.X[self.ptr] = img.to(self.device).contiguous()
         self.U[self.ptr] = action.to(self.device)
         self.rewards[self.ptr] = torch.tensor([reward], device=self.device, dtype=torch.float32)
         self.X_next[self.ptr] = next_img.to(self.device).contiguous()
         self.dones[self.ptr] = torch.tensor([done], device=self.device, dtype=torch.float32)
+
+        # Update ring buffer params
+        if update_ptr:
+            self.ptr = (self.ptr + 1) % self.capacity
+            self.size = min(self.size + 1, self.capacity)
+
+    def sample(self, batch_size, idx=None):
+        # Generate batch_size random samples from the replay buffer
+        # idx = torch.randint(0, self.size, (batch_size,), device=self.device)  # Samples with replacement
+        if idx is None:
+            idx = random.sample(range(self.size), min(batch_size, self.size))  # Samples without replacement
+
+        return (
+            self.X[idx],
+            self.U[idx],
+            self.rewards[idx],
+            self.X_next[idx],
+            self.dones[idx],
+        )
+    
+class RLReplayBufferSample():
+    def __init__(self, x, u, r, x_next, d, ap, v):
+        self.x = x
+        self.u = u
+        self.rewards = r
+        self.x_next = x_next
+        self.dones = d
+        self.action_probs = ap
+        self.values = v
+
+    
+class RLReplayBuffer(ReplayBuffer):
+    """
+    Simple ring buffer ReplayBuffer class, with random sampling. Has action probability and value fields for RL.
+
+    Args:
+        img_shape: Shape of image obs is (past_length*C, H, W)
+        control_size: Dimension of control vector
+        capacity: How many samples to hold at once
+        device: CPU or GPU
+        config: Config dictionary
+    """
+    def __init__(self, img_shape, control_size, capacity, device, config):
+        super().__init__(img_shape, control_size, capacity, device, config)
+        pred_length = config['trans']['pred_length']
+        if pred_length > 1:
+            self.action_probs = torch.zeros((capacity, pred_length, 1), device=device)  # Action probs summed along dims
+            self.values = torch.zeros((capacity, pred_length, 1), device=device)    # Scalar value
+        else:
+            self.action_probs = torch.zeros((capacity, 1), device=device)
+            self.values = torch.zeros((capacity, 1), device=device)
+
+    def __len__(self):
+        return self.size
+
+    @torch.no_grad()
+    def add(self, img, action, reward, next_img, done, action_probs, value):
+        super().add(img, action, reward, next_img, done, update_ptr=False)
+        self.action_probs[self.ptr] = action_probs.to(self.device)
+        self.values[self.ptr] = value.to(self.device)
 
         # Update ring buffer params
         self.ptr = (self.ptr + 1) % self.capacity
@@ -56,10 +117,8 @@ class ReplayBuffer:
         # idx = torch.randint(0, self.size, (batch_size,), device=self.device)  # Samples with replacement
         idx = random.sample(range(self.size), min(batch_size, self.size))  # Samples without replacement
 
-        return (
-            self.X[idx],
-            self.U[idx],
-            self.rewards[idx],
-            self.X_next[idx],
-            self.dones[idx],
-        )
+        x, u, r, x_next, d = super().sample(batch_size, idx=idx)
+        ap = self.action_probs[idx]
+        v = self.values[idx]
+
+        return RLReplayBufferSample(x, u, r, x_next, d, ap, v)

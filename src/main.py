@@ -19,8 +19,9 @@ from src.model.e2c import ConvE2C
 from src.model.rssm import RSSME2C
 from src.dataset import E2CDataset
 from src.utils import set_seed, anim_frames, format_time
-from src.model.policy import ConvPolicy
+from src.model.policy import ConvStochasticPolicy
 from src.trainer import E2CPretrainer, RSSMPretrainer, ClosedLoopRandomTrainer, ClosedLoopInformativeTrainer, ClosedLoopHardwareTrainer
+from src.policy_trainer import ContactRewardActorCritic
 import argparse
 
 def posixpath_constructor(loader, node):
@@ -70,9 +71,9 @@ def main():
             objective = 'dynamics'
         else:
             objective = 'random'
-        save_name = config['train']['dataset'].split('_')[0] + '_' + objective + '_' + str(config.get('seed', 0))
+        save_name = config['train']['dataset'].split('_')[0] + '_' + objective + '_' + str(config.get('seed', 0)) + timestamp
     else:
-        save_name = config['train']['dataset'].split('_')[0] + '_' + policy + '_' + str(config.get('seed', 0))
+        save_name = config['train']['dataset'].split('_')[0] + '_' + policy + '_' + str(config.get('seed', 0)) + timestamp
     run_path = RUNS_PATH / Path(config['train']['dataset'].split('_')[0]) / save_name
     config['run_path'] = run_path
     if 'cuda' in config['train']['device']: 
@@ -147,6 +148,13 @@ def main():
         elif policy_type == "direct_reward":
             # TODO: Implement shallow reward-based closed loop trainer
             pass
+        elif policy_type == "contact_reward":
+            rl_policy = ConvStochasticPolicy(
+                control_size=config['trans']['control_size'],
+                enc_latent_size=config['vae']['enc_latent_size'],   # TODO: Should be different sizes later
+                conv_params=config['vae']
+            )
+            trainer = ContactRewardActorCritic(dataset, model, config, device, rl_policy)
         else: 
             raise NotImplementedError(f'Policy type "{policy_type}" not supported!')
         config_save['env_interactions'] = trainer.num_env_inters
