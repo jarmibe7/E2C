@@ -32,7 +32,7 @@ gym.register_envs(gymnasium_robotics)
 
 # Parameters for dataset
 ENV_NAME = 'tactile_push'                                           # Gym environment name
-DATASET_SIZE = int(2e3)                                     # Number of samples: (img, next_img, control) tuple
+DATASET_SIZE = int(1e3)                                     # Number of samples: (img, next_img, control) tuple
 OUTPUT_NAME = ENV_NAME + f'_isom_{DATASET_SIZE // 1000}k'        # Output name of dataset
 IMAGE_SHAPE = [128, 128]                                      # Downsampled image shape
 PAST_LENGTH = 3                                             # Number of previous observations to use for training
@@ -44,51 +44,41 @@ NEW_DT = None                                               # Desired new timest
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 DATA_PATH = PROJECT_ROOT / "data"
 
-seed = 42
-set_seed(seed)
-tactile_envs = {
-    'tactile_push': ObjectPushEnv
-}
+def process_tactile(t):
+    normalized = torch.from_numpy(t).float() / 255.0 # Normalize to [0,1]
+    return normalized.permute(2, 0, 1)
 
-def main():
-    start_time = time.perf_counter()
-    import os
-    # os.environ["PYOPENGL_PLATFORM"] = "egl"
-    # Create virtual display for running on server
-    # disp = Display(visible=0, size=(480, 480))
-    # disp.start()
-    
-    # Buffers
-    frame_buffer = []
-    act_buffer = []
+def process_feature(f):
+    # 0:3 = EE position
+    # 3:6 = EE orientation
+    # 6:9 = Goal position
+    # 9:12 = Goal orientation
+    return torch.from_numpy(f[0:6])
 
-    # Create env
-    max_steps = 10000            # Max number of env steps before forced termination
-    show_gui = False             # Enable PyBullet GUI
-    show_tactile = False         # Display tactile sensor images
+def get_env_modes():
     env_modes = {
         # which dofs can have movement (environment dependent)
         # 'movement_mode':'y',          # y only, action dim = 1
         # 'movement_mode':'yRz',        # y + rotate z, action dim = 2
         # "movement_mode": "xyRz",      # x, y + rotate z, action dim = 3
-        'movement_mode': 'TyRz',        # Move relative to TCP frame (perp + yaw), action dim = 2
-        # 'movement_mode':'TxTyRz',     # Full TCP-parallel/perp motion + yaw, action dim = 3
+        # 'movement_mode': 'TyRz',        # Move relative to TCP frame (perp + yaw), action dim = 2
+        'movement_mode':'TxTyRz',     # Full TCP-parallel/perp motion + yaw, action dim = 3
 
         # specify arm
         "arm_type": "ur5",
         # "arm_type": "mg400",
 
         # specify tactile sensor
-        "tactile_sensor_name": "tactip",
+        # "tactile_sensor_name": "tactip",
         # "tactile_sensor_name": "digit",
-        # "tactile_sensor_name": "digitac",
+        "tactile_sensor_name": "digitac",
 
         # the type of control used
-        # 'control_mode':'TCP_position_control',
-        "control_mode": "TCP_velocity_control",
+        'control_mode':'TCP_position_control',
+        # "control_mode": "TCP_velocity_control",
 
         # randomisations
-        "rand_init_orn": False,     # Object orientation
+        "rand_init_orn": True,     # Object orientation
         "rand_obj_mass": False,     # Object mass
 
         # straight or random trajectory
@@ -106,69 +96,109 @@ def main():
         "reward_mode": "dense"
         # 'reward_mode':'sparse'
     }
+    return env_modes
+
+seed = 42
+set_seed(seed)
+tactile_envs = {
+    'tactile_push': ObjectPushEnv
+}
+
+def main():
+    start_time = time.perf_counter()
+    import os
+    # os.environ["PYOPENGL_PLATFORM"] = "egl"
+    # Create virtual display for running on server
+    disp = Display(visible=0, size=(480, 480))
+    disp.start()
+
+    # Create env
+    max_steps = 10000            # Max number of env steps before forced termination
+    show_gui = True             # Enable PyBullet GUI
+    show_tactile = True         # Display tactile sensor images
+    
     env = tactile_envs[ENV_NAME](
         max_steps=max_steps,
-        env_modes=env_modes,
+        env_modes=get_env_modes(),
         show_gui=show_gui,
         show_tactile=show_tactile,
         image_size=IMAGE_SHAPE,
     )
     
-    breakpoint()
     obs, _ = env.reset()
-    prev_img = torch.zeros((DATASET_SIZE, PAST_LENGTH, *IMAGE_SHAPE))
-    next_img = torch.zeros((DATASET_SIZE, PRED_LENGTH, *IMAGE_SHAPE))
+
+    # Buffers
+    tactile_buffer = []
+    feature_buffer = []
+    act_buffer = []
+    prev_tactile = torch.zeros((DATASET_SIZE, PAST_LENGTH, 1, *IMAGE_SHAPE))    # tactile has one channel
+    next_tactile = torch.zeros((DATASET_SIZE, PRED_LENGTH, 1, *IMAGE_SHAPE))
+    prev_feature = torch.zeros((DATASET_SIZE, PAST_LENGTH, 6))
+    next_feature = torch.zeros((DATASET_SIZE, PRED_LENGTH, 6))
     control = torch.zeros((DATASET_SIZE, PRED_LENGTH, env.action_space.shape[0]))
     terminated = False; truncated = False
+
+    # Seed initial observation into buffer
+    tactile_buffer.append(process_tactile(obs["tactile"]))
+    feature_buffer.append(process_feature(obs["extended_feature"]))
     
     # Collect n_samples trajectories
     idx = 0
     pbar = tqdm(total=DATASET_SIZE)
     while idx < DATASET_SIZE:
-        if len(frame_buffer) == 0:
-            frame_buffer.append(process_image(env.render(), ENV_NAME))
-
         # Sample and take action
         act = env.action_space.sample()
         act_buffer.append(act)
-        if ENV_NAME in meta_world_envs:
-            for _ in range(meta_ts):
-                next_obs, rew, terminated, truncated, _ = env.step(act)
-        else:
-            next_obs, rew, terminated, truncated, _ = env.step(act)
+        next_obs, rew, terminated, truncated, _ = env.step(act)
+
+        tactile = process_tactile(next_obs['tactile'])
+        feature = process_feature(next_obs['extended_feature'])
+
+        tactile_buffer.append(tactile)
+        feature_buffer.append(feature)
+        act_buffer.append(act)
 
         # If done reset env, otherwise add sample to dataset
         if terminated or truncated:
             obs, _ = env.reset()
-            terminated = False; truncated = False
-            frame_buffer = []
+            tactile_buffer = []
+            feature_buffer = []
             act_buffer = []
             continue
-        else:
-            # Slide frame obs history frame buffer to next image
-            if len(frame_buffer) == PAST_LENGTH + PRED_LENGTH:
-                frame_buffer.pop(0)
-                act_buffer.pop(0)
-            next_image = process_image(env.render(), ENV_NAME)
-            # debug_render(next_image)
-            frame_buffer.append(next_image)
 
-            # Add obs history buffer to dataset
-            if len(frame_buffer) == PAST_LENGTH + PRED_LENGTH:
-                prev_img[idx] = torch.stack(frame_buffer[0:PAST_LENGTH], dim=0)
-                next_img[idx] = torch.stack(frame_buffer[PAST_LENGTH:(PAST_LENGTH+PRED_LENGTH)], dim=0)
+        # Maintain sliding window size
+        total_len = PAST_LENGTH + PRED_LENGTH
+        if len(tactile_buffer) > total_len:
+            tactile_buffer.pop(0)
+            feature_buffer.pop(0)
+            act_buffer.pop(0)
 
-                # Get controls for entire PRED_LENGTH
-                if continuous:
-                    control[idx] = torch.stack(
-                        [torch.from_numpy(a) for a in act_buffer[PAST_LENGTH-1:PAST_LENGTH-1+PRED_LENGTH]]
-                    )
-                else:
-                    control[idx] = torch.tensor(
-                        act_buffer[PAST_LENGTH-1:PAST_LENGTH-1+PRED_LENGTH]
-                    ).unsqueeze(-1)
-                idx += 1
-                pbar.update(1)
+        # Save sample when buffer full
+        if len(tactile_buffer) == total_len:
+
+            prev_tactile[idx] = torch.stack(
+                tactile_buffer[:PAST_LENGTH], dim=0
+            )
+            next_tactile[idx] = torch.stack(
+                tactile_buffer[PAST_LENGTH:], dim=0
+            )
+
+            prev_feature[idx] = torch.stack(
+                feature_buffer[:PAST_LENGTH], dim=0
+            )
+            next_feature[idx] = torch.stack(
+                feature_buffer[PAST_LENGTH:], dim=0
+            )
+
+            control[idx] = torch.stack(
+                [
+                    torch.from_numpy(a).float()
+                    for a in act_buffer[PAST_LENGTH - 1 : PAST_LENGTH - 1 + PRED_LENGTH]
+                ]
+            )
+
+            idx += 1
+            pbar.update(1)
 
     pbar.close()
 
@@ -176,9 +206,11 @@ def main():
     dataset_dir = DATA_PATH / ENV_NAME
     dataset_dir.mkdir(parents=True, exist_ok=True)
     torch.save({
-        "prev_images": prev_img,
+        "prev_tactile": prev_tactile,
+        "next_tactile": next_tactile,
+        "prev_feature": prev_feature,
+        "next_feature": next_feature,
         "actions": control,
-        "next_images": next_img,
     }, f"{dataset_dir / OUTPUT_NAME}.pt")
     print(f'\nSaved dataset to {dataset_dir / OUTPUT_NAME}.pt')
 
