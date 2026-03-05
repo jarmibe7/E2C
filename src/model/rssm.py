@@ -47,7 +47,7 @@ class RSSME2C(nn.Module):
         self.dummy_u = torch.zeros((1, self.control_size)).to(self.device)
 
         # Encoder and decoder
-        in_channels = conv_params['in_image_shape'][0] // img_channel_count # hacky, assuming RGB, and input has already stacked frames
+        in_channels = conv_params['in_image_shape'][0] // self.past_length # hacky, assuming RGB, and input has already stacked frames
         self.encoder = ConvEncoder(enc_latent_size, in_channels, conv_params)
         if self.output_uncertainty:
             self.decoder = ScalarUncertaintyConvDecoder(stochastic_size, conv_params, self.encoder.out_dim_flat, self.encoder.out_shape)

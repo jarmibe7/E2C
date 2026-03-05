@@ -18,6 +18,7 @@ from src.replay_buffer import RLReplayBuffer
 from src.tactile.gen_tactile import get_env_modes, process_tactile, process_feature, tactile_envs
 from src.trainer import BaseTrainer, ClosedLoopInformativeTrainer
 from src.tactile.tactile_utils import TactileReplayBuffer
+from src.model.loss import RSSMLoss
 from tactile_gym.rl_envs.nonprehensile_manipulation.object_push.object_push_env import (
     ObjectPushEnv,
 )
@@ -54,6 +55,8 @@ class ClosedLoopTactileTrainer(BaseTrainer):
         self._init_cem_mu_sig()
         self.alpha = self.closed_cfg.get('alpha', 0.7)
         self.plan_horizon = self.closed_cfg.get('plan_horizon', self.pred_length)
+
+        self.model_criterion = RSSMLoss(config['train']['num_epochs'], config['loss'])
 
         # Initialize environment
         # disp = Display(visible=0, size=(480, 480))
@@ -450,7 +453,37 @@ class ClosedLoopTactileTrainer(BaseTrainer):
         """
         Gradient update for world model
         """
-        # TODO
+        total_model_loss = 0.0
+        for i in range(self.num_batches):
+            # Unload batch
+            sample  = self.replay_buffer.sample(self.batch_size)
+            tactile, tactile_next = sample.tactile.to(self.device), sample.tactile_next.to(self.device)
+            feature, feature_next = sample.feature.to(self.device), sample.feature_next.to(self.device)
+            u = sample.u.to(self.device)
+
+            # Forward pass
+            train_return = self.model(tactile, feature, tactile_next, feature_next, u)
+            train_return['x'] = tactile
+            train_return['x_next'] = tactile_next
+
+            # Model loss and backprop
+            model_loss, loss_return = self.model_criterion(train_return, epoch)
+            self.plotter.log(loss_return)
+            self.model_optimizer.zero_grad()
+            model_loss.backward()
+            self.model_optimizer.step()
+
+            # TODO: Raise exception
+            if torch.isnan(model_loss):
+                print("NaN loss encountered, stopping training.")
+                break
+
+            total_model_loss += model_loss.item() * tactile.size(0)   # Aggregate total epoch loss
+
+        # Compute average model loss
+        avg_model_loss = total_model_loss / (self.batch_size*self.num_batches)
+
+        return avg_model_loss
         
     
     def learn(self):
