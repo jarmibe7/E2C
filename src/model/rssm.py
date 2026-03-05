@@ -30,7 +30,7 @@ class RSSME2C(nn.Module):
         uncertainty_output: Whether to use ChannelUncertainty decoder
     """
     def __init__(self, enc_latent_size, stochastic_size, deterministic_size,
-                 control_size, past_length, pred_length, conv_params, device, output_uncertainty=False):
+                 control_size, past_length, pred_length, conv_params, device, output_uncertainty=False, img_channel_count=3):
         super().__init__()
         self.device = device
         self.output_uncertainty = output_uncertainty
@@ -47,7 +47,7 @@ class RSSME2C(nn.Module):
         self.dummy_u = torch.zeros((1, self.control_size)).to(self.device)
 
         # Encoder and decoder
-        in_channels = conv_params['in_image_shape'][0] // 3 # hacky, assuming RGB, and input has already stacked frames
+        in_channels = conv_params['in_image_shape'][0] // img_channel_count # hacky, assuming RGB, and input has already stacked frames
         self.encoder = ConvEncoder(enc_latent_size, in_channels, conv_params)
         if self.output_uncertainty:
             self.decoder = ScalarUncertaintyConvDecoder(stochastic_size, conv_params, self.encoder.out_dim_flat, self.encoder.out_shape)
@@ -140,10 +140,7 @@ class RSSME2C(nn.Module):
             torch.stack(zs, dim=1),
         )
     
-    def forward(self, x, x_next, u):
-        # Infer belief over past context
-        mus, log_vars, zs = self.encode_posterior(x, u[:, :x.size(1)])
-        
+    def transition(self, x, x_next, u, zs):
         h = torch.zeros(self.num_layers, x.size(0), self.deterministic_size, device=self.device)
         # Take last belief state as start
         z = zs[:, -1]
@@ -209,6 +206,12 @@ class RSSME2C(nn.Module):
             outputs["x_recon_uncertainty"] = x_recon_uncertainty
             outputs["x_pred_uncertainty"] = torch.stack(x_pred_uncerts, dim=1)
 
+        return outputs
+    
+    def forward(self, x, x_next, u):
+        # Infer belief over past context
+        _, _, zs = self.encode_posterior(x, u[:, :x.size(1)])
+        outputs = self.transition(x, x_next, u, zs)
         return outputs
     
 
