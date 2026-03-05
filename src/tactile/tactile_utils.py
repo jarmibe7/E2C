@@ -5,7 +5,7 @@ from pathlib import Path
 from src.replay_buffer import ReplayBuffer
 
 # Get paths relative to the project root
-PROJECT_ROOT = Path(__file__).parent.parent
+PROJECT_ROOT = Path(__file__).parent.parent.parent
 DATA_PATH = PROJECT_ROOT / "data"
 CONFIG_PATH = PROJECT_ROOT / "config"
 
@@ -20,13 +20,13 @@ class TactileDataset():
         data = torch.load(dataset_dir / f"{config['train']['dataset']}.pt")
 
         # Observations
-        breakpoint()
-        self.tactile = data["prev_tactile"].permute(0, 1, 4, 2, 3)  # Shape: [num_samples, past_length, C, H, W]
-        self.next_tactile = data["next_tactile"].permute(0, 1, 4, 2, 3)  # Shape: [num_samples, pred_length, C, H, W]
+        self.tactile = data["prev_tactile"]
+        self.next_tactile = data["next_tactile"]
         self.in_img_shape = [self.tactile[0, 0].shape[0] * config['trans']['past_length'], *self.tactile[0, 0].shape[1:]]
 
         self.feature = data["prev_feature"]
         self.next_feature = data["next_feature"]
+        self.num_features = self.feature.shape[-1]
 
         if len(self.tactile.shape) == 5:
             self.past_length = self.tactile.shape[1]
@@ -66,14 +66,14 @@ class TactileReplayBuffer(ReplayBuffer):
         device: CPU or GPU
         config: Config dictionary
     """
-    def __init__(self, img_shape, control_size, capacity, device, config):
+    def __init__(self, img_shape, num_features, control_size, capacity, device, config):
         super().__init__(img_shape, control_size, capacity, device, config)
 
         # Feature buffers
         past_length = config['trans']['past_length']
         pred_length = config['trans']['pred_length']
-        self.features = torch.zeros((capacity, past_length, 1), device=device)
-        self.features_next = torch.zeros((capacity, pred_length, 1), device=device)
+        self.features = torch.zeros((capacity, past_length, num_features), device=device)      # TODO: Don't hardcode this
+        self.features_next = torch.zeros((capacity, pred_length, num_features), device=device)
 
     @torch.no_grad()
     def add(self, tactile, feature, action, reward, next_tactile, next_feature, done):

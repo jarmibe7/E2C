@@ -4,7 +4,7 @@ Generate dataset from Gymnasium environment
 scp -r data/reacher jarmibe7@dingo.mech.northwestern.edu:~/E2C/
 scp jarmibe7@dingo.mech.northwestern.edu:~/E2C/videos/e2c_cartpole.mp4 C:\\Users\\jarmi\\MS_Thesis\\Media\\Videos
 
-Author: Jared Berry, Ayush Gaggar
+Author: Jared Berry
 """
 import os
 import re
@@ -31,9 +31,9 @@ from tactile_gym.rl_envs.nonprehensile_manipulation.object_push.object_push_env 
 gym.register_envs(gymnasium_robotics)
 
 # Parameters for dataset
-ENV_NAME = 'tactile_push'                                           # Gym environment name
+ENV_NAME = 'tactilepush'                                           # Gym environment name
 DATASET_SIZE = int(1e3)                                     # Number of samples: (img, next_img, control) tuple
-OUTPUT_NAME = ENV_NAME + f'_isom_{DATASET_SIZE // 1000}k'        # Output name of dataset
+OUTPUT_NAME = ENV_NAME + f'_{DATASET_SIZE // 1000}k'        # Output name of dataset
 IMAGE_SHAPE = [128, 128]                                      # Downsampled image shape
 PAST_LENGTH = 3                                             # Number of previous observations to use for training
 PRED_LENGTH = 3                                             # Number of timesteps to predict in the future
@@ -101,7 +101,7 @@ def get_env_modes():
 seed = 42
 set_seed(seed)
 tactile_envs = {
-    'tactile_push': ObjectPushEnv
+    'tactilepush': ObjectPushEnv
 }
 
 def main():
@@ -109,13 +109,15 @@ def main():
     import os
     # os.environ["PYOPENGL_PLATFORM"] = "egl"
     # Create virtual display for running on server
-    disp = Display(visible=0, size=(480, 480))
-    disp.start()
+    # disp = Display(visible=0, size=(480, 480))
+    # disp.start()
 
     # Create env
     max_steps = 10000            # Max number of env steps before forced termination
-    show_gui = True             # Enable PyBullet GUI
-    show_tactile = True         # Display tactile sensor images
+
+    # These will slow down runtime, but are necessary for eval
+    show_gui = False             # Enable PyBullet GUI
+    show_tactile = False         # Display tactile sensor images
     
     env = tactile_envs[ENV_NAME](
         max_steps=max_steps,
