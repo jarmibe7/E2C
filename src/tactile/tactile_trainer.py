@@ -12,13 +12,10 @@ import os
 # os.environ['MUJOCO_GL'] = 'egl'
 from src.utils import set_seed, format_time
 
-from src.model.loss import E2CLoss, UncertaintyE2CLoss, RSSMLoss
-from src.eval import Plotter, Evaluator
-from src.replay_buffer import RLReplayBuffer
+from src.tactile.tactile_rssm import TactileRSSMLoss
 from src.tactile.gen_tactile import get_env_modes, process_tactile, process_feature, tactile_envs
 from src.trainer import BaseTrainer, ClosedLoopInformativeTrainer
-from src.tactile.tactile_utils import TactileReplayBuffer
-from src.model.loss import RSSMLoss
+from src.tactile.tactile_utils import TactileReplayBuffer, TactileEvaluator
 from tactile_gym.rl_envs.nonprehensile_manipulation.object_push.object_push_env import (
     ObjectPushEnv,
 )
@@ -48,15 +45,7 @@ class ClosedLoopTactileTrainer(BaseTrainer):
         self.uses_rssm = hasattr(self.model, 'rssm_step') and hasattr(self.model, 'post')
         self.epochs_warmup = self.closed_cfg.get('epochs_warmup', 3)
 
-        # CEM parameters
-        self.num_action_samples = self.closed_cfg.get('samples', 100)
-        self.elite_frac = self.closed_cfg.get('elite_frac', 0.1)
-        self.cem_iters = self.closed_cfg.get('iters', 3)
-        self._init_cem_mu_sig()
-        self.alpha = self.closed_cfg.get('alpha', 0.7)
-        self.plan_horizon = self.closed_cfg.get('plan_horizon', self.pred_length)
-
-        self.model_criterion = RSSMLoss(config['train']['num_epochs'], config['loss'])
+        self.model_criterion = TactileRSSMLoss(config['train']['num_epochs'], config['loss'])
 
         # Initialize environment
         # disp = Display(visible=0, size=(480, 480))
@@ -70,6 +59,14 @@ class ClosedLoopTactileTrainer(BaseTrainer):
             image_size=self.in_image_shape[1:],
         )
 
+        # CEM parameters
+        self.num_action_samples = self.closed_cfg.get('samples', 100)
+        self.elite_frac = self.closed_cfg.get('elite_frac', 0.1)
+        self.cem_iters = self.closed_cfg.get('iters', 3)
+        self._init_cem_mu_sig()
+        self.alpha = self.closed_cfg.get('alpha', 0.7)
+        self.plan_horizon = self.closed_cfg.get('plan_horizon', self.pred_length)
+
         # Overwrite super() evaluator with tactile evaluator
         # Initialize replay buffer
         self.replay_buffer = TactileReplayBuffer(
@@ -82,10 +79,16 @@ class ClosedLoopTactileTrainer(BaseTrainer):
         )
         assert self.num_rollout_steps <= self.replay_buffer.capacity, 'Steps per rollout should be <= buffer_capacity!'
 
-        num_states_to_save = 6      # EE position/orientation
-        self.saved_state = torch.zeros((self.num_epochs * self.num_rollout_steps, num_states_to_save), device='cpu')
+        self.saved_state = torch.zeros((self.num_epochs * self.num_rollout_steps, dataset.num_features + model.control_size + 1), device='cpu')
 
-        # TODO: Create new Evaluator
+        if config['train']['eval']:
+            self.evaluator = TactileEvaluator(
+                self.model, 
+                batch_size=config['train']['batch_size'], 
+                device=config['train']['device'],
+                env_name=self.env_name,
+                tactile_image_size=self.in_image_shape[1:]
+            )
 
     #
     # ---------- Saving and Eval ----------
@@ -107,6 +110,15 @@ class ClosedLoopTactileTrainer(BaseTrainer):
                 print(e)
                 print('Exception occured, saved state tensor to current directory')
                 torch.save(self.saved_state, 'training_states.pt')
+
+    def evaluate(self, run_path):
+        """
+        Evaluate model and output figures to run directory
+        """
+        print('\n*** EVAL ***\n')
+        self.model.eval()
+        # self.evaluator.eval(run_path)
+        self.evaluator.render(self, run_path, max_steps=1000, closed_loop=True)
 
     #
     # ---------- Utils ----------
@@ -275,34 +287,42 @@ class ClosedLoopTactileTrainer(BaseTrainer):
         act_high = torch.as_tensor(self.env.action_space.high, device=self.device, dtype=torch.float32)
 
         # TODO: Need to scale action bounds?
-        if self.evaluator.dataset_name == 'pointmaze':
+        if self.env_name == 'pointmaze':
             # scale action bounds for pointmaze
             act_low *= 2.5
             act_high *= 2.5
         for _ in range(self.cem_iters):
             costs = torch.zeros(self.num_action_samples, device=self.device)
             # Sample action sequences from current distribution
-            action_samples = torch.normal(mu.unsqueeze(0), sigma.unsqueeze(0)).expand(self.num_action_samples, -1, -1)
+            # action_samples = torch.normal(mu.unsqueeze(0), sigma.unsqueeze(0)).expand(self.num_action_samples, -1, -1) # old way
+            action_samples = torch.normal(
+                mu.unsqueeze(0).repeat(self.num_action_samples, 1, 1),
+                sigma.unsqueeze(0).repeat(self.num_action_samples, 1, 1)
+            )
             # Clip to action space bounds
             action_samples = torch.clamp(action_samples, act_low, act_high)
             
             # Evaluate information gain for each sequence
-            # window = torch.stack(frame_buffer[-self.past_length:], dim=0).unsqueeze(0).to(self.device)
             tactile_window = torch.stack(tactile_buffer[-self.past_length:], dim=0).unsqueeze(0).to(self.device).repeat(self.num_action_samples, 1, 1, 1, 1)
-            feature_window = torch.stack(feature_buffer[-self.past_length:], dim=0).unsqueeze(0).to(self.device).repeat(self.num_action_samples, 1, 1, 1, 1)
+            feature_window = torch.stack(feature_buffer[-self.past_length:], dim=0).unsqueeze(0).to(self.device).repeat(self.num_action_samples, 1, 1)
             mu_prior, log_var_prior, z_prior = self.model.encode_posterior(tactile_window, feature_window)
             costs = self.rollout_info_gain_decoded_batch(tactile_window, feature_window, action_samples, t0_dist=(mu_prior, log_var_prior, z_prior))
             
             # Select elite sequences
             num_elites = max(1, int(self.elite_frac * self.num_action_samples))
-            elite_idxs = costs.argsort()[-num_elites:]      # TODO: Is sorting afterwards the most optimal way?
+            elite_idxs = costs.argsort()[-num_elites:]
             elite_seqs = action_samples[elite_idxs]
             
             # Update CEM distribution parameters
             # take mean and stddev across elite sequences at each time step
-            new_mu = torch.stack([torch.mean(torch.stack([seq[t] for seq in elite_seqs], dim=0), dim=0) for t in range(self.plan_horizon)], dim=0)
-            # new_sigma = torch.stack([torch.std(torch.stack([seq[t] for seq in elite_seqs], dim=0), dim=0) for t in range(self.plan_horizon)], dim=0)
-            new_sigma = 1 / len(new_mu - 1) * torch.stack([torch.sum(torch.stack([torch.sqrt((seq[t] - new_mu[t])**2) for seq in elite_seqs], dim=0), dim=0) for t in range(self.plan_horizon)], dim=0)
+            #
+            # Old way, with bug in normalization term:
+            # new_mu = torch.stack([torch.mean(torch.stack([seq[t] for seq in elite_seqs], dim=0), dim=0) for t in range(self.plan_horizon)], dim=0)
+            # new_sigma = 1 / len(new_mu - 1) * torch.stack([torch.sum(torch.stack([torch.sqrt((seq[t] - new_mu[t])**2) for seq in elite_seqs], dim=0), dim=0) for t in range(self.plan_horizon)], dim=0)
+            new_mu = elite_seqs.mean(dim=0)
+            new_sigma = elite_seqs.std(dim=0)
+            
+            
             mu = self.alpha * mu + (1 - self.alpha) * new_mu
             mu = torch.clamp(mu, act_low, act_high)
             sigma = torch.nan_to_num(self.alpha * sigma + (1 - self.alpha) * new_sigma, nan=self.sigma_min)
@@ -367,7 +387,8 @@ class ClosedLoopTactileTrainer(BaseTrainer):
             tactile_buffer.append(tactile)
             feature_buffer.append(feature)
             act_buffer.append(act)
-            if epoch >= 0: self.saved_state[epoch*self.num_rollout_steps + idx] = torch.as_tensor([*next_obs[0:7], rew, *env_act], device='cpu')
+            if epoch >= 0: 
+                self.saved_state[epoch*self.num_rollout_steps + idx] = torch.as_tensor([*feature, rew, *env_act], device='cpu')
 
             # Maintain sliding window size
             total_len = self.past_length + self.pred_length
@@ -463,8 +484,8 @@ class ClosedLoopTactileTrainer(BaseTrainer):
             pbar.update(1)
 
             self.collect_rollouts(epoch)
-            if (epoch + 1) % 50 == 0:
-                # show model video every 50 epochs
+            if (epoch + 1) % 25 == 0:
+                # show model video every 25 epochs
                 self.model.eval()
                 if self.config['train']['eval']: self.evaluate(self.config['run_path'])
                 self.model.train()

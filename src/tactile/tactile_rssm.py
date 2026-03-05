@@ -66,8 +66,8 @@ class TactileRSSM(RSSME2C):
 
         for t in range(T):
             # Encode tactile and feature
-            tac = tactile[:, t]
-            feat = feature[:, t]
+            tac = tactile[:, t].float()
+            feat = feature[:, t].float()
             tac_enc = self.encoder(tac)
             feat_enc = self.feature_encoder(feat)
             enc = torch.cat([tac_enc, feat_enc], dim=-1)
@@ -157,7 +157,7 @@ class TactileRSSM(RSSME2C):
         outputs = self.transition(tactile, feature, tactile_next, feature_next, u, zs)
         return outputs
     
-class RSSMLoss(nn.Module):
+class TactileRSSMLoss(nn.Module):
     """
     RSSM loss, made with PyTorch.
     """
@@ -189,55 +189,17 @@ class RSSMLoss(nn.Module):
             - 1
         ).sum(dim=-1)
     
-    def expand_uncertainty(self, logvar, target):
-        """
-        Ensure uncertainty (log variance) output from decoder is of correct shape to be used by 
-        gaussian_nll loss function in PyTorch API.
-
-        Args:
-            logvar: uncertainty tensor (any of:
-                    [B], [B,1], [B,1,1,1], [B,K,H,W], [B,C,H,W])
-                    where C % k == 0
-            target: image tensor [B,C,H,W]
-        """
-        B, T, C, H, W = target.shape
-
-        # Ensure 5D
-        while logvar.dim() < 5:
-            logvar = logvar.unsqueeze(-1)
-
-        # [B,T,1,1,1] -> [B,T,C,H,W]
-        if logvar.shape[2] == 1:
-            logvar = logvar.expand(B, T, C, H, W)
-
-        # [B,T,K,H,W] where K != C
-        elif logvar.shape[2] != C:
-            if C % logvar.shape[3] != 0:
-                raise ValueError(
-                    f"Cannot expand uncertainty with {logvar.shape[2]} channels "
-                    f"to match image with {C} channels"
-                )
-            
-            # Tile uncertainty to be shape compatible
-            repeat_factor = C // logvar.shape[2]
-            logvar = logvar.repeat(1, 1, repeat_factor, 1, 1)
-
-        return logvar
 
     def forward(self, tr, epoch):
         # Reconstruction loss
-        x_pred_uncertainty = self.expand_uncertainty(tr['x_pred_uncertainty'], tr['x_pred'])
         if self.image_loss == 'mse':
-            recon = self.recon_mult*nn.functional.mse_loss(tr['x_next'], tr['x_pred'], reduction='mean')
-            recon += self.recon_mult*nn.functional.mse_loss(tr['x'][:, -1], tr['x_recon'], reduction='mean') # only reconstruct last in past_length
-        elif self.image_loss == 'nll':
-            # TODO: Add reconstruction loss for tr['x_recon']
-            recon = nn.functional.gaussian_nll_loss(
-                tr['x_next'],
-                tr['x_pred'], 
-                torch.exp(x_pred_uncertainty) + 1e-6,
-                reduction='mean'
-            )
+            # TODO: Need separate coefficients for tactile and feature recon?
+            tactile_recon = self.recon_mult*nn.functional.mse_loss(tr['tactile_next'], tr['tactile_pred'], reduction='mean')
+            tactile_recon += self.recon_mult*nn.functional.mse_loss(tr['tactile'][:, -1], tr['tactile_recon'], reduction='mean') # only reconstruct last in past_length
+            feature_recon = self.recon_mult*nn.functional.mse_loss(tr['feature_next'], tr['feature_pred'], reduction='mean')
+            feature_recon += self.recon_mult*nn.functional.mse_loss(tr['feature'][:, -1], tr['feature_recon'], reduction='mean')
+        else:
+            raise NotImplementedError(f"Image loss {self.image_loss} not supported!")
 
         # Encoding KL Divergence
         # KL loss (posterior vs prior)
@@ -251,13 +213,14 @@ class RSSMLoss(nn.Module):
         kld = kld.mean()
         kld = self.kld_anneal(epoch)*kld
 
-        loss = recon + kld
+        loss = tactile_recon + feature_recon + kld
         if torch.isnan(loss):
             breakpoint()
 
         # Make return dictionary for loss values
         loss_return = {
-            r"$x$ Reconstruction Loss": recon.detach().cpu().item(),
+            "Tactile Reconstruction Loss": tactile_recon.detach().cpu().item(),
+            "Feature Reconstruction Loss": feature_recon.detach().cpu().item(),
             "KLD": kld.detach().cpu().item(),
         }
         return loss, loss_return

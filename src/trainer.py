@@ -123,8 +123,7 @@ class BaseTrainer():
         """
         print('\n*** EVAL ***\n')
         self.model.eval()
-        # self.evaluator.eval(run_path)
-        self.evaluator.visualize_planner(self, run_path, max_steps=50, closed_loop=True)
+        self.evaluator.render(self, run_path, max_steps=50, closed_loop=True)
 
     def save(self, config_save, run_path, model_name='model.pt'):
         """

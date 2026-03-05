@@ -1,14 +1,23 @@
 import torch
 import random
 from pathlib import Path
+import matplotlib.pyplot as plt
+from tqdm import tqdm
+import numpy as np
+from pyvirtualdisplay import Display
+from matplotlib.animation import FuncAnimation, FFMpegWriter
 
 from src.replay_buffer import ReplayBuffer
+from src.tactile.gen_tactile import get_env_modes, process_tactile, process_feature, tactile_envs
 
 # Get paths relative to the project root
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 DATA_PATH = PROJECT_ROOT / "data"
 CONFIG_PATH = PROJECT_ROOT / "config"
 
+#
+# ---------- Data Management and Sampling ----------
+# 
 class TactileDataset():
     """
     An tactile sample consists of a current tactile image + feature, a future tactile image + feature, and a control input.
@@ -95,3 +104,189 @@ class TactileReplayBuffer(ReplayBuffer):
         f_next = self.features_next[idx]
 
         return TactileReplayBufferSample(x, f, u, r, x_next, f_next, d)
+    
+#
+# ---------- Evaluation ----------
+# 
+class TactileEvaluator():
+    """
+    Class for evaluating model performance on a test set.
+    """
+    def __init__(self, model, batch_size, device, env_name, tactile_image_size):
+        # Params
+        self.model = model
+        self.batch_size = batch_size
+        self.device = device
+
+        self.disp = Display(visible=0, size=(480, 480))
+        self.disp.start()
+        self.env_name = env_name
+        self.env = tactile_envs[self.env_name](
+            max_steps=1000, # Will be limited in function
+            env_modes=get_env_modes(),
+            show_gui=True,             # Render in eval env
+            show_tactile=True,
+            image_size=tactile_image_size
+        )
+            
+
+    def eval(self, run_path, vid_max_frames=50):
+        self.model.eval()
+        print("\Calculating eval metrics...")
+        self.eval_metrics(run_path=run_path)
+        print("Generating latent space figure...")
+        self.dataset_latent_func(run_path)
+        print("\nGenerating trajectory video...")
+        self.eval_traj(run_path, max_frames=vid_max_frames)
+        # self.eval_latent(run_path)
+
+    def render(self, trainer, run_path, max_steps=25, closed_loop=True, env_reset_seed=None):
+        """
+        Render wrapper to enable/disable virtual display
+        """
+        # with Display(visible=0, size=(480, 480)):
+        self._render_video(trainer, run_path, max_steps, closed_loop, env_reset_seed)
+
+    def _render_video(self, trainer, run_path, max_steps=25, closed_loop=True, env_reset_seed=None):
+        """
+        Visualize trajectories using the trainer's planner/rollout logic.
+
+        Args:
+            trainer: Trainer instance (must expose env, model, device, past_length, pred_length/config).
+            run_path: Path to save the resulting video.
+            max_steps: Number of environment steps to visualize.
+            closed_loop: If True, feed ground-truth observations back into the model window.
+                         If False, feed the model's predicted next frame (open-loop rollout).
+        """
+        model = trainer.model
+        device = trainer.device
+        past_len = model.past_length if hasattr(model, 'past_length') else 3
+        pred_len = model.pred_length if hasattr(model, 'pred_length') else 3
+
+        try:
+            closed_loop_policy = trainer.config['closed_loop']['policy']
+        except:
+            print('No closed loop policy found in trainer config, defaulting to random')
+            closed_loop_policy = 'random'
+
+        if env_reset_seed is None:
+            env_reset_seed = np.random.randint(0, 1e2)
+        
+        saved_state = torch.zeros(trainer.saved_state.shape, device='cpu')
+
+        model.eval()
+        obs, _ = self.env.reset()
+
+        tactile_buffer = []
+        feature_buffer = []
+        act_buffer = []
+
+        render_frames = []
+        plan_obj_vals = []  # Objective function values per step
+        env_rew = []        # Env rewards [blind during training]
+
+        frame = self.env.render()
+        if frame is not None:
+            render_frames.append(frame)
+
+        # Seed buffer with first observation
+        for _ in range(past_len):
+            tactile_buffer.append(process_tactile(obs["tactile"]))
+            feature_buffer.append(process_feature(obs["extended_feature"]))
+
+        step_idx = 0
+        total_len = past_len + pred_len
+        if closed_loop_policy in ['pixel', 'dynamics']:
+            trainer._init_cem_mu_sig()
+            mu = trainer.init_control.clone()
+            sigma = trainer.sigma.clone()
+        for step_idx in tqdm(range(max_steps), desc="Rendering Eval Video"): # range(max_steps): #
+            # Take actions
+            if closed_loop_policy in ['pixel', 'dynamics']:
+                mu, costs, sigma = trainer._sample_cem(tactile_buffer[-past_len:], feature_buffer[-past_len:], mu=mu, sigma=sigma) # pred_len, act_size
+                action_seq = mu.clone()
+                plan_obj_vals.append(costs[0].clone().cpu().item())
+            else:
+                # repeat pred len number of times for action horizon
+                act = [self.env.action_space.sample() for _ in range(pred_len)]
+                action_seq = torch.from_numpy(np.array(act)).to(device)
+                plan_obj_vals.append(0.0)   # no cost info for random policy
+            env_act = action_seq.cpu().detach().numpy()[0]
+
+            # Step env
+            next_obs, rew, done, trunc, _ = self.env.step(env_act)
+
+            frame = self.env.render()
+            if frame is not None:
+                render_frames.append(frame)
+
+            tactile = process_tactile(next_obs["tactile"])
+            feature = process_feature(next_obs["extended_feature"])
+
+            tactile_buffer.append(tactile)
+            feature_buffer.append(feature)
+            act_buffer.append(torch.tensor(env_act))
+            env_rew.append(rew)
+
+            # Maintain sliding window
+            if len(tactile_buffer) > total_len:
+                tactile_buffer.pop(0)
+                feature_buffer.pop(0)
+                act_buffer.pop(0)
+
+            saved_state[step_idx] = torch.as_tensor([*feature, rew, *env_act], device='cpu')
+
+            # Model inputs
+            with torch.no_grad():
+                tactile_window = torch.stack(tactile_buffer[-trainer.model.past_length:], dim=0).unsqueeze(0).to(trainer.device)
+                feature_window = torch.stack(feature_buffer[-trainer.model.past_length:], dim=0).unsqueeze(0).to(trainer.device)
+                mu_prior, log_var_prior, zs = trainer.model.encode_posterior(tactile_window, feature_window)
+                h = torch.zeros(model.num_layers, 1, model.deterministic_size, device=trainer.device)
+                z = zs[:, -1]
+                tactile_recon = trainer.model.decoder(z)
+                feature_recon = trainer.model.feature_decoder(z)
+                tactile_recon_next = []
+                for act in action_seq:
+                    act_batch = act.view(1, -1).to(trainer.device)
+                    h, z_prior, mu_p, log_var_p = trainer.model.rssm_step(h, z.unsqueeze(1), act_batch)
+                    tactile_pred = trainer.model.decoder(z_prior)
+                    feature_pred = trainer.model.feature_decoder(z_prior)
+                    tactile_recon_next.append(tactile_pred.detach().cpu())
+                    
+                    if trainer.past_length > 1:
+                        tactile_frames = tactile_window[:, 1:]   # drop first frame
+                        feature_frames = feature_window[:, 1:]
+                        tactile_window = torch.cat([tactile_frames, tactile_pred.unsqueeze(1).detach()], dim=1)
+                        feature_window = torch.cat([feature_frames, feature_pred.unsqueeze(1).detach()], dim=1)
+                    else:
+                        tactile_window = tactile_pred.detach()  # past_length==1, just use pred image
+                        feature_window = feature_pred.detach()  # past_length==1, just use pred image
+                    mu_q, log_var_q, zs = trainer.model.encode_posterior(tactile_window, feature_window)
+                    z = zs[:, -1]
+
+        # Build visualization grid: 2 rows, (pred_len + 1) columns
+        fig, ax = plt.subplots(1, 1, figsize=(4, 4))
+        # ax.set_title(f"Pred t=0; {plan_obj_vals[0]:.2f}")
+
+        ims = []
+        # Initialize cells
+        ims.clear()
+        ims.append(ax.imshow(render_frames[0]))
+        ax.axis('off')
+
+        def update(frame_idx):
+            ims[0].set_data(render_frames[frame_idx])
+
+        ani = FuncAnimation(fig, update, frames=len(render_frames), interval=5.)
+        writer = FFMpegWriter(fps=20)
+        vid_name = f'{trainer.env_name}_{env_reset_seed}.mp4'
+        try:
+            filepath = run_path / vid_name
+            print(f'Saved planner visualization to {filepath}')
+            ani.save(filepath, writer=writer)
+        except Exception as e:
+            print(e)
+            print('Exception occurred, saved planner visualization to current directory')
+            ani.save(vid_name, writer=writer)
+        plt.close(fig)
+        return saved_state
