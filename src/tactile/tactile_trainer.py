@@ -185,58 +185,12 @@ class ClosedLoopTactileTrainer(BaseTrainer):
             - 1
         ).sum(dim=-1)
 
-    def _rollout_info_gain(self, window, action_seq, t0_dist=None):
-        """
-        KL Divergence across _latent states_ --> drives agent to dynamic regions
-        “go where stuff changes”
-        latent novelty
-        """
-        with torch.no_grad():
-            total_kl = 0.0
-
-            if self.uses_rssm:
-                h = torch.zeros(self.model.num_layers, 1, self.model.deterministic_size, device=self.device)
-                # TODO: can re-use t0 encoding during MPC instead of re-encoding for every action_seq
-                if t0_dist is None:
-                    mu_q, log_var_q, z_q = self.model.encode_posterior(window)
-                else:
-                    mu_q, log_var_q = t0_dist
-                    z_q = self.model.reparameterize(mu_q, log_var_q)
-                for act in action_seq:
-                    act_batch = act.view(1, -1).to(self.device)
-                    if len(z_q.shape) == 2:
-                        h, z_q, mu_p, log_var_p = self.model.rssm_step(h, z_q.unsqueeze(1), act_batch)
-                    else:
-                        h, z_q, mu_p, log_var_p = self.model.rssm_step(h, z_q, act_batch)
-                    
-                    # current vs t0
-                    # total_kl += self._kl_diag_gaussian(mu_p, log_var_p, mu_q, log_var_q).mean().item()
-
-                    # current vs t_prev
-                    total_kl += self._kl_diag_gaussian(mu_p, log_var_p, mu_q, log_var_q).mean().item()
-                    mu_q = mu_p
-                    log_var_q = log_var_p
-                    z_q = self.model.reparameterize(mu_q, log_var_q)
-            else:
-                # TODO: e2c-specific rollout function is outdated
-                mu_q, log_var_q, z_q = self._encode_posterior_e2c(window)
-                for act in action_seq:
-                    act_batch = act.view(1, -1).to(self.device)
-                    mu_p, log_var_p, z_prior = self.model.transition(z_q, mu_q, log_var_q, act_batch)
-                    x_pred = self._decode_latent(z_prior)
-                    frames = self._update_window(frames, x_pred)
-                    window = self._frames_to_tensor(frames)
-                    mu_q, log_var_q, z_q = self._encode_posterior_e2c(window)
-                    total_kl += self._kl_diag_gaussian(mu_p, log_var_p, mu_q, log_var_q).mean().item()
-
-            return total_kl / self.plan_horizon    # Average info gain per step
-
-    def rollout_info_gain_decoded_batch(self, window, action_samples, t0_dist):
+    def rollout_info_gain_decoded_batch(self, tactile_window, feature_window, action_samples, t0_dist):
         with torch.no_grad(), torch.cuda.amp.autocast():
             # TODO: Compare how learning architecture has changed, since mcar performace has decreased.
             B, T, A = action_samples.shape
             if t0_dist is None:
-                mu_q, log_var_q, zs = self.model.encode_posterior(window)
+                mu_q, log_var_q, zs = self.model.encode_posterior(tactile_window, feature_window)
             else:
                 mu_q, log_var_q, zs = t0_dist
             total_kl = torch.zeros(B, device=self.device)
@@ -274,18 +228,19 @@ class ClosedLoopTactileTrainer(BaseTrainer):
                     # compare with previous --> would expect more dramatic results
                     z = self.model.reparameterize(mu_q, log_var_q)
                 else:
-                    # Decode prior to observation space
-                    if self.model.output_uncertainty:
-                        x_pred, x_pred_uncertainty = self.model.decoder(z_prior)
-                    else:
-                        x_pred = self.model.decoder(z_prior)
+                    # Make predictions
+                    tactile_pred = self.model.decoder(z_prior)
+                    feature_pred = self.model.feature_decoder(z_prior)
 
                     if self.past_length > 1:
-                        window_frames = window[:, 1:]   # drop first frame
-                        window = torch.cat([window_frames, x_pred.unsqueeze(1).detach()], dim=1)
+                        tactile_frames = tactile_window[:, 1:]   # drop first frame
+                        feature_frames = feature_window[:, 1:]
+                        tactile_window = torch.cat([tactile_frames, tactile_pred.unsqueeze(1).detach()], dim=1)
+                        feature_window = torch.cat([feature_frames, feature_pred.unsqueeze(1).detach()], dim=1)
                     else:
-                        window = x_pred.detach()  # past_length==1, just use pred image
-                    mu_post, log_var_post, zs = self.model.encode_posterior(window)
+                        tactile_window = tactile_pred.detach()  # past_length==1, just use pred image
+                        feature_window = feature_pred.detach()
+                    mu_post, log_var_post, zs = self.model.encode_posterior(tactile_window, feature_window)
                     z = zs[:, -1]
                     mu_post = mu_post[:, -1]
                     log_var_post = log_var_post[:, -1]
@@ -310,7 +265,7 @@ class ClosedLoopTactileTrainer(BaseTrainer):
 
             return total_kl # / T # Average info gain per step
     
-    def _sample_cem(self, frame_buffer, mu=None, sigma=None):
+    def _sample_cem(self, tactile_buffer, feature_buffer, mu=None, sigma=None):
         # Initialize CEM distribution
         if mu is None:
             mu = self.init_control.clone() # (plan_horizon, action_size)
@@ -333,9 +288,10 @@ class ClosedLoopTactileTrainer(BaseTrainer):
             
             # Evaluate information gain for each sequence
             # window = torch.stack(frame_buffer[-self.past_length:], dim=0).unsqueeze(0).to(self.device)
-            window = torch.stack(frame_buffer[-self.past_length:], dim=0).unsqueeze(0).to(self.device).repeat(self.num_action_samples, 1, 1, 1, 1)
-            mu_prior, log_var_prior, z_prior = self.model.encode_posterior(window)
-            costs = self.rollout_info_gain_decoded_batch(window, action_samples, t0_dist=(mu_prior, log_var_prior, z_prior))
+            tactile_window = torch.stack(tactile_buffer[-self.past_length:], dim=0).unsqueeze(0).to(self.device).repeat(self.num_action_samples, 1, 1, 1, 1)
+            feature_window = torch.stack(feature_buffer[-self.past_length:], dim=0).unsqueeze(0).to(self.device).repeat(self.num_action_samples, 1, 1, 1, 1)
+            mu_prior, log_var_prior, z_prior = self.model.encode_posterior(tactile_window, feature_window)
+            costs = self.rollout_info_gain_decoded_batch(tactile_window, feature_window, action_samples, t0_dist=(mu_prior, log_var_prior, z_prior))
             
             # Select elite sequences
             num_elites = max(1, int(self.elite_frac * self.num_action_samples))
@@ -359,8 +315,8 @@ class ClosedLoopTactileTrainer(BaseTrainer):
 
         return mu, costs, sigma
     
-    def _select_information_action(self, frame_buffer, mu=None, sigma=None):
-        mu, costs, sigma = self._sample_cem(frame_buffer, mu=mu, sigma=sigma)
+    def _select_information_action(self, tactile_buffer, feature_buffer, mu=None, sigma=None):
+        mu, costs, sigma = self._sample_cem(tactile_buffer, feature_buffer, mu=mu, sigma=sigma)
         return mu, costs, sigma
 
     #
@@ -391,7 +347,7 @@ class ClosedLoopTactileTrainer(BaseTrainer):
                 if epoch == self.epochs_warmup and len(tactile_buffer) == self.past_length:
                     print(f'Switching to informative action selection using CEM over {self.num_action_samples} samples and {self.cem_iters} iterations. \n')
                 tic = time.time()
-                mu, costs, sigma = self._select_information_action(frame_buffer=tactile_buffer, mu=mu, sigma=sigma)
+                mu, costs, sigma = self._select_information_action(tactile_buffer=tactile_buffer, feature_buffer=feature_buffer, mu=mu, sigma=sigma)
                 act = mu[0]
                 toc = time.time()
                 if idx == 0 and epoch == self.epochs_warmup:
@@ -463,8 +419,10 @@ class ClosedLoopTactileTrainer(BaseTrainer):
 
             # Forward pass
             train_return = self.model(tactile, feature, tactile_next, feature_next, u)
-            train_return['x'] = tactile
-            train_return['x_next'] = tactile_next
+            train_return['tactile'] = tactile
+            train_return['feature'] = feature
+            train_return['tactile_next'] = tactile_next
+            train_return['feature_next'] = feature_next
 
             # Model loss and backprop
             model_loss, loss_return = self.model_criterion(train_return, epoch)
