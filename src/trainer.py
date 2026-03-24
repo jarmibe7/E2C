@@ -686,7 +686,10 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
         for _ in range(self.cem_iters):
             costs = torch.zeros(self.num_action_samples, device=self.device)
             # Sample action sequences from current distribution
-            action_samples = torch.normal(mu.unsqueeze(0), sigma.unsqueeze(0)).expand(self.num_action_samples, -1, -1)
+            action_samples = torch.normal(
+                mu.unsqueeze(0).repeat(self.num_action_samples, 1, 1),
+                sigma.unsqueeze(0).repeat(self.num_action_samples, 1, 1)
+            )
             # Clip to action space bounds
             action_samples = torch.clamp(action_samples, act_low, act_high)
             
