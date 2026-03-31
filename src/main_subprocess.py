@@ -14,18 +14,15 @@ yaml.SafeLoader.add_constructor(
 )
 
 #### DEFINE WHAT CUDA TO USE HERE ####
-DEVICE_TO_USE = 'cuda:1' # None
-NUM_EPOCHS = 250
-# saved updated version with CEM planning to pixel_5 folder (can rename to 8 or something, this is a valid run)
-# running with clipped loss for maxdyn and eig to _7 as well
+DEVICE_TO_USE = 'cuda:0' # None
+NUM_EPOCHS = 150
 
-# TODO: write down all valid directories for the model (and also try running updated CEM on old models?)
-
-for i in range(21, 22):
+for i in range(23, 24):
     # for config in [f'configs_final/{env}_{policy}_{i}' for policy in ['eig', 'maxdyn', 'random']]:
     # for policy in ['eig', 'maxdyn', 'random']:
-    for policy in ['maxdyn']:
-        for env in reversed(['coffee', 'button', 'door', 'drawer', 'faucet']):
+    # for policy in ['maxdyn', 'random']:
+    for policy in ['eig']:
+        for env in (['coffee', 'button', 'door', 'drawer', 'faucet']):
             config_name = f'configs_change_cam/{env}_{policy}_{7}'
             print(f"Loading config: {config_name}")
             with open(CONFIG_PATH / f"{config_name}.yaml", "r") as f:
@@ -38,6 +35,9 @@ for i in range(21, 22):
             if NUM_EPOCHS is not None:
                 config['train']['num_epochs'] = NUM_EPOCHS
             config['config_name'] = config_name
+            config['loss']['recon_mult'] = 300
+            config['trans']['alpha'] = 2e-5
+            
             config['loss']['free_nats'] = 0.0
             config['closed_loop']['sigma_init'] = 1.5
             config['closed_loop']['sigma_min'] = 0.25
@@ -57,10 +57,10 @@ for i in range(21, 22):
                 save_name = config['train']['dataset'].split('_')[0] + '_' + policy + '_' + str(config.get('seed', 0))
             run_path = RUNS_PATH / Path(config['train']['dataset'].split('_')[0]) / save_name
             model_path = run_path / 'model.pt'
-            if model_path.exists():
+            if model_path.exists() and policy != 'random':
                 config['train']['load_path'] = str(run_path)
             else:
-                print(f"I couldn't find a checkpoint...")
+                print(f"I couldn't find a checkpoint, training from scratch")
             # save updated config with device and load_path
             # new_config_path = CONFIG_PATH / Path(str(config_file).split('.yaml')[0] + "_test.yaml")
             new_config_path = CONFIG_PATH / config_file
@@ -71,12 +71,3 @@ for i in range(21, 22):
                 ["python3.10", "-m", "src.main", "--config", str(new_config_path)],
                 check=True,
             )
-
-            # if i == 3:
-            #     if env in ['button', 'door']:
-            #         continue # already did these
-            #     elif env == 'coffee' and policy == 'maxdyn':
-            #         continue
-            # elif i == 4 and env == 'door':
-            #     if policy == 'dynamics':
-            #         continue
