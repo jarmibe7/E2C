@@ -327,7 +327,8 @@ class ClosedLoopRandomTrainer(BaseTrainer):
         self.env_name = env_name
         if env_name in meta_world_envs:
             camera_name = 'corner3' if 'isom' in config['train']['dataset'] else 'corner'
-            self.env = gym.make('Meta-World/MT1', env_name=name_to_env[env_name], render_mode='rgb_array', camera_name=camera_name, max_episode_steps=2000)
+            # TODO: HARD CODE THE CHANGE IN line 153 of metaworld/sawyer_xyz_env.py to 5000
+            self.env = gym.make('Meta-World/MT1', max_episode_steps=5000, env_name=name_to_env[env_name], render_mode='rgb_array', camera_name=camera_name)
             if config['train']['dataset'].split('_')[-1][:-1] == '2':
                 self.meta_ts = 4
         else:
@@ -394,9 +395,6 @@ class ClosedLoopRandomTrainer(BaseTrainer):
         """
         super().save(config_save, run_path)
         if hasattr(self, 'saved_state'):
-            # Save logged states
-            # take velocity as well?
-            # torch.diff(self.saved_state[:, :3], dim=0, prepend=self.saved_state[0:1, :3])
             try:
                 filepath = run_path / 'training_states.pt'
                 print(f'Saved state tensor to {filepath}')
@@ -405,6 +403,15 @@ class ClosedLoopRandomTrainer(BaseTrainer):
                 print(e)
                 print('Exception occured, saved state tensor to current directory')
                 torch.save(self.saved_state, 'training_states.pt')
+        if hasattr(self, 'costs_rollout'):
+            try:
+                filepath = run_path / 'costs_rollout_500.pt'
+                print(f'Saved costs rollout tensor to {filepath}')
+                torch.save(self.costs_rollout, filepath)
+            except Exception as e:
+                print(e)
+                print('Exception occured, saved costs rollout tensor to current directory')
+                torch.save(self.costs_rollout, 'costs_rollout.pt')
 
     def collect_rollouts(self, epoch):
         """
@@ -526,6 +533,9 @@ class ClosedLoopRandomTrainer(BaseTrainer):
             pbar.update(1)
 
             self.collect_rollouts(epoch)
+            if hasattr(self, 'costs_rollout'):
+                self.plotter.log({
+                    'obj': self.costs_rollout[:(epoch+1)*self.num_rollout_steps]})
             if (epoch + 1) % 50 == 0:
                 # show model video every 50 epochs
                 self.model.eval()
@@ -555,6 +565,7 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
         self._init_cem_mu_sig()
         self.alpha = self.closed_cfg.get('alpha', 0.7)
         self.plan_horizon = self.closed_cfg.get('plan_horizon', self.pred_length)
+        self.costs_rollout = torch.zeros((self.num_epochs * self.num_rollout_steps, self.num_action_samples), device=self.device)
 
     def _init_cem_mu_sig(self):
         """
@@ -590,52 +601,6 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
             - 1
         ).sum(dim=-1)
 
-    def _rollout_info_gain(self, window, action_seq, t0_dist=None):
-        """
-        KL Divergence across _latent states_ --> drives agent to dynamic regions
-        “go where stuff changes”
-        latent novelty
-        """
-        with torch.no_grad():
-            total_kl = 0.0
-
-            if self.uses_rssm:
-                h = torch.zeros(self.model.num_layers, 1, self.model.deterministic_size, device=self.device)
-                # TODO: can re-use t0 encoding during MPC instead of re-encoding for every action_seq
-                if t0_dist is None:
-                    mu_q, log_var_q, z_q = self.model.encode_posterior(window)
-                else:
-                    mu_q, log_var_q = t0_dist
-                    z_q = self.model.reparameterize(mu_q, log_var_q)
-                for act in action_seq:
-                    act_batch = act.view(1, -1).to(self.device)
-                    if len(z_q.shape) == 2:
-                        h, z_q, mu_p, log_var_p = self.model.rssm_step(h, z_q.unsqueeze(1), act_batch)
-                    else:
-                        h, z_q, mu_p, log_var_p = self.model.rssm_step(h, z_q, act_batch)
-                    
-                    # current vs t0
-                    # total_kl += self._kl_diag_gaussian(mu_p, log_var_p, mu_q, log_var_q).mean().item()
-
-                    # current vs t_prev
-                    total_kl += self._kl_diag_gaussian(mu_p, log_var_p, mu_q, log_var_q).mean().item()
-                    mu_q = mu_p
-                    log_var_q = log_var_p
-                    z_q = self.model.reparameterize(mu_q, log_var_q)
-            else:
-                # TODO: e2c-specific rollout function is outdated
-                mu_q, log_var_q, z_q = self._encode_posterior_e2c(window)
-                for act in action_seq:
-                    act_batch = act.view(1, -1).to(self.device)
-                    mu_p, log_var_p, z_prior = self.model.transition(z_q, mu_q, log_var_q, act_batch)
-                    x_pred = self._decode_latent(z_prior)
-                    frames = self._update_window(frames, x_pred)
-                    window = self._frames_to_tensor(frames)
-                    mu_q, log_var_q, z_q = self._encode_posterior_e2c(window)
-                    total_kl += self._kl_diag_gaussian(mu_p, log_var_p, mu_q, log_var_q).mean().item()
-
-            return total_kl / self.plan_horizon    # Average info gain per step
-
     def rollout_info_gain_decoded_batch(self, window, action_samples, t0_dist):
         with torch.no_grad(), torch.cuda.amp.autocast():
             # TODO: Compare how learning architecture has changed, since mcar performace has decreased.
@@ -647,17 +612,13 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
             total_kl = torch.zeros(B, device=self.device)
 
             h = torch.zeros(self.model.num_layers, B, self.model.deterministic_size, device=self.device)
-            # only need to repeat if don't broadcast window across batch
-            # z = zs[:, -1].repeat(B, 1)
-            # mu_q = mu_q[:, -1].repeat(B, 1)
-            # log_var_q = log_var_q[:, -1].repeat(B, 1)
+            z = zs[:, -1] # take last timestep
+            mu_q = mu_q[:, -1] # take last timestep
+            log_var_q = log_var_q[:, -1] # take last timestep
             # old way, preserves past_length of zs?
             # z = zs.repeat(B, 1, 1)
             # mu_q = mu_q.repeat(B, 1, 1)
             # log_var_q = log_var_q.repeat(B, 1, 1)
-            z = zs[:, -1] # take last timestep
-            mu_q = mu_q[:, -1] # take last timestep
-            log_var_q = log_var_q[:, -1] # take last timestep
             # mu_t0 = mu_q[:, -1] # take last timestep
             # log_var_t0 = log_var_q[:, -1] # take last timestep
 
@@ -672,11 +633,9 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
                     # Encourage dynamics change
                     # total_kl += self._kl_diag_gaussian(mu_p, log_var_p, mu_t0, log_var_t0).mean().item()
                     total_kl += self._kl_diag_gaussian(mu_p, log_var_p, mu_q, log_var_q) # .mean().item()
+                    # compare with t0
                     mu_q = mu_p
                     log_var_q = log_var_p
-                    # compare with t0
-                    # z_prior = self.model.reparameterize(mu_q, log_var_q)
-                    # compare with previous --> would expect more dramatic results
                     z = self.model.reparameterize(mu_q, log_var_q)
                 else:
                     # Decode prior to observation space
@@ -694,26 +653,17 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
                     z = zs[:, -1]
                     mu_post = mu_post[:, -1]
                     log_var_post = log_var_post[:, -1]
-
-                    # # Posterior from updated observation window
-                    # enc = self.model.encoder(x_pred)
-                    # stats = self.model.post(enc)
-                    # mu_post, log_var_post = stats.chunk(2, dim=-1)
-
-                    # expected information gain - KL(q || p)
-                    total_kl += self._kl_diag_gaussian(mu_post, log_var_post, mu_p, log_var_p) # .mean(dim=-1)
-                    # TODO: try doing KLD over t0 z, instead of t_prev
-                    # total_kl += self._kl_diag_gaussian(mu_q, log_var_q, mu_p, log_var_p).mean(dim=-1)
-                    # total_kl += self._kl_diag_gaussian(mu_post, log_var_post, mu_q, log_var_q).mean(dim=-1)
-                    
                     # to compare over t0, comment this out
                     mu_q = mu_post
                     log_var_q = log_var_post
 
-                    # update belief <-- happens inherently with model.encode_posterior
-                    # zs = self.model.reparameterize(mu_post, log_var_post)
+                    # expected information gain - KL(q || p)
+                    total_kl += self._kl_diag_gaussian(mu_post, log_var_post, mu_p, log_var_p) # .mean(dim=-1)
+                    # KLD over t0 z, instead of t_prev
+                    # total_kl += self._kl_diag_gaussian(mu_q, log_var_q, mu_p, log_var_p).mean(dim=-1)
+                    # total_kl += self._kl_diag_gaussian(mu_post, log_var_post, mu_q, log_var_q).mean(dim=-1)
 
-            return total_kl # / T # Average info gain per step
+            return total_kl / T # Average info gain per step
     
     def _sample_cem(self, frame_buffer, mu=None, sigma=None):
         # Initialize CEM distribution
@@ -736,7 +686,10 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
         for _ in range(self.cem_iters):
             costs = torch.zeros(self.num_action_samples, device=self.device)
             # Sample action sequences from current distribution
-            action_samples = torch.normal(mu.unsqueeze(0), sigma.unsqueeze(0)).expand(self.num_action_samples, -1, -1)
+            action_samples = torch.normal(
+                mu.unsqueeze(0).repeat(self.num_action_samples, 1, 1),
+                sigma.unsqueeze(0).repeat(self.num_action_samples, 1, 1)
+            )
             # Clip to action space bounds
             action_samples = torch.clamp(action_samples, act_low, act_high)
             
@@ -799,6 +752,7 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
                     print(f'Switching to informative action selection using CEM over {self.num_action_samples} samples and {self.cem_iters} iterations. \n')
                 tic = time.time()
                 mu, costs, sigma = self._select_information_action(frame_buffer=frame_buffer, mu=mu, sigma=sigma)
+                self.costs_rollout[epoch*self.num_rollout_steps + idx] = costs
                 act = mu[0]
                 toc = time.time()
                 if idx == 0 and epoch == self.epochs_warmup:
@@ -817,14 +771,6 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
                 next_obs, rew, done, _, _ = self.env.step(env_act)
             self.saved_state[epoch*self.num_rollout_steps + idx] = torch.as_tensor([*next_obs[0:7], rew, *env_act], device='cpu')
 
-            # all tasks are continuous now, no need to reset
-            # if done:
-            #     obs, _ = self.env.reset()
-            #     done = False
-            #     frame_buffer = []
-            #     act_buffer = []
-            #     continue
-            # else:
             # Slide frame obs history frame buffer to next image
             if len(frame_buffer) == self.past_length + self.pred_length:
                 frame_buffer.pop(0)
@@ -852,21 +798,3 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
                 idx += 1
         self.model.train()
 
-class ClosedLoopHardwareTrainer(ClosedLoopInformativeTrainer):
-    """
-    Closed-loop trainer for real-world hardware experiments that selects actions
-    by maximizing expected information gain over candidate action sequences.
-    """
-    def __init__(self, dataset, model, config, device):
-        super().__init__(dataset, model, config, device)
-    
-    def reward_planner(self, frame_buffer):
-        pass
-    
-    def collect_rollouts(self, epoch):
-        """
-        Collect observations and save them to replay buffer
-        """
-        # TODO: do some version of this: 
-        # self.saved_state[idx] = torch.as_tensor([*next_obs[0:7], rew, *env_act], device='cpu')
-        pass
