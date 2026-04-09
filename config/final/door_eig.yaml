@@ -26,7 +26,7 @@ trans:
 train:
   dataset: door_2k      # Which dataset to use for training (in data/)
   batch_size: 128
-  num_epochs: 500
+  num_epochs: 250
   device: cuda:2             # cpu | cuda:0 | cuda:1 | cuda:2
   render: False              # Whether to render live interactive training plot, or simply save after training is finished
   save: True                 # Whether to save final trained model and training plot

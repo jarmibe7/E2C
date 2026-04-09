@@ -20,7 +20,7 @@ from src.model.rssm import RSSME2C
 from src.dataset import E2CDataset
 from src.utils import set_seed, anim_frames, format_time
 from src.model.policy import ConvStochasticPolicy
-from src.trainer import E2CPretrainer, RSSMPretrainer, ClosedLoopRandomTrainer, ClosedLoopInformativeTrainer, ClosedLoopHardwareTrainer
+from src.trainer import E2CPretrainer, RSSMPretrainer, ClosedLoopRandomTrainer, ClosedLoopInformativeTrainer
 from src.policy_trainer import ContactRewardActorCritic
 import argparse
 
@@ -37,7 +37,7 @@ yaml.SafeLoader.add_constructor(
 # Paths
 PROJECT_ROOT = Path(__file__).parent.parent
 DATA_PATH = PROJECT_ROOT / "data"
-CONFIG_PATH = PROJECT_ROOT / "config"
+CONFIG_PATH = PROJECT_ROOT / "config" / "final"
 RUNS_PATH = PROJECT_ROOT / "runs"
 
 def main():
@@ -143,8 +143,6 @@ def main():
             trainer = ClosedLoopInformativeTrainer(dataset, model, config, device)
         elif policy_type == 'maxdyn':
             trainer = ClosedLoopInformativeTrainer(dataset, model, config, device)
-        elif policy_type == "hardware":
-            trainer = ClosedLoopHardwareTrainer(dataset, model, config, device)
         elif policy_type == "direct_reward":
             # TODO: Implement shallow reward-based closed loop trainer
             pass

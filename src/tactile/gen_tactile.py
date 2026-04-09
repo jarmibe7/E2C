@@ -78,8 +78,12 @@ def get_env_modes():
         # "control_mode": "TCP_velocity_control",
 
         # randomisations
+        "rand_init_pos": False,      # Object position
         "rand_init_orn": True,     # Object orientation
         "rand_obj_mass": False,     # Object mass
+
+        # whether to render task goal
+        "use_goal": False,
 
         # straight or random trajectory
         # "traj_type": "straight",

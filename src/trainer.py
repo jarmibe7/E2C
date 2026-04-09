@@ -123,7 +123,7 @@ class BaseTrainer():
         """
         print('\n*** EVAL ***\n')
         self.model.eval()
-        self.evaluator.render(self, run_path, max_steps=50, closed_loop=True)
+        self.evaluator.render_video(self, run_path, max_steps=50, closed_loop=True)
 
     def save(self, config_save, run_path, model_name='model.pt'):
         """
@@ -532,9 +532,9 @@ class ClosedLoopRandomTrainer(BaseTrainer):
             pbar.update(1)
 
             self.collect_rollouts(epoch)
-            if hasattr(self, 'costs_rollout'):
-                self.plotter.log({
-                    'obj': self.costs_rollout[:(epoch+1)*self.num_rollout_steps]})
+            # if hasattr(self, 'costs_rollout'):
+            #     self.plotter.log({
+            #         'obj': self.costs_rollout[:(epoch+1)*self.num_rollout_steps]})
             if (epoch + 1) % 50 == 0:
                 # show model video every 50 epochs
                 self.model.eval()

@@ -163,6 +163,8 @@ class TactileEvaluator():
         past_len = model.past_length if hasattr(model, 'past_length') else 3
         pred_len = model.pred_length if hasattr(model, 'pred_length') else 3
 
+        meta_ts = trainer.config['train'].get('meta_ts', 1)
+
         try:
             closed_loop_policy = trainer.config['closed_loop']['policy']
         except:
@@ -214,7 +216,8 @@ class TactileEvaluator():
             env_act = action_seq.cpu().detach().numpy()[0]
 
             # Step env
-            next_obs, rew, done, trunc, _ = self.env.step(env_act)
+            for _ in range(meta_ts):
+                next_obs, rew, done, _, _ = self.env.step(env_act)
 
             frame = self.env.render()
             if frame is not None:

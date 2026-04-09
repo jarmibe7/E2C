@@ -50,6 +50,7 @@ class ClosedLoopTactileTrainer(BaseTrainer):
         # Initialize environment
         # disp = Display(visible=0, size=(480, 480))
         # disp.start()
+        self.meta_ts = config['train'].get('meta_ts', 1)
         self.env_name = config['train']['dataset'].split('_')[0]
         self.env = tactile_envs[self.env_name](
             max_steps=config['tactile']['episode_length'],
@@ -118,7 +119,7 @@ class ClosedLoopTactileTrainer(BaseTrainer):
         print('\n*** EVAL ***\n')
         self.model.eval()
         # self.evaluator.eval(run_path)
-        self.evaluator.render(self, run_path, max_steps=1000, closed_loop=True)
+        self.evaluator.render(self, run_path, max_steps=100, closed_loop=True)
 
     #
     # ---------- Utils ----------
@@ -379,7 +380,8 @@ class ClosedLoopTactileTrainer(BaseTrainer):
 
             # Take action and save state
             env_act = act.cpu().detach().numpy()
-            next_obs, rew, done, _, _ = self.env.step(env_act)
+            for _ in range(self.meta_ts):
+                next_obs, rew, done, _, _ = self.env.step(env_act)
 
             tactile = process_tactile(next_obs['tactile'])
             feature = process_feature(next_obs['extended_feature'])
@@ -484,7 +486,7 @@ class ClosedLoopTactileTrainer(BaseTrainer):
             pbar.update(1)
 
             self.collect_rollouts(epoch)
-            if (epoch + 1) % 25 == 0:
+            if (epoch + 1) % 50 == 0:
                 # show model video every 25 epochs
                 self.model.eval()
                 if self.config['train']['eval']: self.evaluate(self.config['run_path'])

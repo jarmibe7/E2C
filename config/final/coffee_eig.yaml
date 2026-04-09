@@ -26,8 +26,8 @@ trans:
 train:
   dataset: coffee_2k      # Which dataset to use for training (in data/)
   batch_size: 128
-  num_epochs: 500
-  device: cuda:1             # cpu | cuda:0 | cuda:1 | cuda:2
+  num_epochs: 250
+  device: cuda:2             # cpu | cuda:0 | cuda:1 | cuda:2
   render: False              # Whether to render live interactive training plot, or simply save after training is finished
   save: True                 # Whether to save final trained model and training plot
   eval: True                 # Whether to eval model performance immediately after training
