@@ -48,7 +48,7 @@ def parse_args() -> argparse.Namespace:
         help="Experiment preset (default: exocentric_rgb_only)",
     )
     parser.add_argument("--output", type=Path, default=None, help="Output image path (default: figures/env_inspect/{env}.png)")
-    parser.add_argument("--image-size", type=int, nargs=2, default=[128, 128], help="Image size (default: 128 128)")
+    parser.add_argument("--image-size", type=int, nargs=2, default=[64, 64], help="Image size (default: 64 64)")
     parser.add_argument(
         "--hide-tactile-geometry",
         action="store_true",
