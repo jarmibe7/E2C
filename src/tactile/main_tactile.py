@@ -18,6 +18,7 @@ import traceback
 from src.tactile.tactile_rssm import TactileRSSM
 from src.tactile.tactile_trainer import ClosedLoopTactileTrainer
 from src.tactile.tactile_utils import TactileDataset
+from src.tactile.gen_tactile import EXPERIMENT_PRESETS, resolve_env_name_from_dataset
 from src.utils import set_seed, anim_frames, format_time
 import argparse
 
@@ -61,10 +62,23 @@ def main():
     config_save = copy.deepcopy(config)
     timestamp = datetime.fromtimestamp(time.time()).strftime("%Y-%m-%d_%H-%M-%S")
     policy = config['closed_loop']['policy']
+    experiment = config.get('train', {}).get('experiment', 'legacy_tactile_ee_pose')
+    env_name = resolve_env_name_from_dataset(config['train']['dataset'])
+    if experiment not in EXPERIMENT_PRESETS:
+        raise ValueError(f"Unknown train.experiment '{experiment}'. Valid options: {sorted(EXPERIMENT_PRESETS.keys())}")
 
-    save_name = config['train']['dataset'].split('_')[0] + '_' + policy + '_tactile_' + str(config.get('seed', 0)) + timestamp
+    save_name = (
+        env_name
+        + '_'
+        + policy
+        + '_'
+        + experiment
+        + '_'
+        + str(config.get('seed', 0))
+        + timestamp
+    )
     
-    run_path = RUNS_PATH / Path(config['train']['dataset'].split('_')[0]) / save_name
+    run_path = RUNS_PATH / Path(env_name) / save_name
     config['run_path'] = run_path
     if 'cuda' in config['train']['device']: 
         assert torch.cuda.is_available(), f"{config['train']['device']} selected in {config_name}, but is unavailable!"
@@ -82,6 +96,7 @@ def main():
     model = TactileRSSM(
         enc_latent_size=config['vae']['enc_latent_size'],
         feature_latent_size=config['tactile']['feature_latent_size'],
+        feature_size=dataset.num_features,
         stochastic_size=config['trans']['stochastic_size'],
         deterministic_size=config['trans']['deterministic_size'],
         control_size=config['trans']['control_size'],
