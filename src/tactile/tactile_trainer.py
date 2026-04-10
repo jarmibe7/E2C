@@ -13,7 +13,7 @@ import os
 from src.utils import set_seed, format_time
 
 from src.tactile.tactile_rssm import TactileRSSMLoss
-from src.tactile.gen_tactile import get_env_modes, process_tactile, process_feature, tactile_envs
+from src.tactile.gen_tactile import build_observation_adapter, get_env_modes, resolve_env_name_from_dataset, tactile_envs
 from src.trainer import BaseTrainer, ClosedLoopInformativeTrainer
 from src.tactile.tactile_utils import TactileReplayBuffer, TactileEvaluator
 from tactile_gym.rl_envs.nonprehensile_manipulation.object_push.object_push_env import (
@@ -44,6 +44,7 @@ class ClosedLoopTactileTrainer(BaseTrainer):
         self.obj_fun = self.closed_cfg.get('policy', None)
         self.uses_rssm = hasattr(self.model, 'rssm_step') and hasattr(self.model, 'post')
         self.epochs_warmup = self.closed_cfg.get('epochs_warmup', 3)
+        self.obs_adapter = build_observation_adapter(config)
 
         self.model_criterion = TactileRSSMLoss(config['train']['num_epochs'], config['loss'])
 
@@ -51,10 +52,14 @@ class ClosedLoopTactileTrainer(BaseTrainer):
         # disp = Display(visible=0, size=(480, 480))
         # disp.start()
         self.meta_ts = config['train'].get('meta_ts', 1)
-        self.env_name = config['train']['dataset'].split('_')[0]
+        self.env_name = resolve_env_name_from_dataset(config['train']['dataset'])
         self.env = tactile_envs[self.env_name](
             max_steps=config['tactile']['episode_length'],
-            env_modes=get_env_modes(),
+            env_modes=get_env_modes(
+                config=config,
+                observation_mode=self.obs_adapter.observation_mode,
+                camera_mode=self.obs_adapter.camera_mode,
+            ),
             show_gui=False,             # Don't render in training env
             show_tactile=False,
             image_size=self.in_image_shape[1:],
@@ -88,7 +93,8 @@ class ClosedLoopTactileTrainer(BaseTrainer):
                 batch_size=config['train']['batch_size'], 
                 device=config['train']['device'],
                 env_name=self.env_name,
-                tactile_image_size=self.in_image_shape[1:]
+                tactile_image_size=self.in_image_shape[1:],
+                config=config,
             )
 
     #
@@ -198,12 +204,12 @@ class ClosedLoopTactileTrainer(BaseTrainer):
             - 1
         ).sum(dim=-1)
 
-    def rollout_info_gain_decoded_batch(self, tactile_window, feature_window, action_samples, t0_dist):
+    def rollout_info_gain_decoded_batch(self, image_window, feature_window, action_samples, t0_dist):
         with torch.no_grad(), torch.cuda.amp.autocast():
             # TODO: Compare how learning architecture has changed, since mcar performace has decreased.
             B, T, A = action_samples.shape
             if t0_dist is None:
-                mu_q, log_var_q, zs = self.model.encode_posterior(tactile_window, feature_window)
+                mu_q, log_var_q, zs = self.model.encode_posterior(image_window, feature_window)
             else:
                 mu_q, log_var_q, zs = t0_dist
             total_kl = torch.zeros(B, device=self.device)
@@ -242,18 +248,18 @@ class ClosedLoopTactileTrainer(BaseTrainer):
                     z = self.model.reparameterize(mu_q, log_var_q)
                 else:
                     # Make predictions
-                    tactile_pred = self.model.decoder(z_prior)
+                    image_pred = self.model.decoder(z_prior)
                     feature_pred = self.model.feature_decoder(z_prior)
 
                     if self.past_length > 1:
-                        tactile_frames = tactile_window[:, 1:]   # drop first frame
+                        image_frames = image_window[:, 1:]   # drop first frame
                         feature_frames = feature_window[:, 1:]
-                        tactile_window = torch.cat([tactile_frames, tactile_pred.unsqueeze(1).detach()], dim=1)
+                        image_window = torch.cat([image_frames, image_pred.unsqueeze(1).detach()], dim=1)
                         feature_window = torch.cat([feature_frames, feature_pred.unsqueeze(1).detach()], dim=1)
                     else:
-                        tactile_window = tactile_pred.detach()  # past_length==1, just use pred image
+                        image_window = image_pred.detach()  # past_length==1, just use pred image
                         feature_window = feature_pred.detach()
-                    mu_post, log_var_post, zs = self.model.encode_posterior(tactile_window, feature_window)
+                    mu_post, log_var_post, zs = self.model.encode_posterior(image_window, feature_window)
                     z = zs[:, -1]
                     mu_post = mu_post[:, -1]
                     log_var_post = log_var_post[:, -1]
@@ -278,7 +284,7 @@ class ClosedLoopTactileTrainer(BaseTrainer):
 
             return total_kl # / T # Average info gain per step
     
-    def _sample_cem(self, tactile_buffer, feature_buffer, mu=None, sigma=None):
+    def _sample_cem(self, image_buffer, feature_buffer, mu=None, sigma=None):
         # Initialize CEM distribution
         if mu is None:
             mu = self.init_control.clone() # (plan_horizon, action_size)
@@ -304,10 +310,10 @@ class ClosedLoopTactileTrainer(BaseTrainer):
             action_samples = torch.clamp(action_samples, act_low, act_high)
             
             # Evaluate information gain for each sequence
-            tactile_window = torch.stack(tactile_buffer[-self.past_length:], dim=0).unsqueeze(0).to(self.device).repeat(self.num_action_samples, 1, 1, 1, 1)
+            image_window = torch.stack(image_buffer[-self.past_length:], dim=0).unsqueeze(0).to(self.device).repeat(self.num_action_samples, 1, 1, 1, 1)
             feature_window = torch.stack(feature_buffer[-self.past_length:], dim=0).unsqueeze(0).to(self.device).repeat(self.num_action_samples, 1, 1)
-            mu_prior, log_var_prior, z_prior = self.model.encode_posterior(tactile_window, feature_window)
-            costs = self.rollout_info_gain_decoded_batch(tactile_window, feature_window, action_samples, t0_dist=(mu_prior, log_var_prior, z_prior))
+            mu_prior, log_var_prior, z_prior = self.model.encode_posterior(image_window, feature_window)
+            costs = self.rollout_info_gain_decoded_batch(image_window, feature_window, action_samples, t0_dist=(mu_prior, log_var_prior, z_prior))
             
             # Select elite sequences
             num_elites = max(1, int(self.elite_frac * self.num_action_samples))
@@ -336,8 +342,8 @@ class ClosedLoopTactileTrainer(BaseTrainer):
 
         return mu, costs, sigma
     
-    def _select_information_action(self, tactile_buffer, feature_buffer, mu=None, sigma=None):
-        mu, costs, sigma = self._sample_cem(tactile_buffer, feature_buffer, mu=mu, sigma=sigma)
+    def _select_information_action(self, image_buffer, feature_buffer, mu=None, sigma=None):
+        mu, costs, sigma = self._sample_cem(image_buffer, feature_buffer, mu=mu, sigma=sigma)
         return mu, costs, sigma
 
     #
@@ -350,31 +356,31 @@ class ClosedLoopTactileTrainer(BaseTrainer):
         # Initialize env and buffers
         self.model.eval()
         obs, _ = self.env.reset()
-        tactile_buffer = []
+        image_buffer = []
         feature_buffer = []
         act_buffer = []
         idx = 0
 
         # Seed initial observation into buffer
-        tactile_buffer.append(process_tactile(obs["tactile"]))
-        feature_buffer.append(process_feature(obs["extended_feature"]))
+        image_buffer.append(self.obs_adapter.process_image(obs))
+        feature_buffer.append(self.obs_adapter.process_feature(obs, self.env))
         
         self._init_cem_mu_sig()
         mu = self.init_control.clone()
         sigma = self.sigma.clone()
         while idx < self.num_rollout_steps:
             # Select action using random or informative policy based on epoch and buffer length
-            if epoch >= self.epochs_warmup and len(tactile_buffer) >= self.past_length:
-                if epoch == self.epochs_warmup and len(tactile_buffer) == self.past_length:
+            if epoch >= self.epochs_warmup and len(image_buffer) >= self.past_length:
+                if epoch == self.epochs_warmup and len(image_buffer) == self.past_length:
                     print(f'Switching to informative action selection using CEM over {self.num_action_samples} samples and {self.cem_iters} iterations. \n')
                 tic = time.time()
-                mu, costs, sigma = self._select_information_action(tactile_buffer=tactile_buffer, feature_buffer=feature_buffer, mu=mu, sigma=sigma)
+                mu, costs, sigma = self._select_information_action(image_buffer=image_buffer, feature_buffer=feature_buffer, mu=mu, sigma=sigma)
                 act = mu[0]
                 toc = time.time()
                 if idx == 0 and epoch == self.epochs_warmup:
                     print(f"CEM planning will take ~{((toc - tic)*self.num_rollout_steps/60):.3f} minutes.")
             else:
-                if epoch == 0 and len(tactile_buffer) == 1: 
+                if epoch == 0 and len(image_buffer) == 1: 
                     print(f'Initializing data from random actions. \n')
                 act = torch.from_numpy(self.env.action_space.sample()).to(self.device)
 
@@ -383,10 +389,10 @@ class ClosedLoopTactileTrainer(BaseTrainer):
             for _ in range(self.meta_ts):
                 next_obs, rew, done, _, _ = self.env.step(env_act)
 
-            tactile = process_tactile(next_obs['tactile'])
-            feature = process_feature(next_obs['extended_feature'])
+            image = self.obs_adapter.process_image(next_obs)
+            feature = self.obs_adapter.process_feature(next_obs, self.env)
 
-            tactile_buffer.append(tactile)
+            image_buffer.append(image)
             feature_buffer.append(feature)
             act_buffer.append(act)
             if epoch >= 0: 
@@ -394,15 +400,15 @@ class ClosedLoopTactileTrainer(BaseTrainer):
 
             # Maintain sliding window size
             total_len = self.past_length + self.pred_length
-            if len(tactile_buffer) > total_len:
-                tactile_buffer.pop(0)
+            if len(image_buffer) > total_len:
+                image_buffer.pop(0)
                 feature_buffer.pop(0)
                 act_buffer.pop(0)
 
             # Save sample when buffer full
-            if len(tactile_buffer) == total_len:
+            if len(image_buffer) == total_len:
 
-                tactile_add = torch.stack(tactile_buffer[:self.past_length], dim=0)
+                tactile_add = torch.stack(image_buffer[:self.past_length], dim=0)
                 feature_add = torch.stack(feature_buffer[:self.past_length], dim=0)
 
                 act_add = torch.stack(
@@ -412,7 +418,7 @@ class ClosedLoopTactileTrainer(BaseTrainer):
                     ]
                 )
 
-                next_tactile_add = torch.stack(tactile_buffer[self.past_length:], dim=0)
+                next_tactile_add = torch.stack(image_buffer[self.past_length:], dim=0)
                 next_feature_add = torch.stack(feature_buffer[self.past_length:], dim=0)
 
 

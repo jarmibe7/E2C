@@ -1,67 +1,76 @@
-## E2C: Embed to Control
-**Authors: Jared Berry, Ayush Gaggar**
+# E2C: Embed to Control
 
-#### Objective
-The goal of this project was to implement the architecture of Embed to Control: A Locally Linear Latent Dynamics Model for Control from Raw Images.
+PyTorch codebase for latent world models and control (E2C + RSSM variants), with tactile-gym dataset generation and rendering utilities.
 
-#### Software Format
-- e2c.py<br>
-Main E2C model architecture.
+## Quick Setup
 
-- encode.py<br>
-Convolutional encoder/decoder architecture
-
-- gen_dummy_dataset.py<br>
-Script for generating a dummy dataset to test E2C dimensions/pipeline
-
-- train.py<br>
-Main training script for E2C.
-
-- utils.py<br>
-Utility functions.
-
-#### Python Notetbooks
-- E2C_Dataset_Generation.ipynb<br>
-Generate a simple particle in gravity image dataset with lagrangian dynamics.
-
-To run `embed_to_control_V6.ipynb`, make sure to first collect data using `rl_collect_data.ipynb`, saving things in accordance with the ImageDatasetV2 class in `models.py`.
-
-- Embed_to_Control.ipynb<br>
-Main E2C architecture.
-
-#### Running training
-1. Specify dataset params in src/data_gen/gen_gym and run the following command:
-```
-python -m src.data_gen.gen_gym
-```
-2. Create a training config file in config/
-3. Run the following command:
-```
-python -m src.main
+```bash
+cd /home/jarmibe7/E2C
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements_linux.txt
+pip install -e .
 ```
 
-#### Running on server
-```ssh -v jarmibe7@dingo.mech.northwestern.edu```
+## Main Training
 
-edit file /etc/motd_bash
+Run with a config in `config/final`:
 
-Write log on which GPU is being used
+```bash
+source .venv/bin/activate
+python -m src.main --config rssm_push_active_v0
+```
 
-Check ```nvtop``` to see GPU resources
+## Tactile Dataset Generation (New)
 
-To run overnight and prevent from closing:
+Generate tactile-gym datasets with experiment presets:
 
-```screen -S e2c```
+```bash
+source .venv/bin/activate
+python -m src.tactile.gen_tactile \
+	--env object_push \
+	--preset egocentric_rgb_ee_pose \
+	--size 1000 \
+	--past-length 3 \
+	--pred-length 3 \
+	--image-size 128 128 \
+	--output-name object_push_1k
+```
 
-And run the training script. Then to detach:
+Available presets:
+- `exocentric_rgb_only`
+- `egocentric_rgb_ee_pose`
+- `egocentric_tactile_ee_pose_block_pose`
+- `legacy_tactile_ee_pose`
 
-```Ctrl + A```   then   ```D```
+## Render/Inspect One Frame
 
-To resume:
+Render a single environment frame and save a combined observation+render image:
 
-```screen -r e2c```
+```bash
+source .venv/bin/activate
+python -m src.tactile.render_env_frame --experiment egocentric_rgb_ee_pose
+```
 
-#### Citations
-> M. Watter, J. T. Springenberg, J. Boedecker, and M. Riedmiller, “Embed to Control: A Locally Linear Latent Dynamics Model for Control from Raw Images,” in *Advances in Neural Information Processing Systems 28 (NIPS 2015)*, Montréal, Canada, Dec. 2015, pp. 2746–2754. [Online]. Available: [https://arxiv.org/abs/1506.07365](https://arxiv.org/abs/1506.07365)
+Useful options:
+
+```bash
+# exocentric baseline
+python -m src.tactile.render_env_frame --experiment exocentric_rgb_only
+
+# custom output
+python -m src.tactile.render_env_frame \
+	--experiment egocentric_rgb_ee_pose \
+	--output figures/env_inspect/custom.png
+
+# force-hide tactile sensor geometry (egocentric already defaults to hidden)
+python -m src.tactile.render_env_frame \
+	--experiment egocentric_rgb_ee_pose \
+	--hide-tactile-geometry
+```
+
+## Citation
+
+M. Watter, J. T. Springenberg, J. Boedecker, and M. Riedmiller, “Embed to Control: A Locally Linear Latent Dynamics Model for Control from Raw Images,” NIPS 2015. https://arxiv.org/abs/1506.07365
 
 

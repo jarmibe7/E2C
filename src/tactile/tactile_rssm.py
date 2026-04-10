@@ -32,14 +32,14 @@ class TactileRSSM(RSSME2C):
         uncertainty_output: Whether to use ChannelUncertainty decoder
     """
     def __init__(self, feature_latent_size, enc_latent_size, stochastic_size, deterministic_size,
-                 control_size, past_length, pred_length, conv_params, device, output_uncertainty=False):
+                 control_size, past_length, pred_length, conv_params, device, output_uncertainty=False,
+                 feature_size=6):
         super().__init__(enc_latent_size, stochastic_size, deterministic_size, control_size, past_length, 
                          pred_length, conv_params, device, output_uncertainty=output_uncertainty, img_channel_count=1)
         
         self.feature_latent_size = feature_latent_size
 
-        # TODO: Don't hardcode the feature size
-        self.feature_size = 6
+        self.feature_size = feature_size
         self.feature_encoder = nn.Sequential(
             nn.Linear(self.feature_size, self.feature_latent_size),
             nn.ReLU(),
@@ -196,8 +196,11 @@ class TactileRSSMLoss(nn.Module):
             # TODO: Need separate coefficients for tactile and feature recon?
             tactile_recon = self.recon_mult*nn.functional.mse_loss(tr['tactile_next'], tr['tactile_pred'], reduction='mean')
             tactile_recon += self.recon_mult*nn.functional.mse_loss(tr['tactile'][:, -1], tr['tactile_recon'], reduction='mean') # only reconstruct last in past_length
-            feature_recon = self.recon_mult*nn.functional.mse_loss(tr['feature_next'], tr['feature_pred'], reduction='mean')
-            feature_recon += self.recon_mult*nn.functional.mse_loss(tr['feature'][:, -1], tr['feature_recon'], reduction='mean')
+            if tr['feature'].shape[-1] > 0:
+                feature_recon = self.recon_mult*nn.functional.mse_loss(tr['feature_next'], tr['feature_pred'], reduction='mean')
+                feature_recon += self.recon_mult*nn.functional.mse_loss(tr['feature'][:, -1], tr['feature_recon'], reduction='mean')
+            else:
+                feature_recon = torch.zeros((), device=tr['tactile'].device)
         else:
             raise NotImplementedError(f"Image loss {self.image_loss} not supported!")
 

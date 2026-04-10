@@ -1,5 +1,5 @@
-import torch
 import random
+import torch
 from pathlib import Path
 import matplotlib.pyplot as plt
 from tqdm import tqdm
@@ -8,7 +8,12 @@ from pyvirtualdisplay import Display
 from matplotlib.animation import FuncAnimation, FFMpegWriter
 
 from src.replay_buffer import ReplayBuffer
-from src.tactile.gen_tactile import get_env_modes, process_tactile, process_feature, tactile_envs
+from src.tactile.gen_tactile import (
+    build_observation_adapter,
+    get_env_modes,
+    resolve_env_name_from_dataset,
+    tactile_envs,
+)
 
 # Get paths relative to the project root
 PROJECT_ROOT = Path(__file__).parent.parent.parent
@@ -24,21 +29,37 @@ class TactileDataset():
     """
     def __init__(self, config):
         # Load raw dataset
-        env_name = config['train']['dataset'].split('_')[0]
+        env_name = resolve_env_name_from_dataset(config['train']['dataset'])
         dataset_dir = DATA_PATH / env_name
         data = torch.load(dataset_dir / f"{config['train']['dataset']}.pt")
 
+        obs_adapter = build_observation_adapter(config)
+        self.image_source = data.get("image_source", obs_adapter.image_source)
+        self.camera_mode = data.get("camera_mode", obs_adapter.camera_mode)
+        self.feature_components = data.get("feature_components", obs_adapter.feature_components)
+
         # Observations
-        self.tactile = data["prev_tactile"]
-        self.next_tactile = data["next_tactile"]
-        self.in_img_shape = [self.tactile[0, 0].shape[0] * config['trans']['past_length'], *self.tactile[0, 0].shape[1:]]
+        if "prev_obs" in data and "next_obs" in data:
+            self.obs = data["prev_obs"]
+            self.next_obs = data["next_obs"]
+        else:
+            # Backward compatibility with older tactile-only datasets
+            self.obs = data["prev_tactile"]
+            self.next_obs = data["next_tactile"]
+
+        self.tactile = self.obs
+        self.next_tactile = self.next_obs
+        self.in_img_shape = [
+            self.obs[0, 0].shape[0] * config['trans']['past_length'],
+            *self.obs[0, 0].shape[1:]
+        ]
 
         self.feature = data["prev_feature"]
         self.next_feature = data["next_feature"]
         self.num_features = self.feature.shape[-1]
 
-        if len(self.tactile.shape) == 5:
-            self.past_length = self.tactile.shape[1]
+        if len(self.obs.shape) == 5:
+            self.past_length = self.obs.shape[1]
             assert self.past_length == config['trans']['past_length'], f"past_length={config['trans']['past_length']} in config file, but dataset has past_length={self.past_length}"
         else:
             self.past_length = 1
@@ -48,10 +69,10 @@ class TactileDataset():
         self.U = control
 
     def __len__(self):
-        return len(self.tactile)
+        return len(self.obs)
 
     def __getitem__(self, idx):
-        return self.tactile[idx], self.next_tactile[idx], self.feature[idx], self.next_feature[idx], self.U[idx]
+        return self.obs[idx], self.next_obs[idx], self.feature[idx], self.next_feature[idx], self.U[idx]
 
 class TactileReplayBufferSample():
     def __init__(self, t, f, u, r, t_next, f_next, d):
@@ -112,18 +133,23 @@ class TactileEvaluator():
     """
     Class for evaluating model performance on a test set.
     """
-    def __init__(self, model, batch_size, device, env_name, tactile_image_size):
+    def __init__(self, model, batch_size, device, env_name, tactile_image_size, config):
         # Params
         self.model = model
         self.batch_size = batch_size
         self.device = device
+        self.obs_adapter = build_observation_adapter(config)
 
         self.disp = Display(visible=0, size=(480, 480))
         self.disp.start()
         self.env_name = env_name
         self.env = tactile_envs[self.env_name](
             max_steps=1000, # Will be limited in function
-            env_modes=get_env_modes(),
+            env_modes=get_env_modes(
+                config=config,
+                observation_mode=self.obs_adapter.observation_mode,
+                camera_mode=self.obs_adapter.camera_mode,
+            ),
             show_gui=True,             # Render in eval env
             show_tactile=True,
             image_size=tactile_image_size
@@ -179,7 +205,7 @@ class TactileEvaluator():
         model.eval()
         obs, _ = self.env.reset()
 
-        tactile_buffer = []
+        image_buffer = []
         feature_buffer = []
         act_buffer = []
 
@@ -193,8 +219,8 @@ class TactileEvaluator():
 
         # Seed buffer with first observation
         for _ in range(past_len):
-            tactile_buffer.append(process_tactile(obs["tactile"]))
-            feature_buffer.append(process_feature(obs["extended_feature"]))
+            image_buffer.append(self.obs_adapter.process_image(obs))
+            feature_buffer.append(self.obs_adapter.process_feature(obs, self.env))
 
         step_idx = 0
         total_len = past_len + pred_len
@@ -205,7 +231,7 @@ class TactileEvaluator():
         for step_idx in tqdm(range(max_steps), desc="Rendering Eval Video"): # range(max_steps): #
             # Take actions
             if closed_loop_policy in ['pixel', 'dynamics']:
-                mu, costs, sigma = trainer._sample_cem(tactile_buffer[-past_len:], feature_buffer[-past_len:], mu=mu, sigma=sigma) # pred_len, act_size
+                mu, costs, sigma = trainer._sample_cem(image_buffer[-past_len:], feature_buffer[-past_len:], mu=mu, sigma=sigma) # pred_len, act_size
                 action_seq = mu.clone()
                 plan_obj_vals.append(costs[0].clone().cpu().item())
             else:
@@ -223,17 +249,17 @@ class TactileEvaluator():
             if frame is not None:
                 render_frames.append(frame)
 
-            tactile = process_tactile(next_obs["tactile"])
-            feature = process_feature(next_obs["extended_feature"])
+            image = self.obs_adapter.process_image(next_obs)
+            feature = self.obs_adapter.process_feature(next_obs, self.env)
 
-            tactile_buffer.append(tactile)
+            image_buffer.append(image)
             feature_buffer.append(feature)
             act_buffer.append(torch.tensor(env_act))
             env_rew.append(rew)
 
             # Maintain sliding window
-            if len(tactile_buffer) > total_len:
-                tactile_buffer.pop(0)
+            if len(image_buffer) > total_len:
+                image_buffer.pop(0)
                 feature_buffer.pop(0)
                 act_buffer.pop(0)
 
@@ -241,30 +267,30 @@ class TactileEvaluator():
 
             # Model inputs
             with torch.no_grad():
-                tactile_window = torch.stack(tactile_buffer[-trainer.model.past_length:], dim=0).unsqueeze(0).to(trainer.device)
+                image_window = torch.stack(image_buffer[-trainer.model.past_length:], dim=0).unsqueeze(0).to(trainer.device)
                 feature_window = torch.stack(feature_buffer[-trainer.model.past_length:], dim=0).unsqueeze(0).to(trainer.device)
-                mu_prior, log_var_prior, zs = trainer.model.encode_posterior(tactile_window, feature_window)
+                mu_prior, log_var_prior, zs = trainer.model.encode_posterior(image_window, feature_window)
                 h = torch.zeros(model.num_layers, 1, model.deterministic_size, device=trainer.device)
                 z = zs[:, -1]
-                tactile_recon = trainer.model.decoder(z)
+                image_recon = trainer.model.decoder(z)
                 feature_recon = trainer.model.feature_decoder(z)
-                tactile_recon_next = []
+                image_recon_next = []
                 for act in action_seq:
                     act_batch = act.view(1, -1).to(trainer.device)
                     h, z_prior, mu_p, log_var_p = trainer.model.rssm_step(h, z.unsqueeze(1), act_batch)
-                    tactile_pred = trainer.model.decoder(z_prior)
+                    image_pred = trainer.model.decoder(z_prior)
                     feature_pred = trainer.model.feature_decoder(z_prior)
-                    tactile_recon_next.append(tactile_pred.detach().cpu())
+                    image_recon_next.append(image_pred.detach().cpu())
                     
                     if trainer.past_length > 1:
-                        tactile_frames = tactile_window[:, 1:]   # drop first frame
+                        image_frames = image_window[:, 1:]   # drop first frame
                         feature_frames = feature_window[:, 1:]
-                        tactile_window = torch.cat([tactile_frames, tactile_pred.unsqueeze(1).detach()], dim=1)
+                        image_window = torch.cat([image_frames, image_pred.unsqueeze(1).detach()], dim=1)
                         feature_window = torch.cat([feature_frames, feature_pred.unsqueeze(1).detach()], dim=1)
                     else:
-                        tactile_window = tactile_pred.detach()  # past_length==1, just use pred image
+                        image_window = image_pred.detach()  # past_length==1, just use pred image
                         feature_window = feature_pred.detach()  # past_length==1, just use pred image
-                    mu_q, log_var_q, zs = trainer.model.encode_posterior(tactile_window, feature_window)
+                    mu_q, log_var_q, zs = trainer.model.encode_posterior(image_window, feature_window)
                     z = zs[:, -1]
 
         # Build visualization grid: 2 rows, (pred_len + 1) columns
