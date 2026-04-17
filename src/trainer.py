@@ -326,7 +326,8 @@ class ClosedLoopRandomTrainer(BaseTrainer):
         env_name = config['train']['dataset'].split('_')[0]
         self.env_name = env_name
         if env_name in meta_world_envs:
-            camera_name = 'corner3' if 'isom' in config['train']['dataset'] else 'corner'
+            if 'isom' in config['train']['dataset']: camera_name = 'corner3'
+            if 'gripper' in config['train']['dataset']: camera_name = 'gripperPOV'
             # TODO: HARD CODE THE CHANGE IN line 153 of metaworld/sawyer_xyz_env.py to 5000
             self.env = gym.make('Meta-World/MT1', max_episode_steps=5000, env_name=name_to_env[env_name], render_mode='rgb_array', camera_name=camera_name)
             if config['train']['dataset'].split('_')[-1][:-1] == '2':
@@ -590,7 +591,7 @@ class ClosedLoopInformativeTrainer(ClosedLoopRandomTrainer):
         self.sigma_min = self.closed_cfg.get('sigma_min', 0.05)     # Min value for clamping variance
         self.sigma = torch.ones_like(self.init_control, device=self.device) * self.sigma_init
         # self.sigma[:, -2] = self.sigma_init * 0.5   # Less variance on z-axis actions
-        # self.sigma[:, -1] = self.sigma_init * 0.25   # Less variance on gripper actions
+        # self.sigma[:, -1] = self.sigma_init * 0.5   # No variance on gripper actions
 
     @staticmethod
     def _kl_diag_gaussian(mu_q, log_var_q, mu_p, log_var_p):

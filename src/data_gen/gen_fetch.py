@@ -29,12 +29,13 @@ gym.register_envs(gymnasium_robotics)
 # Parameters for dataset
 env_name = 'drawer'                                           # Gym environment name
 dataset_size = int(2e3)                                     # Number of samples: (img, next_img, control) tuple
-OUTPUT_NAME = env_name + f'_isom_{dataset_size // 1000}k'        # Output name of dataset
+# OUTPUT_NAME = env_name + f'_isom_{dataset_size // 1000}k'        # Output name of dataset
+OUTPUT_NAME = env_name + f'_gripper_{dataset_size // 1000}k'        # Output name of dataset
 image_shape = (64, 64, 3)                                   # Downsampled image shape
 past_length = 3                                             # Number of previous observations to use for training
 pred_length = 3                                             # Number of timesteps to predict in the future
 new_dt = None                                               # Desired new timestep in seconds
-metaworld_cam_name = 'corner3' if OUTPUT_NAME.__contains__('isom') else 'corner'                        # Camera angle for metaworld environments: corner | behindGripper         
+metaworld_cam_name = 'gripperPOV'  # 'corner3' if OUTPUT_NAME.__contains__('isom') else 'corner'                        # Camera angle for metaworld environments: corner | behindGripper         
 # ---------------------------------
 # Only modify XML if new_dt is set
 if new_dt is not None:

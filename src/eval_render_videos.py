@@ -32,7 +32,7 @@ def load_trainer(config_name):
         config = yaml.safe_load(f)
     if 'cuda' in config['train']['device']: 
         assert torch.cuda.is_available(), f"{config['train']['device']} selected in {config_name}, but is unavailable!"
-    device = torch.device('cuda:2')
+    device = torch.device('cuda:0')
     dataset = E2CDataset(config)
     config['vae']['in_image_shape'] = dataset.in_img_shape
     num_out_channels = config['vae']['in_image_shape'][0] // config['trans']['past_length']    # Output only single frame
@@ -50,13 +50,13 @@ def load_trainer(config_name):
         output_uncertainty=(config['loss']['loss_type'] == 'uncertainty' or 'rssm' in config['loss']['loss_type'])
     )
 
-    # config['closed_loop']['samples'] = 300
-    # config['closed_loop']['plan_horizon'] = 8
-    # config['closed_loop']['sigma_init'] = 1.5
-    # config['closed_loop']['sigma_min'] = 0.15
-    # config['closed_loop']['elite_frac'] = 0.2
-    # config['closed_loop']['iters'] = 4
-    # config['closed_loop']['alpha'] = 0.1
+    config['closed_loop']['samples'] = 300
+    config['closed_loop']['plan_horizon'] = 8
+    config['closed_loop']['sigma_init'] = 0.15
+    config['closed_loop']['sigma_min'] = 0.05
+    config['closed_loop']['elite_frac'] = 0.1
+    config['closed_loop']['iters'] = 3
+    config['closed_loop']['alpha'] = 0.1
     # if config['closed_loop'].get('policy', None) == 'maxdyn':
     #     config['closed_loop']['sigma_min'] = 0.3
 
@@ -109,15 +109,14 @@ if __name__ == "__main__":
         'faucet': {}
     }
     try:
-        for i in range(22, 23):
-            for env in tqdm(['button', 'coffee', 'door', 'drawer', 'faucet']): #, 'button', 'door', 'drawer', 'faucet', 'coffee']:
+        for i in range(100, 101):
+            # for env in tqdm(['button', 'coffee', 'door', 'drawer', 'faucet']): #, 'button', 'door', 'drawer', 'faucet', 'coffee']:
+            for env in tqdm(['coffee']): #, 'button', 'door', 'drawer', 'faucet', 'coffee']:
             # for env in tqdm(['coffee', 'door', 'drawer', 'faucet']): #, 'button', 'door', 'drawer', 'faucet', 'coffee']:
             # for env in ['button']: #, 'button', 'door', 'drawer', 'faucet', 'coffee']:
                 # for policy, objective in tqdm(zip(['eig', 'maxdyn', 'random'], ['pixel', 'dynamics', 'random'])):
-                # for policy, objective in tqdm(zip(['eig', 'maxdyn'], ['pixel', 'dynamics'])):
+                for policy, objective in tqdm(zip(['maxdyn'], ['dynamics'])):
                 # for policy, objective in zip(['random'], ['random']):
-                # for policy, objective in zip(['eig'], ['pixel']):
-                for policy, objective in zip(['maxdyn', 'random'], ['dynamics', 'random']):
                 # for env in ['drawer', 'faucet', 'button', 'coffee', 'door']: # looks good...
                     # if policy == 'random':
                     #     config = "runs/{env}/{env}_{objective}_{i}/config.yaml".format(env=env, objective=objective, i=20)
@@ -125,11 +124,11 @@ if __name__ == "__main__":
                     config = "runs/{env}/{env}_{objective}_{i}/config.yaml".format(env=env, objective=objective, i=i)
                     # print(f"Evaluating config: {config}")
                     trainer = load_trainer(config)
-                    for render_seed in range(0, 10):
+                    for render_seed in range(0, 2):
                         # if env == 'button':
                         #     contact_count = render_video(trainer, max_steps=100, env_seed=int(10*render_seed), video_save_path=f"src/data_gen/contact/videos/{env}_{objective}_{i}")
                         # else:
-                        contact_count = render_video(trainer, max_steps=1000, env_seed=render_seed, video_save_path=f"src/data_gen/contact/videos/{env}_{objective}_{i}_500")
+                        contact_count = render_video(trainer, max_steps=250, env_seed=render_seed, video_save_path=f"src/data_gen/contact/videos/{env}_{objective}_{i}_150")
                         contacts_by_objective_env[env][objective] = contacts_by_objective_env[env].get(objective, []) + [contact_count]
                 print(f"Contacts so far: {contacts_by_objective_env}")
                 # # save results by environment after all policies
@@ -140,7 +139,7 @@ if __name__ == "__main__":
 
 
             # # save results to json
-            out_path = Path("src/data_gen/contact/") / f"contacts_seed_{i}_500.json"
+            out_path = Path("src/data_gen/contact/") / f"contacts_seed_{i}_150.json"
             with open(out_path, "w") as f:
                 json.dump(contacts_by_objective_env, f, indent=2)
             print(f"Saved contacts to {out_path}")
