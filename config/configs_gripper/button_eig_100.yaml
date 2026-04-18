@@ -1,0 +1,51 @@
+seed: 100
+vae:
+  enc_latent_size: 256
+  enc_kernel_size: 3
+  dec_kernel_size: 4
+  stride: 2
+  pad: 1
+loss:
+  loss_type: rssm
+  image_loss: mse
+  recon_mult: 300
+  beta: 0.0001
+  lambda: 0.001
+  kld_anneal_mode: linear
+  free_nats: 1.0
+  samples: 100
+trans:
+  stochastic_size: 16
+  deterministic_size: 256
+  past_length: 3
+  pred_length: 3
+  alpha: 2.0e-05
+  weight_decay: 0.0001
+train:
+  dataset: button_gripper_2k
+  batch_size: 128
+  num_epochs: 150
+  device: cuda:2
+  render: false
+  save: true
+  eval: true
+  plot_freq: 10000
+  train_ratio: 0.9
+  load_path: null
+  eval_only: false
+closed_loop:
+  closed_loop: true
+  policy: informative
+  epochs_warmup: 0
+  num_rollout_steps: 100
+  plan_horizon: 8
+  num_batches: 100
+  buffer_capacity: 2000
+  samples: 200
+  elite_frac: 0.2
+  iters: 3
+  init_control: random
+  sigma_init: 0.5
+  sigma_min: 0.25
+  alpha: 0.3
+config_name: configs_gripper/button_eig_100

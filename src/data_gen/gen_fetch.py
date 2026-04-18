@@ -1,57 +1,49 @@
 """
-Generate dataset from Gymnasium environment
+Generate an offline dataset from a Gymnasium / Meta-World environment.
 
-scp -r data/reacher jarmibe7@dingo.mech.northwestern.edu:~/E2C/
-scp jarmibe7@dingo.mech.northwestern.edu:~/E2C/videos/e2c_cartpole.mp4 C:\\Users\\jarmi\\MS_Thesis\\Media\\Videos
+Produces a ``.pt`` dict saved under ``data/<env_name>/<OUTPUT_NAME>.pt`` with:
+
+- ``prev_images``: float tensor ``[N, past_length, H, W, C]``, values in [0, 1].
+- ``next_images``: float tensor ``[N, pred_length, H, W, C]``, values in [0, 1].
+- ``actions``:     float tensor ``[N, pred_length, A]`` (or ``[N, pred_length, 1]``
+  for discrete action spaces).
+
+Accompanied by ``data/<env_name>/metadata.yaml`` which is extended in place
+each time a new dataset is generated for that env.
 
 Author: Jared Berry, Ayush Gaggar
 """
 import os
 import re
+import time
+from datetime import datetime
+from pathlib import Path
+
+import gymnasium as gym
+import gymnasium_robotics
+import matplotlib.pyplot as plt
+import metaworld  # noqa: F401  -- side-effect: registers Meta-World envs.
 import numpy as np
 import torch
-import time
-import gymnasium as gym
 import torchvision
-import matplotlib.pyplot as plt
-from pathlib import Path
-from pyvirtualdisplay import Display
-from tqdm import tqdm
 import yaml
-from datetime import datetime
-from PIL import Image
-import metaworld
+from tqdm import tqdm
 
-from src.utils import set_seed, format_time
-import gymnasium_robotics
+from src.utils import format_time, set_seed
+
 gym.register_envs(gymnasium_robotics)
 
 # Parameters for dataset
 env_name = 'drawer'                                           # Gym environment name
-dataset_size = int(2e3)                                     # Number of samples: (img, next_img, control) tuple
-# OUTPUT_NAME = env_name + f'_isom_{dataset_size // 1000}k'        # Output name of dataset
-OUTPUT_NAME = env_name + f'_gripper_{dataset_size // 1000}k'        # Output name of dataset
-image_shape = (64, 64, 3)                                   # Downsampled image shape
-past_length = 3                                             # Number of previous observations to use for training
-pred_length = 3                                             # Number of timesteps to predict in the future
-new_dt = None                                               # Desired new timestep in seconds
-metaworld_cam_name = 'gripperPOV'  # 'corner3' if OUTPUT_NAME.__contains__('isom') else 'corner'                        # Camera angle for metaworld environments: corner | behindGripper         
-# ---------------------------------
-# Only modify XML if new_dt is set
-if new_dt is not None:
-    mj_path = Path(os.path.dirname(gym.__file__)) / "envs" / "mujoco" / "assets"
-    xml_file = mj_path / f"{env_name}.xml"
-    xml_text = xml_file.read_text()
-    xml_text = re.sub(r'timestep="[^"]+"', f'timestep="{new_dt:.4f}"', xml_text)
+dataset_size = int(2e3)                                       # Number of samples: (img, next_img, control) tuple
+# OUTPUT_NAME = env_name + f'_isom_{dataset_size // 1000}k'   # Output name of dataset (alt camera)
+OUTPUT_NAME = env_name + f'_gripper_{dataset_size // 1000}k'  # Output name of dataset
+image_shape = (64, 64, 3)                                     # Downsampled image shape
+past_length = 3                                               # Number of previous observations to use for training
+pred_length = 3                                               # Number of timesteps to predict in the future
+new_dt = None                                                 # Desired new timestep in seconds (None = leave MJCF alone)
+metaworld_cam_name = 'gripperPOV'                             # corner | corner3 | behindGripper | gripperPOV
 
-    # Save new XML
-    new_xml_filename = f"{env_name}_timestep_{int(new_dt*1000)}_ms.xml"
-    new_xml_path = mj_path / new_xml_filename
-    new_xml_path.write_text(xml_text)
-else:
-    new_xml_filename = None
-
-# Get data directory
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 DATA_PATH = PROJECT_ROOT / "data"
 
@@ -292,17 +284,33 @@ def is_robot_contact_geometry(data, robot_geom, object_geom):
 
     return False
 
+def maybe_patch_mjcf_timestep(env_name, new_dt):
+    """If ``new_dt`` is provided, clone the env's MJCF with that timestep and
+    return the patched filename; otherwise return ``None``.
+
+    Called only from :func:`main` -- kept out of module load so importing this
+    module (e.g. from ``trainer.py``) doesn't touch the filesystem.
+    """
+    if new_dt is None:
+        return None
+    mj_path = Path(os.path.dirname(gym.__file__)) / "envs" / "mujoco" / "assets"
+    xml_file = mj_path / f"{env_name}.xml"
+    xml_text = xml_file.read_text()
+    xml_text = re.sub(r'timestep="[^"]+"', f'timestep="{new_dt:.4f}"', xml_text)
+    new_xml_filename = f"{env_name}_timestep_{int(new_dt * 1000)}_ms.xml"
+    (mj_path / new_xml_filename).write_text(xml_text)
+    return new_xml_filename
+
+
 def main():
     start_time = time.perf_counter()
-    import os
-    os.environ['MUJOCO_GL'] = 'egl'
-    # Create virtual display for running on server
-    # disp = Display(visible=0, size=(480, 480))
-    # disp.start()
-    
+    os.environ.setdefault('MUJOCO_GL', 'egl')
+
     # Buffers
     frame_buffer = []
     act_buffer = []
+
+    new_xml_filename = maybe_patch_mjcf_timestep(env_name, new_dt)
 
     # Create env
     if not env_name == 'cartpole' and new_xml_filename is not None:

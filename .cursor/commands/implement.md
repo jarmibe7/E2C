@@ -1,0 +1,1 @@
+If you are more than 90% confident on the next steps to implement after reviewing the specified plan, proceed with writing code. Otherwise, ask some follow up questions to gain a better understanding on the course of action. If implementing any design decisions, be sure to comment decisions in a careful manner.

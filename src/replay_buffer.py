@@ -1,27 +1,28 @@
 """
-Replay buffers for online policy training
+Replay buffers for online policy training.
 """
-import torch
 import random
+from typing import Tuple
+
+import torch
+
 
 class ReplayBuffer:
-    """
-    Simple ring buffer ReplayBuffer class, with random sampling.
+    """Simple ring buffer with random (without-replacement) minibatch sampling.
 
     Args:
-        img_shape: Shape of image obs is (past_length*C, H, W)
-        control_dim: Dimension of control vector
-        capacity: How many samples to hold at once
-        config: Config dictionary
+        img_shape: Shape of stacked image obs ``(past_length * C, H, W)``.
+        control_size: Dimension of the control vector.
+        capacity: Maximum number of transitions stored at once.
+        device: Torch device to keep tensors on.
+        config: Loaded yaml config; used to pull ``past_length`` / ``pred_length``.
     """
     def __init__(self, img_shape, control_size, capacity, device, config):
-        # Initialize ring buffer params
         self.ptr = 0
         self.size = 0
         self.capacity = capacity
         self.device = device
 
-        # Image and control buffers
         C_tot, H, W = img_shape
         C = C_tot // config['trans']['past_length']
         self.X = torch.zeros((capacity, config['trans']['past_length'], C, H, W), device=device)
@@ -36,26 +37,36 @@ class ReplayBuffer:
             self.U = torch.zeros((capacity, control_size), device=device)
             self.X_next = torch.zeros((capacity, C, H, W), device=device)
 
-    def __len__(self):
+    def __len__(self) -> int:
         return self.size
 
     @torch.no_grad()
-    def add(self, img, action, reward, next_img, done):
+    def add(
+        self,
+        img: torch.Tensor,
+        action: torch.Tensor,
+        reward: float,
+        next_img: torch.Tensor,
+        done: bool,
+    ) -> None:
+        """Insert one transition, evicting the oldest if capacity is reached."""
         self.X[self.ptr] = img.to(self.device).contiguous()
         self.U[self.ptr] = action.to(self.device)
         self.rewards[self.ptr] = torch.tensor([reward], device=self.device, dtype=torch.float32)
         self.X_next[self.ptr] = next_img.to(self.device).contiguous()
         self.dones[self.ptr] = torch.tensor([done], device=self.device, dtype=torch.float32)
 
-        # Update ring buffer params
         self.ptr = (self.ptr + 1) % self.capacity
         self.size = min(self.size + 1, self.capacity)
 
-    def sample(self, batch_size):
-        # Generate batch_size random samples from the replay buffer
-        # idx = torch.randint(0, self.size, (batch_size,), device=self.device)  # Samples with replacement
-        idx = random.sample(range(self.size), min(batch_size, self.size))  # Samples without replacement
+    def sample(
+        self, batch_size: int
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Sample a minibatch *without* replacement.
 
+        If ``batch_size > len(self)``, returns all available transitions.
+        """
+        idx = random.sample(range(self.size), min(batch_size, self.size))
         return (
             self.X[idx],
             self.U[idx],

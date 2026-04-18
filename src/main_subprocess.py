@@ -1,73 +1,51 @@
+"""
+Minimal sweep harness that launches ``src.main`` as a subprocess for each
+(env, policy, seed) combo. Override device / epochs / seed at the top and
+un-comment the policy/env tuples you want to run.
+"""
 import subprocess
+from pathlib import Path
+
 import yaml
-from pathlib import Path, PosixPath
-from src.eval_render_videos import posixpath_constructor, load_trainer
+
+from src.eval_render_videos import posixpath_constructor
+
 
 PROJECT_ROOT = Path(__file__).parent.parent
 CONFIG_PATH = PROJECT_ROOT / "config"
 RUNS_PATH = PROJECT_ROOT / "runs"
 
-# define yaml_safe load constructor to handle PosixPath
 yaml.SafeLoader.add_constructor(
     "tag:yaml.org,2002:python/object/apply:pathlib.PosixPath",
     posixpath_constructor,
 )
 
 #### DEFINE WHAT CUDA TO USE HERE ####
-DEVICE_TO_USE = 'cuda:1' # None
-NUM_EPOCHS = 150
+DEVICE_TO_USE = 'cuda:1'    # e.g. 'cuda:0' / 'cuda:1' / 'cpu' / None (leave as-is)
+NUM_EPOCHS = 150            # None (leave as-is)
 
 for i in range(100, 101):
-    # for config in [f'configs_final/{env}_{policy}_{i}' for policy in ['eig', 'maxdyn', 'random']]:
     # for policy in ['eig', 'maxdyn', 'random']:
     # for policy in ['maxdyn', 'random']:
-    for policy in ['maxdyn']: # 
-        for env in (['faucet', 'coffee', 'button', 'door', 'drawer']): # 
+    for policy in ['maxdyn']:
+        for env in ['faucet', 'coffee', 'button', 'door', 'drawer']:
             config_name = f'configs_gripper/{env}_{policy}_{100}'
             print(f"Loading config: {config_name}")
             with open(CONFIG_PATH / f"{config_name}.yaml", "r") as f:
                 config = yaml.safe_load(f)
             config_file = f"{config_name[:-3]}{i}.yaml"
             config['seed'] = i
-            
+
             if DEVICE_TO_USE is not None:
-                config['train']['device'] = DEVICE_TO_USE 
+                config['train']['device'] = DEVICE_TO_USE
             if NUM_EPOCHS is not None:
                 config['train']['num_epochs'] = NUM_EPOCHS
             config['config_name'] = config_name
-            config['loss']['recon_mult'] = 300
-            config['trans']['alpha'] = 2e-5
-            
-            config['loss']['free_nats'] = 1.0
-            config['loss']['samples'] = 100
-            config['closed_loop']['sigma_init'] = 0.5
-            config['closed_loop']['sigma_min'] = 0.25
-            config['closed_loop']['elite_frac'] = 0.2
-            config['closed_loop']['iters'] = 3
-            config['closed_loop']['alpha'] = 0.3
-            policy = config_name.split('/')[-1].split('_')[1]
-            if policy in ['eig', 'maxdyn', 'random']:
-                if policy == 'eig':
-                    objective = 'pixel'
-                elif policy == 'maxdyn':
-                    objective = 'dynamics'
-                else:
-                    objective = 'random'
-                save_name = config['train']['dataset'].split('_')[0] + '_' + objective + '_' + str(config.get('seed', 0))
-            else:
-                save_name = config['train']['dataset'].split('_')[0] + '_' + policy + '_' + str(config.get('seed', 0))
-            run_path = RUNS_PATH / Path(config['train']['dataset'].split('_')[0]) / save_name
-            model_path = run_path / 'model.pt'
-            # if model_path.exists() and policy != 'random':
-            #     config['train']['load_path'] = str(run_path)
-            # else:
-            #     print(f"I couldn't find a checkpoint, training from scratch")
-            # save updated config with device and load_path
-            # new_config_path = CONFIG_PATH / Path(str(config_file).split('.yaml')[0] + "_test.yaml")
+
             new_config_path = CONFIG_PATH / config_file
             with open(new_config_path, "w") as f:
-                yaml.safe_dump(config, f, sort_keys=False, default_flow_style=False) # Save original config so model can be loaded later
-            
+                yaml.safe_dump(config, f, sort_keys=False, default_flow_style=False)
+
             subprocess.run(
                 ["python3.10", "-m", "src.main", "--config", str(new_config_path)],
                 check=True,

@@ -1,17 +1,16 @@
 venv/
+.venv/
 data/
-*__pycache__/
-.vscode/
 runs/
+.vscode/
+
+# Python cruft
 *.pyc
-.gitignore
+**/__pycache__/
+
+# Large / generated artifacts
 *.mp4
-*__init__.py
-*/test.ipynb
-config/*
 *.png
-**/*.png
-src/data_gen/contact/*
 **/*.npy
 **/*.txt
-.cursor/
+src/data_gen/contact/*

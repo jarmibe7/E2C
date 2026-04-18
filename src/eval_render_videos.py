@@ -1,42 +1,60 @@
 """
-Minimal eval script for generating videos N number of times
+Minimal eval script for rendering N single-panel rollout videos from a saved
+training run.
+
+Example:
+
+    python -m src.eval_render_videos \\
+        --envs button coffee --policies eig maxdyn --seeds 0 1 --i 0 --steps 250
+
+The script looks up each run's config at
+``runs/<env>/<env>_<objective>_<i>/config.yaml``, loads the trained model, and
+writes one MP4 per (env, policy, seed) combination under
+``src/data_gen/contact/videos/<env>_<objective>_<i>_<steps>/``. A matching
+``contacts_seed_<i>_<steps>.json`` summarising robot-object contact counts per
+rollout is written to ``src/data_gen/contact/``.
 """
-import os
+import argparse
+import json
+from pathlib import Path
+
 import torch
 import yaml
-import time
-import json
-from datetime import datetime
-from pathlib import Path
 from tqdm import tqdm
-from src.model.rssm import RSSME2C
+
 from src.dataset import E2CDataset
-from src.trainer import ClosedLoopRandomTrainer, ClosedLoopInformativeTrainer
+from src.model.rssm import RSSME2C
+from src.trainer import ClosedLoopInformativeTrainer, ClosedLoopRandomTrainer
+
+
+POLICY_TO_OBJECTIVE = {'eig': 'pixel', 'maxdyn': 'dynamics', 'random': 'random'}
+
 
 def posixpath_constructor(loader, node):
     seq = loader.construct_sequence(node)
     return Path(*seq)
 
-# define yaml_safe load constructor to handle PosixPath
+
 yaml.SafeLoader.add_constructor(
     "tag:yaml.org,2002:python/object/apply:pathlib.PosixPath",
     posixpath_constructor,
 )
 
+
 def load_trainer(config_name):
-    """
-    Load trainer from config
-    """
+    """Instantiate a closed-loop trainer from a saved run's ``config.yaml``."""
     config_file = config_name if config_name.endswith('.yaml') else f"{config_name}.yaml"
     with open(config_file, "r") as f:
         config = yaml.safe_load(f)
-    if 'cuda' in config['train']['device']: 
-        assert torch.cuda.is_available(), f"{config['train']['device']} selected in {config_name}, but is unavailable!"
-    device = torch.device('cuda:0')
+    if 'cuda' in config['train']['device']:
+        assert torch.cuda.is_available(), (
+            f"{config['train']['device']} selected in {config_name}, but is unavailable!"
+        )
+    device = torch.device(config['train']['device'])
     dataset = E2CDataset(config)
     config['vae']['in_image_shape'] = dataset.in_img_shape
-    num_out_channels = config['vae']['in_image_shape'][0] // config['trans']['past_length']    # Output only single frame
-    config['vae']['out_image_shape'] = (num_out_channels, *config['vae']['in_image_shape'][1:])     
+    num_out_channels = config['vae']['in_image_shape'][0] // config['trans']['past_length']
+    config['vae']['out_image_shape'] = (num_out_channels, *config['vae']['in_image_shape'][1:])
     config['trans']['control_size'] = dataset.U.shape[-1]
     model = RSSME2C(
         enc_latent_size=config['vae']['enc_latent_size'],
@@ -47,113 +65,95 @@ def load_trainer(config_name):
         pred_length=config['trans']['pred_length'],
         conv_params=config['vae'],
         device=device,
-        output_uncertainty=(config['loss']['loss_type'] == 'uncertainty' or 'rssm' in config['loss']['loss_type'])
+        output_uncertainty=(
+            config['loss']['loss_type'] == 'uncertainty'
+            or 'rssm' in config['loss']['loss_type']
+        ),
     )
 
-    config['closed_loop']['samples'] = 300
-    config['closed_loop']['plan_horizon'] = 8
-    config['closed_loop']['sigma_init'] = 0.15
-    config['closed_loop']['sigma_min'] = 0.05
-    config['closed_loop']['elite_frac'] = 0.1
-    config['closed_loop']['iters'] = 3
-    config['closed_loop']['alpha'] = 0.1
-    # if config['closed_loop'].get('policy', None) == 'maxdyn':
-    #     config['closed_loop']['sigma_min'] = 0.3
-
-    # config['closed_loop']['sigma_init'] = 1.5
-    # config['closed_loop']['sigma_min'] = 0.1
-    # config['closed_loop']['elite_frac'] = 0.4
-    # config['closed_loop']['iters'] = 4
-    
     load_path = config.get('load_path', None)
     if load_path is None:
         raise ValueError("load_path must be specified in config to load trainer for evaluation")
-    if type(load_path) == str:
+    if isinstance(load_path, str):
         load_path = Path(load_path)
-    # Load existing model to train from checkpoint
     load_path = load_path.split("model.pt")[0] if str(load_path).endswith('model.pt') else load_path
-    model_path = load_path / 'model.pt' # can select model_200.pt if needed
+    model_path = load_path / 'model.pt'
     print(f'Loading model from checkpoint: {model_path}')
     model.load_state_dict(torch.load(model_path))
+
     policy_type = config['closed_loop'].get('policy', None)
     if policy_type == 'random':
         trainer = ClosedLoopRandomTrainer(dataset, model, config, device)
-    elif policy_type == 'informative':
-        trainer = ClosedLoopInformativeTrainer(dataset, model, config, device, prints=False)
-    elif policy_type == 'maxdyn':
+    elif policy_type in ('informative', 'maxdyn'):
         trainer = ClosedLoopInformativeTrainer(dataset, model, config, device, prints=False)
     else:
         raise ValueError(f"Unknown control policy type: {policy_type}")
     return trainer
 
-def render_video(trainer: ClosedLoopRandomTrainer, max_steps=100, env_seed=0, video_save_path=None):
+
+def render_video(trainer, max_steps=100, env_seed=0, video_save_path=None):
+    """Render a single rollout video for ``trainer`` and return contact count."""
     trainer.curr_epoch = env_seed
     if video_save_path is None:
-        video_save_path = trainer.config['load_path'] if type(trainer.config['load_path']) == Path else Path(trainer.config['load_path'])
+        load_path = trainer.config['load_path']
+        video_save_path = load_path if isinstance(load_path, Path) else Path(load_path)
     else:
         video_save_path = Path(video_save_path)
         video_save_path.mkdir(parents=True, exist_ok=True)
-    saved_state = trainer.evaluator.render_video(trainer, video_save_path, max_steps=max_steps, closed_loop=True, env_reset_seed=env_seed)
+    saved_state = trainer.evaluator.render_video(
+        trainer, video_save_path, max_steps=max_steps,
+        closed_loop=True, env_reset_seed=env_seed,
+    )
     contact_count = torch.count_nonzero(saved_state[:, -1]).item()
     print(f"# of contacts: {contact_count}\n")
     torch.save(saved_state, video_save_path / f'{trainer.env_name}_{env_seed}.pt')
     return contact_count
-    
-
-if __name__ == "__main__":
-    contacts_by_objective_env = {
-        'coffee': {},
-        'button': {},
-        'door': {},
-        'drawer': {},
-        'faucet': {}
-    }
-    try:
-        for i in range(100, 101):
-            # for env in tqdm(['button', 'coffee', 'door', 'drawer', 'faucet']): #, 'button', 'door', 'drawer', 'faucet', 'coffee']:
-            for env in tqdm(['coffee']): #, 'button', 'door', 'drawer', 'faucet', 'coffee']:
-            # for env in tqdm(['coffee', 'door', 'drawer', 'faucet']): #, 'button', 'door', 'drawer', 'faucet', 'coffee']:
-            # for env in ['button']: #, 'button', 'door', 'drawer', 'faucet', 'coffee']:
-                # for policy, objective in tqdm(zip(['eig', 'maxdyn', 'random'], ['pixel', 'dynamics', 'random'])):
-                for policy, objective in tqdm(zip(['maxdyn'], ['dynamics'])):
-                # for policy, objective in zip(['random'], ['random']):
-                # for env in ['drawer', 'faucet', 'button', 'coffee', 'door']: # looks good...
-                    # if policy == 'random':
-                    #     config = "runs/{env}/{env}_{objective}_{i}/config.yaml".format(env=env, objective=objective, i=20)
-                    # else:
-                    config = "runs/{env}/{env}_{objective}_{i}/config.yaml".format(env=env, objective=objective, i=i)
-                    # print(f"Evaluating config: {config}")
-                    trainer = load_trainer(config)
-                    for render_seed in range(0, 2):
-                        # if env == 'button':
-                        #     contact_count = render_video(trainer, max_steps=100, env_seed=int(10*render_seed), video_save_path=f"src/data_gen/contact/videos/{env}_{objective}_{i}")
-                        # else:
-                        contact_count = render_video(trainer, max_steps=250, env_seed=render_seed, video_save_path=f"src/data_gen/contact/videos/{env}_{objective}_{i}_150")
-                        contacts_by_objective_env[env][objective] = contacts_by_objective_env[env].get(objective, []) + [contact_count]
-                print(f"Contacts so far: {contacts_by_objective_env}")
-                # # save results by environment after all policies
-                # out_path = Path("src/data_gen/contact/") / f"{env}_{i}.json"
-                # with open(out_path, "w") as f:
-                #     json.dump(contacts_by_objective_env, f, indent=2)
-                # print(f"Saved contacts to {out_path}")
 
 
-            # # save results to json
-            out_path = Path("src/data_gen/contact/") / f"contacts_seed_{i}_150.json"
-            with open(out_path, "w") as f:
-                json.dump(contacts_by_objective_env, f, indent=2)
-            print(f"Saved contacts to {out_path}")
-    except Exception as e:
-        pass
-    # except KeyboardInterrupt:
-    #     print("Interrupted by user, saving results...")
-    #     out_path = Path("src/data_gen/contact/") / f"contacts_seed_{i}.json"
-    #     with open(out_path, "w") as f:
-    #         json.dump(contacts_by_objective_env, f, indent=2)
-    #     print(f"Saved contacts to {out_path}")
-    # except Exception as e:
-    #     print(f"Exception occurred: {e}, saving results...")
-    #     out_path = Path("src/data_gen/contact/") / f"contacts_seed_{i}.json"
-    #     with open(out_path, "w") as f:
-    #         json.dump(contacts_by_objective_env, f, indent=2)
-    #     print(f"Saved contacts to {out_path}")
+def parse_args():
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument('--envs', nargs='+', default=['coffee'],
+                   help='Environments to render (e.g. button coffee door drawer faucet).')
+    p.add_argument('--policies', nargs='+', default=['maxdyn'],
+                   help='Policy tags in the config filename (eig | maxdyn | random).')
+    p.add_argument('--seeds', nargs='+', type=int, default=[0, 1],
+                   help='env_reset_seed values to sweep over.')
+    p.add_argument('--i', type=int, default=100,
+                   help='Training run index suffix used in <env>_<objective>_<i>/.')
+    p.add_argument('--steps', type=int, default=250,
+                   help='Number of env steps per rollout.')
+    p.add_argument('--runs-root', type=str, default='runs',
+                   help='Root directory containing per-env run folders.')
+    p.add_argument('--contact-root', type=str, default='src/data_gen/contact',
+                   help='Root directory to write contact summaries/videos.')
+    return p.parse_args()
+
+
+def main():
+    args = parse_args()
+    contacts_by_objective_env = {env: {} for env in args.envs}
+    video_root = Path(args.contact_root) / 'videos'
+
+    for env in tqdm(args.envs):
+        for policy in tqdm(args.policies):
+            objective = POLICY_TO_OBJECTIVE.get(policy, policy)
+            config = f"{args.runs_root}/{env}/{env}_{objective}_{args.i}/config.yaml"
+            trainer = load_trainer(config)
+            for render_seed in args.seeds:
+                save_dir = video_root / f"{env}_{objective}_{args.i}_{args.steps}"
+                contact_count = render_video(
+                    trainer, max_steps=args.steps,
+                    env_seed=render_seed, video_save_path=save_dir,
+                )
+                contacts_by_objective_env[env].setdefault(objective, []).append(contact_count)
+        print(f"Contacts so far: {contacts_by_objective_env}")
+
+    out_path = Path(args.contact_root) / f"contacts_seed_{args.i}_{args.steps}.json"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(out_path, 'w') as f:
+        json.dump(contacts_by_objective_env, f, indent=2)
+    print(f"Saved contacts to {out_path}")
+
+
+if __name__ == '__main__':
+    main()

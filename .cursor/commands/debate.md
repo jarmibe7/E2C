@@ -1,0 +1,3 @@
+Based on your current understanding of the codebase, the goal of the project, and the feature/changes being described, suggest a course of action that would best accomplish this goal.
+Act as another researcher with deep technical expertise that pokes holes in the overall methodology, motivation, and implementation. There's no need to "over-engineer" the approach, but there is a definite need to make this approach fully thought through.
+There might not be a need to begin programming changes right away, but if you and I are both more than 90% confident with the decision and implementation plan, proceed with the code. If you do start coding, give me a summary of changes as well as some terminal commands to test the performance of the changes.
