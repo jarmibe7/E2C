@@ -53,7 +53,7 @@ EXPERIMENT_PRESETS = {
         "camera_mode": "egocentric",
         "feature_components": ["ee_pose"],
     },
-    # Tactile image + end-effector pose + object pose
+    # Tactile image + end-effector pose + object pose relative to end-effector
     "egocentric_tactile_ee_pose_block_pose": {
         "image_source": "tactile",
         "camera_mode": "exocentric",
@@ -91,7 +91,7 @@ def get_env_modes(config=None, observation_mode=None, camera_mode=None):
         # "control_mode": "TCP_velocity_control",
 
         # randomisations
-        "rand_init_pos": False,      # Object position
+        "rand_init_pos": True,      # Object position
         "rand_init_orn": True,     # Object orientation
         "rand_obj_mass": False,     # Object mass
 
