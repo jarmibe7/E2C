@@ -360,6 +360,7 @@ class ClosedLoopTactileTrainer(BaseTrainer):
         feature_buffer = []
         act_buffer = []
         idx = 0
+        use_random_policy = self.obj_fun == 'random'
 
         # Seed initial observation into buffer
         image_buffer.append(self.obs_adapter.process_image(obs))
@@ -369,8 +370,12 @@ class ClosedLoopTactileTrainer(BaseTrainer):
         mu = self.init_control.clone()
         sigma = self.sigma.clone()
         while idx < self.num_rollout_steps:
-            # Select action using random or informative policy based on epoch and buffer length
-            if epoch >= self.epochs_warmup and len(image_buffer) >= self.past_length:
+            # Select action using the requested rollout policy.
+            if use_random_policy:
+                if epoch == 0 and len(image_buffer) == 1:
+                    print('Initializing data from random actions. \n')
+                act = torch.from_numpy(self.env.action_space.sample()).to(self.device)
+            elif epoch >= self.epochs_warmup and len(image_buffer) >= self.past_length:
                 if epoch == self.epochs_warmup and len(image_buffer) == self.past_length:
                     print(f'Switching to informative action selection using CEM over {self.num_action_samples} samples and {self.cem_iters} iterations. \n')
                 tic = time.time()
