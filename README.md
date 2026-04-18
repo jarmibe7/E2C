@@ -69,6 +69,15 @@ python -m src.tactile.render_env_frame \
 	--hide-tactile-geometry
 ```
 
+## Tactile Training
+```
+python -m src.tactile.main_subprocess_tactile --objectives random --trials 1
+
+python -m src.tactile.main_subprocess_tactile  --objectives pixel --trials 1
+```
+
+
+
 ## Citation
 
 M. Watter, J. T. Springenberg, J. Boedecker, and M. Riedmiller, “Embed to Control: A Locally Linear Latent Dynamics Model for Control from Raw Images,” NIPS 2015. https://arxiv.org/abs/1506.07365
