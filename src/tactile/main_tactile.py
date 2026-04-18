@@ -48,7 +48,7 @@ def main():
     parser.add_argument(
         '--config', 
         type=str, 
-        default='tactile0',
+        default='object_push_exocentric_rgb',
         help='Name of the config file (without .yaml extension)'
     )
     args = parser.parse_args()
@@ -67,6 +67,18 @@ def main():
     if experiment not in EXPERIMENT_PRESETS:
         raise ValueError(f"Unknown train.experiment '{experiment}'. Valid options: {sorted(EXPERIMENT_PRESETS.keys())}")
 
+    # Normalize experiment and policy names to the directory taxonomy:
+    # <env_name>/<experiment_type>/<policy_type>
+    exp_preset = EXPERIMENT_PRESETS[experiment]
+    if exp_preset.get('image_source') == 'tactile':
+        experiment_type = 'tactile'
+    elif exp_preset.get('camera_mode') == 'egocentric':
+        experiment_type = 'egocentric'
+    else:
+        experiment_type = 'exocentric'
+
+    policy_type = 'random' if policy == 'random' else 'pixel'
+
     save_name = (
         env_name
         + '_'
@@ -74,11 +86,10 @@ def main():
         + '_'
         + experiment
         + '_'
-        + str(config.get('seed', 0))
         + timestamp
     )
-    
-    run_path = RUNS_PATH / Path(env_name) / save_name
+
+    run_path = RUNS_PATH / Path(env_name) / experiment_type / policy_type / save_name
     config['run_path'] = run_path
     if 'cuda' in config['train']['device']: 
         assert torch.cuda.is_available(), f"{config['train']['device']} selected in {config_name}, but is unavailable!"
@@ -133,12 +144,12 @@ def main():
     config_save['train_interactions'] = trainer.num_train_inters
     trainer.curr_epoch = curr_epoch
 
+    num_eval_timesteps = config['train'].get('num_eval_timesteps', 100)
     if config['train'].get('eval_only', False):
         print('*** EVAL ONLY ***')
         # trainer.evaluate(config['run_path'])
         # trainer.evaluator.eval_traj(config['run_path'], max_frames=25)
-        saved_state = trainer.evaluator.render(trainer, config['run_path'], max_steps=1000, closed_loop=True)
-        torch.save(saved_state, config['run_path'] / 'eval_saved_state.pt')
+        eval_metrics = trainer.evaluator.eval(trainer, config['run_path'], max_steps=num_eval_timesteps, closed_loop=True, count_contacts=True)
         print('\n*** DONE ***')
         return
     
@@ -149,9 +160,8 @@ def main():
         # Save and evaluate
         config_save['runtime'] = format_time(time.perf_counter() - start_time)
         if config['train']['save']: trainer.save(config_save, config['run_path'])
-        if config['train']['eval']: trainer.evaluate(config['run_path'])
-        saved_state = trainer.evaluator.visualize_planner(trainer, config['run_path'], max_steps=1000, closed_loop=True)
-        torch.save(saved_state, config['run_path'] / 'eval_saved_state.pt')
+        # if config['train']['eval']: trainer.evaluate(config['run_path'])
+        eval_metrics = trainer.evaluator.eval(trainer, config['run_path'], max_steps=num_eval_timesteps, closed_loop=True, count_contacts=True)
     except Exception:
         print('\n\n'); traceback.print_exc(); print('\n\n')
         if config['train']['save']:

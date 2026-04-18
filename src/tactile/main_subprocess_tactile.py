@@ -20,11 +20,30 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 TACTILE_CONFIG_PATH = PROJECT_ROOT / "config" / "tactile"
 GENERATED_CONFIG_DIR = TACTILE_CONFIG_PATH / "generated_subprocess"
 
+OBJECTIVE_SUFFIX_ALIASES = {
+    "pixel": "pix",
+    "pix": "pix",
+    "random": "rnd",
+    "rnd": "rnd",
+}
 
-def discover_configs_for_env(env_name: str) -> list[Path]:
-    """Find tactile config files for an env from <env_name>_*.yaml."""
+OBJECTIVE_POLICY_BY_SUFFIX = {
+    "pix": "pixel",
+    "rnd": "random",
+}
+
+
+def discover_configs_for_env(env_name: str, objective_suffixes: set[str] | None = None) -> list[Path]:
+    """Find tactile config files for an env from <env_name>_*.yaml.
+
+    If objective_suffixes is provided, only config stems ending in one of those
+    suffixes are returned.
+    """
     pattern = f"{env_name}_*.yaml"
-    return sorted(p for p in TACTILE_CONFIG_PATH.glob(pattern) if p.is_file())
+    configs = sorted(p for p in TACTILE_CONFIG_PATH.glob(pattern) if p.is_file())
+    if objective_suffixes is None:
+        return configs
+    return [p for p in configs if p.stem.endswith(tuple(f"_{suffix}" for suffix in objective_suffixes))]
 
 
 def load_yaml(path: Path) -> dict:
@@ -38,10 +57,11 @@ def save_yaml(path: Path, data: dict) -> None:
         yaml.safe_dump(data, f, sort_keys=False, default_flow_style=False)
 
 
-def build_trial_config(base_config: dict, seed: int) -> dict:
+def build_trial_config(base_config: dict, seed: int, objective_suffix: str) -> dict:
     cfg = copy.deepcopy(base_config)
     cfg["seed"] = int(seed)
     cfg.setdefault("train", {})["seed"] = int(seed)
+    cfg.setdefault("closed_loop", {})["policy"] = OBJECTIVE_POLICY_BY_SUFFIX[objective_suffix]
     return cfg
 
 
@@ -60,6 +80,15 @@ def main() -> None:
         nargs="+",
         default=["object_push"],
         help="Env prefixes to run. Configs are discovered as <env>_*.yaml.",
+    )
+    parser.add_argument(
+        "--objectives",
+        nargs="+",
+        default=["pixel", "random"],
+        help=(
+            "Objective names to run. Accepts pixel/pix and random/rnd. "
+            "Defaults to both objectives."
+        ),
     )
     parser.add_argument(
         "--trials",
@@ -92,12 +121,23 @@ def main() -> None:
     if args.trials < 1:
         raise ValueError("--trials must be >= 1")
 
+    requested_suffixes: set[str] = set()
+    for objective in args.objectives:
+        try:
+            requested_suffixes.add(OBJECTIVE_SUFFIX_ALIASES[objective.lower()])
+        except KeyError as exc:
+            valid = ", ".join(sorted(OBJECTIVE_SUFFIX_ALIASES))
+            raise ValueError(f"Unknown objective '{objective}'. Valid options: {valid}") from exc
+
     planned_runs: list[tuple[str, str, int, list[str]]] = []
 
     for env_name in args.envs:
-        env_configs = discover_configs_for_env(env_name)
+        env_configs = discover_configs_for_env(env_name, requested_suffixes)
         if not env_configs:
-            print(f"[warn] No configs found for env='{env_name}' in {TACTILE_CONFIG_PATH}")
+            print(
+                f"[warn] No configs found for env='{env_name}' with objectives={sorted(requested_suffixes)} "
+                f"in {TACTILE_CONFIG_PATH}"
+            )
             continue
 
         for config_path in env_configs:
@@ -107,7 +147,8 @@ def main() -> None:
             for trial_idx in range(args.trials):
                 trial_seed = (args.seed_start + trial_idx) if args.seed_start is not None else (base_seed + trial_idx)
 
-                trial_config = build_trial_config(base_config, trial_seed)
+                objective_suffix = config_path.stem.rsplit("_", 1)[-1]
+                trial_config = build_trial_config(base_config, trial_seed, objective_suffix)
                 generated_path = (
                     GENERATED_CONFIG_DIR
                     / env_name
