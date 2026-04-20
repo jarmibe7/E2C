@@ -47,6 +47,12 @@ EXPERIMENT_PRESETS = {
         "camera_mode": "exocentric",
         "feature_components": [],
     },
+    # Exocentric RGB + tactile image, no feature vector
+    "tactile_rgb": {
+        "image_source": "visuotactile",
+        "camera_mode": "exocentric",
+        "feature_components": [],
+    },
     # RGB image + end-effector pose
     "egocentric_rgb_ee_pose": {
         "image_source": "visual",
@@ -145,6 +151,8 @@ class ObservationAdapter:
     @property
     def observation_mode(self):
         needs_feature_obs = any(c in ("ee_pose", "goal_pose") for c in self.feature_components)
+        if self.image_source == "visuotactile":
+            return "visuotactile_and_feature" if needs_feature_obs else "visuotactile"
         if self.image_source == "tactile":
             return "tactile_and_feature" if needs_feature_obs else "tactile"
         if self.image_source == "visual":
@@ -157,12 +165,20 @@ class ObservationAdapter:
     def feature_dim(self):
         return int(sum(self._FEATURE_DIMS[c] for c in self.feature_components))
 
-    def process_image(self, obs):
-        arr = obs[self.image_source]
+    def _process_single_image(self, image_array):
+        arr = image_array
         if arr.ndim == 2:
             arr = arr[..., np.newaxis]
         tensor = torch.from_numpy(arr).float() / 255.0
         return tensor.permute(2, 0, 1)
+
+    def process_image(self, obs):
+        if self.image_source == "visuotactile":
+            visual = self._process_single_image(obs["visual"])
+            tactile = self._process_single_image(obs["tactile"])
+            return torch.cat([visual, tactile], dim=0)
+
+        return self._process_single_image(obs[self.image_source])
 
     def _block_pose(self, obs, env):
         if env is not None and hasattr(env, "get_obj_pos_workframe") and hasattr(env, "_pb"):

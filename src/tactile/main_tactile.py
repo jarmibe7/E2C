@@ -70,7 +70,9 @@ def main():
     # Normalize experiment and policy names to the directory taxonomy:
     # <env_name>/<experiment_type>/<policy_type>
     exp_preset = EXPERIMENT_PRESETS[experiment]
-    if exp_preset.get('image_source') == 'tactile':
+    if exp_preset.get('image_source') == 'visuotactile':
+        experiment_type = 'tactile_rgb'
+    elif exp_preset.get('image_source') == 'tactile':
         experiment_type = 'tactile'
     elif exp_preset.get('camera_mode') == 'egocentric':
         experiment_type = 'egocentric'

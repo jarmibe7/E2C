@@ -41,6 +41,7 @@ def parse_args() -> argparse.Namespace:
         default="exocentric_rgb_only",
         choices=[
             "exocentric_rgb_only",
+            "tactile_rgb",
             "egocentric_rgb_ee_pose",
             "egocentric_tactile_ee_pose_block_pose",
             "legacy_tactile_ee_pose",
